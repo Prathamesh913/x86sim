@@ -12,6 +12,7 @@ Preview, Spotlight and the other runtime apps run with GPU rendering.
 <img src="docs/screens/58-safari-wikipedia.png" width="200" alt="Safari">
 <img src="docs/screens/71-spotlight-search-maps.png" width="200" alt="Spotlight and Maps">
 <img src="docs/screens/64-news-today.png" width="200" alt="News">
+<img src="docs/screens/95-metaldemo.png" width="200" alt="an installed Metal app">
 </p>
 
 The project is experimental. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit,
@@ -41,7 +42,7 @@ cli/        x86sim front end; cli/libexec: the scripts it wraps; cli/lib: config
 host/       simulator-side services (Mach-O, run inside Darling): simhost, simfb, simhid, iosurfaced,
             metalhostd (+ vkmtl), fpsim2host, fseventsd, netconfig, openurl, simshim/{compat,diag}
 linux/      native Linux services: mtlvk (Rust, Metal on Vulkan), mdnsd (mDNSResponder), hostnet
-tests/      probes (tests/probes), Metal (mtlprobe + shaders) and IOSurface (iosprobe) tests, smoke test
+tests/      sample apps (tests/apps, apps.sh), probes (tests/probes), Metal (mtlprobe + shaders) and IOSurface (iosprobe) tests, smoke test
 tools/      debug/: core dumps, stacks, stuck processes, Darling install (dinstall.sh), container cleanup;
             runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux
 build/      Mac build scripts (mac-build-*.sh) for the host/ and tests/ binaries
@@ -95,12 +96,15 @@ x86sim tap 590 1300             # device pixels (1179x2556)
 x86sim swipe 900 1500 200 1500  # also: pinch, pan2, key, type "text", home, lock
 x86sim openurl https://example.com
 x86sim app com.apple.Preferences
+x86sim install MyApp.app        # an iOS-simulator build (x86_64 slice), as xcrun simctl install: icon on the home screen
+x86sim launch com.example.myapp -arg value   # as simctl launch; also: x86sim uninstall com.example.myapp
 x86sim dismiss                  # answer permission prompts on screen (OCR)
 x86sim screenshot shot.png 3    # newest frame, scaled down 3x
 x86sim stream                   # 60 fps HLS stream into $X86SIM_SITE/live
 x86sim site                     # progress page + stream + http server (:8765) + cloudflared quick tunnel
 x86sim status | logs [label] | fps 10
 x86sim smoke                    # boot -> home screen -> Settings, Safari -> screenshot checks
+x86sim apps                     # install + launch the sample apps (tests/apps), check that they draw
 x86sim probe metal|iosurface    # minimal devices with the Metal / IOSurface test clients
 x86sim apptest out/             # open each app, answer prompts, screenshot, collect crashes
 x86sim shutdown
@@ -130,7 +134,11 @@ then attach the archive to a release or copy it over.
   Passwords, Shortcuts and Spotlight open. Known gaps are in [docs/WORKAROUNDS.md](docs/WORKAROUNDS.md) and the "Open"
   sections of the notebook. Files gets live updates (an FSEvents stand-in on Linux inotify) and hands documents to
   Preview; some daemons are left out.
-- Tests: `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
+- **Your own apps run**: `x86sim install` puts an iOS-simulator `.app` (built with `ARCHS=x86_64 -sdk iphonesimulator`)
+  on the device through installd, with a data container and a home-screen icon; `x86sim launch` opens it with
+  arguments. UIKit, SwiftUI (navigation, animation, URLSession) and MetalKit/SpriteKit apps (MTKView render loop on
+  CAMetalLayer, on the GPU) run at 60 fps. Sample apps: `tests/apps`, built on the Mac by `build/mac-build-apps.sh`.
+- Tests: `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
 ## Licensing
 

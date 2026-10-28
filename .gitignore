@@ -105,11 +105,14 @@ core.[0-9]*
 !/docs/screens/86-files-live-update-from-linux.png
 !/docs/screens/87-preview-opens-png-from-files.png
 !/docs/screens/89-app-survey-3.14.png
+!/docs/screens/90-install-hellouikit-icon.png
 !/docs/screens/91-hellouikit.png
+!/docs/screens/92-hellouikit-taps.png
 !/docs/screens/93-swiftuidemo.png
 !/docs/screens/94-swiftuidemo-detail.png
 !/docs/screens/95-metaldemo.png
 !/docs/screens/96-spritedemo.png
 !/docs/screens/97-home-installed-apps.png
+!/docs/screens/98-apple-sample-queries.png
 # built test apps (tests/apps/<Name>, build/mac-build-apps.sh)
 /tests/apps/build/

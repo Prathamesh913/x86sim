@@ -121,8 +121,13 @@ Darling resolves both from the paths `getattrlist` has handed out (`fsgetpath.c`
 
 ## Test helpers inside the device
 
-`host/openurl` (job `com.x86code.openurl`) opens URLs and apps through FrontBoard (`x86sim openurl|app`), reading
-requests from `<device>/data/tmp/x86code-openurl`. `tests/probes/prefs` checks cfprefsd at each boot.
+`host/openurl` (job `com.x86code.openurl`) opens URLs and apps through FrontBoard (`x86sim openurl|app|launch`), reading
+requests from `<device>/data/tmp/x86code-openurl`. It also installs and removes apps (`x86sim install|uninstall`,
+`cli/libexec/appinstall.sh`), the way CoreSimulatorBridge does on a Mac: `+[IXAppInstallCoordinator
+installApplication:consumeSource:options:completion:]` -> installcoordinationd -> installd (copies the bundle into
+`data/Containers/Bundle/Application/<uuid>`) -> containermanagerd (data container) -> lsd (registration) ->
+SpringBoard (icon). The device type's capabilities (iPhone 16, `cli/lib/devicetype-iphone17,3.json`) are written as
+`<device>/capabilities.plist` and given to MobileGestalt with `SIMULATOR_CAPABILITIES`. `tests/probes/prefs` checks cfprefsd at each boot.
 `cli/libexec/seedperms.py` pre-answers TCC/location/notification prompts like a provisioned test device.
 
 ## CLI
@@ -144,5 +149,6 @@ logs) is in `$X86SIM_STATE` (default `var/run`); large scratch files in `$X86SIM
 | network state | hostnet.py | plist -> netconfig -> host-configd | configd_sim (SimulatorSupport) |
 | host files | FileProvider | XPC `com.apple.FileProvider.sim2host` | fpsim2host |
 | file events | Linux inotify (syscall 598) | MIG `com.apple.FSEvents` (66000/67000) | FSEvents clients (cfprefsd, LocalStorageFileProvider, ...) |
+| install app | x86sim install (appinstall.sh copies the .app into `data/tmp/x86code-install`) | `<device>/data/tmp/x86code-openurl` | openurl job -> InstallCoordination -> installd |
 | open URL/app | x86sim openurl/app | `<device>/data/tmp/x86code-openurl` | openurl job -> FrontBoard |
 | stream | simstream.py | HLS in `$X86SIM_SITE/live` | http.server :8765 -> cloudflared |

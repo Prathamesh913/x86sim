@@ -2434,3 +2434,68 @@ Other changes:
 - cli/x86sim: failed-boot log snapshot;
 - tools/runtime/extract-runtime.py, README setup; docs/protocols/FSEVENTS.md;
 - Screens 86-89.
+
+## Spike 3.15 — Your own apps: x86sim install / launch, sample apps, Metal apps on CAMetalLayer (2026-10-28)
+
+**Results:**
+- **`x86sim install <path.app>`, `x86sim uninstall <bundle id>`, `x86sim launch <bundle id> [args]`** work like
+  `xcrun simctl install/uninstall/launch`. An installed app gets its bundle under `data/Containers/Bundle/Application`,
+  a data container, a LaunchServices record and a home-screen icon (90, 97); it opens from `launch` or by tapping it.
+- **Four sample apps** (tests/apps, built on the Mac without an Xcode project by build/mac-build-apps.sh, x86_64,
+  ad-hoc signed) run: UIKit with touch (91, 92), SwiftUI with a list, navigation, an animation and an HTTPS fetch
+  (93, 94), MetalKit (MTKView render loop, shader compiled at run time, presented through CAMetalLayer on our Metal
+  path, 60 fps; 95) and SpriteKit (60 fps; 96). No change to the Metal path was needed for CAMetalLayer drawables.
+- **An Apple sample** (CloudKit "Queries", github.com/apple/sample-cloudkit-queries, built with xcodebuild
+  `ARCHS=x86_64 -sdk iphonesimulator`) installs and runs; it reports "requires an authenticated account", as on a
+  Mac's simulator without an iCloud login (98).
+- **tests/apps.sh** (`x86sim apps`): install, launch, pixel and animation checks for each app, uninstall + reinstall
+  and opening by tapping the icon. 16/16 pass.
+- The device now has the iPhone 16 device type's capabilities: the Dynamic Island, the Watch app and the iPhone 16
+  dock appear as on a Mac's iPhone 16 simulator.
+
+Prior work checked first: research/willi, VibeDarling and linuxkid473 have nothing on installd, InstallCoordination
+or simctl install.
+
+### How simctl install works on a Mac
+CoreSimulator's `-[SimDevice installApplication:withOptions:...]` asks **CoreSimulatorBridge**, a job inside the
+device (`.../CoreSimulator.framework/Resources/Platforms/iphoneos/usr/libexec/CoreSimulatorBridge`, host-side
+`host_support_mig_install_app`). The Bridge calls `+[IXAppInstallCoordinator installApplication:consumeSource:options:
+completion:]` with `MIInstallOptions` (`setDeveloperInstall:`, `setInstallTargetType:`) and carries
+`com.apple.private.mobileinstall.allowedSPI = [InstallForLaunchServices, UninstallForLaunchServices]`. Uninstall is
+`+[IXAppInstallCoordinator uninstallAppWithBundleID:requestUserConfirmation:...]`. host/openurl now does the same
+(`install <path>`, `uninstall <id>` lines; `app <id>\t<arg>...` passes `__Arguments` to FrontBoard).
+`-[LSApplicationWorkspace installApplication:withOptions:error:]` answers -4 (unimplemented) on iOS 26.
+
+### Four failures on the way
+1. LSApplicationWorkspace: -4 (above).
+2. `IXErrorDomain 4 "This SPI can only install apps"`: IXSimpleInstaller checks `options.installTargetType == 1`
+   (InstallCoordination disassembly; selref resolved to `installTargetType`). Set it.
+3. `getattrlist failed ... Invalid argument` in `-[MIFileManager copyVolumeInfo:forURL:error:]`
+   (installcoordinationd): the attrlist (from InstalledContentLibrary's constant) is volattr 0x00141000 =
+   MOUNTPOINT|UUID|**FSTYPENAME**, without ATTR_VOL_INFO. Darling's VALIDMASK stopped at 0x0007FFFF. Darling now
+   answers the newer volume attributes (MOUNTEXTFLAGS, FSTYPENAME = statfs's "apfs", FSSUBTYPE, OWNER, SPACEUSED).
+4. `setattrlist failed` in `-[MIFileManager _bulkSetPropertiesForPath:...removeACL:]` (installd's staging):
+   ATTR_CMN_EXTENDED_SECURITY (an empty ACL) was EINVAL. Accepted and ignored now, with ATTR_CMN_UUID/GRPUUID.
+
+### The installed app aborted: no device-type capabilities
+The first launch died with SIGSEGV (si_code SI_USER) in `_Unwind_RaiseException`; tools/debug/sigctx.py showed an
+NSException thrown from UIKitCore. liboslogdiag on the app gave the reason: CoreUI "couldn't get
+'kMGArtworkDeviceIdiom' from MGCopyAnswer" and `Assertion failure in -[_UIScreenComplexBoundingPathUtilities
+_loadBitmapForScreen:type:]`. libMobileGestalt in the simulator reads the device type's capabilities from the plist
+named by `SIMULATOR_CAPABILITIES` (CoreSimulator: `iPhone 16.simdevicetype/Contents/Resources/capabilities.plist`);
+we set none, so only the `SIMULATOR_MAINSCREEN_*` answers existed. The runtime's own apps never reached that path.
+mksimdevice.py now writes `<device>/capabilities.plist` from cli/lib/devicetype-iphone17,3.json (the iPhone 16
+capabilities, taken from the Mac) and sets `SIMULATOR_CAPABILITIES`. Side effects, all as on a Mac's iPhone 16: the
+Dynamic Island, the Watch app on the home screen, the floating dock.
+
+### Open
+- simctl's other app commands: `get_app_container`, `install_app_data`, `launch --console` / environment.
+- The rest of the CoreSimulator device-type profile (framebuffer mask, chrome) is unused.
+- From 3.14: FSEvents history/latency, suggestd, Game Center icon, widget extensions killed in the background, the
+  black-screen hang under heavy disk load.
+
+Darling changes in this spike (darling-xnu): getattrlist newer volume attributes; setattrlist ACL/UUIDs accepted.
+
+Other changes: host/openurl install/uninstall/launch arguments (+ entitlements), cli/libexec/appinstall.sh,
+`x86sim install|uninstall|launch|apps`, rundev job com.apple.installcoordinationd, device capabilities, tests/apps
+(4 apps), build/mac-build-apps.sh, tests/apps.sh, screens 90-98.
