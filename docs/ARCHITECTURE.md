@@ -1,0 +1,138 @@
+# Architecture
+
+x86Code runs Apple's **iOS 26.5 (23F73) x86_64 simulator runtime** on x86-64 Linux. The runtime's binaries are
+unchanged; they run under **Darling** (a Darwin compatibility layer: Mach-O loader + XNU syscall/Mach emulation +
+`darlingserver`). Everything CoreSimulator and the Mac host would provide around the runtime (the launchd handshake,
+the display, touch input, GPU, cross-process surfaces, DNS, network state, host file services) is replaced by small
+programs in this repo: some run **inside Darling** as simulator binaries (`host/`), some run **natively on Linux**
+(`linux/`). The `x86sim` CLI (`cli/`) wires them together.
+
+```
+ Linux host                                           Darling container (one per boot)
+ ---------------------------------------------        -------------------------------------------------------------
+ x86sim (cli/x86sim)                                   darling shell -> simhost (host/simhost)
+   rundev.sh: mtlvk, mdnsresponder, mksimdevice,          -> launchd_sim (runtime)  [device: $X86SIM_DEVICE/data]
+              seedperms, run-launchd-sim.sh                  -> the runtime's daemons and agents (backboardd, SpringBoard,
+                                                                cfprefsd, lsd, runningboardd, ..., apps)
+                                                             -> our jobs: metalhostd, iosurfaced, netconfig,
+                                                                host-configd, fpsim2host, openurl, prefs
+                                                          every simulator process: DYLD_INSERT libkqueue_sim (Darling)
+                                                                                   + libsimshim (host/simshim/compat)
+
+ mtlvk (linux/mtlvk, Vulkan)   <== Unix socket + memfds ==  metalhostd (MTLSimImplementation on vkmtl)
+ mdnsresponder.py (linux/mdnsd) <== dnssd_ipc socket ======  libsystem_dnssd in every process
+ hostnet.py (linux/hostnet) --plist--> netconfig -> host-configd store -> configd_sim's SimulatorSupport
+ simview.py / simstream.py / fb2png.py  <== /dev/shm ring ==  SimFramebuffer.framework (host/simfb) in backboardd
+ simview.py / simtouch.py  == simhid.sock ==>                 SimulatorHID.framework (host/simhid) in backboardd
+ darlingserver (Darling, Linux process): Mach IPC, threads, VM, memfd-backed shared memory for every container process
+```
+
+## Darling (external/darling, branch x86code)
+
+Darling provides the Mach-O loader (`mldr`), the XNU syscall and Mach trap emulation (`libsystem_kernel`, in
+`darling-xnu`), the Mach IPC/task/thread server (`darlingserver`), kqueue (`libkqueue`, plus `libkqueue_sim` injected
+into simulator processes, whose libSystem is the runtime's), `dyld` for the host side and `iokitd`. The iOS
+simulator runtime is far more demanding than the macOS userland Darling targets: workloops, cooperative thread pools
+(Swift concurrency), ulock, Mach memory entries, guarded fds, getattrlist/fsctl/chflags, PF_ROUTE, csops and more.
+All changes are on the `x86code` branches of our private forks ([REPOS.md](REPOS.md)), each marked `x86Code:` in the
+source and explained in the lab notebook ([notebook/FINDINGS.md](notebook/FINDINGS.md)).
+
+Inside Darling the Linux root is `/Volumes/SystemRoot`; the scripts translate paths (`mksimdevice.py darling()`).
+
+## Booting: simhost and launchd_sim
+
+`cli/libexec/mksimdevice.py` writes the device the way CoreSimulator does on a Mac: `<device>/data` (the device's
+home), `LaunchDaemons/` and `LaunchAngels/` with only the requested jobs (copied from the runtime, or synthetic
+`label=program` jobs for our binaries), `data/var/run/launchd_bootstrap.plist`, and `sim.env` (the `SIMULATOR_*`,
+`DYLD_*` environment, UDID derived from the device path). `cli/libexec/run-launchd-sim.sh` restarts the container and
+runs `host/simhost/simhost` inside it, which plays CoreSimulator's part of the launchd handshake (bootstrap port, the
+service port MIG request 708, the holding-tank child) and execs the runtime's `launchd_sim`.
+`cli/libexec/rundev.sh` (wrapped by `x86sim boot`) adds the standard job list, starts the Linux services first and
+tails launchd_sim's log (in the Darling prefix: `$X86SIM_DPREFIX/private/var/tmp/com.apple.CoreSimulator.SimDevice.<UDID>/`).
+
+## simshim (host/simshim/compat)
+
+`libsimshim.dylib` is injected into every simulator process (`DYLD_INSERT_LIBRARIES` in `sim.env`). It interposes the
+few host services a Linux host cannot provide: system power registration (no IOPMrootDomain), csops entitlement
+blobs (goes to Darling's syscall), sandbox extensions (tokens issued and accepted; nothing is sandboxed), os_state
+handlers while os_log is off, the icon-layer fallback (see [WORKAROUNDS.md](WORKAROUNDS.md)), and keeping
+connections to our in-simulator stand-ins of Mac host services (Metal, IOSurface, FileProvider) plain simulator
+connections instead of sim-to-host ones. Optional diagnostic shims (`host/simshim/diag`, `X86CODE_INSERT=...`) log
+specific subsystems (sync XPC, entitlements, os_log to files, vnode sources, CloudKit, ...).
+
+## Display: simfb and the frame ring
+
+backboardd loads `SimFramebuffer.framework` from `SIMULATOR_FRAMEBUFFER_FRAMEWORK`. Ours (`host/simfb`) reports one
+built-in display named `LCD` ([protocols/CADISPLAY.md](protocols/CADISPLAY.md)), gives CoreAnimation IOSurface
+swapchains and copies each completed present into a shared-memory ring in Linux's `/dev/shm`
+([protocols/SIMFB.md](protocols/SIMFB.md)). Linux readers: `simview.py` (GTK4 window), `simstream.py` (ffmpeg NVENC
+H.264, 60 fps low-latency HLS into the site directory), `fb2png.py` (screenshots), `fpsmeter.py`, `framecheck.py`.
+
+## Input: simhid
+
+backboardd loads `SimulatorHID.framework` from `SIMULATOR_HID_SYSTEM_MANAGER`. Ours (`host/simhid`) adds virtual
+touchscreen, button and keyboard HID services to backboardd's event system and feeds them from
+`<device>/data/simhid.sock`, a line protocol ([protocols/SIMHID.md](protocols/SIMHID.md)) used by `simview.py` and
+`simtouch.py`.
+
+## GPU: metalhostd, vkmtl, mtlvk
+
+On a Mac, simulator processes' Metal goes through `MTLSimDriver` over XPC to the host's `MTLSimDriverHost`, which
+replays it on the Mac's GPU. Here `host/metalhostd` (a simulator job) loads the runtime's own `MTLSimImplementation`
+and gives it a Metal device implemented by `vkmtl.m`, which forwards every object and command buffer over a Unix
+socket (VKMTL protocol, [protocols/METAL.md](protocols/METAL.md)) to `linux/mtlvk`, a native Rust process that runs
+it on Vulkan with **metal2vulkan** (`external/metal2vulkan`, branch x86code: Metal API on Vulkan + AIR to SPIR-V
+translation). Buffer and texture memory is shared without copies: simulator memory is memfd-backed (darlingserver),
+metalhostd obtains the fd with syscall 599 and passes it with `SCM_RIGHTS`; mtlvk imports it
+(`VK_EXT_external_memory_host`). CoreAnimation's render server, the wallpaper and apps all use it
+(`X86CODE_METAL=all`, default; `0` = software rendering). Details: [METAL.md](METAL.md).
+
+## Cross-process surfaces: iosurfaced
+
+IOSurfaces shared between processes (CoreAnimation layers, video, WebKit) are served on a Mac by CoreSimulator's
+SimRenderServer as `com.apple.IOSurface.Remote`. `host/iosurfaced` implements that service inside the simulator;
+surfaces are shared anonymous memory (memfds in darlingserver) handed out as `xpc_shmem`
+([protocols/IOSURFACE.md](protocols/IOSURFACE.md)).
+
+## Network: mdnsresponder and netconfig
+
+The simulator resolves names through the host's mDNSResponder socket (`/var/run/mDNSResponder`).
+`linux/mdnsd/mdnsresponder.py` implements the dnssd_ipc protocol on Linux (real DNS via dnspython) at
+`$X86SIM_STATE/mDNSResponder`; `run-launchd-sim.sh` symlinks the container's `/var/run/mDNSResponder` to it.
+Network state (what a Mac's configd publishes) comes from `linux/hostnet/hostnet.py` (the Linux default-route
+interface as Setup:/State: keys), loaded by `host/netconfig` into a second `configd_sim` registered as
+`com.apple.SystemConfiguration.configd` (`com.x86code.host-configd`), which the simulator's configd_sim mirrors. Sockets
+and routing sockets themselves are Darling's (PF_ROUTE, socket options, EVFILT_SOCK).
+
+## Host file services: fpsim2host
+
+FileProvider sends some operations to the Mac host's fileproviderd (`com.apple.FileProvider.sim2host`): open by file
+id, openat/mkdirat/... on behalf of extensions. `host/fpsim2host` serves that interface inside the simulator. Darling
+reports `kern.osproductversion` 26.4 to simulator processes (the host macOS version the simulator expects).
+
+## Test helpers inside the device
+
+`host/openurl` (job `com.x86code.openurl`) opens URLs and apps through FrontBoard (`x86sim openurl|app`), reading
+requests from `<device>/data/tmp/x86code-openurl`. `tests/probes/prefs` checks cfprefsd at each boot.
+`cli/libexec/seedperms.py` pre-answers TCC/location/notification prompts like a provisioned test device.
+
+## CLI
+
+`cli/x86sim` reads `x86sim.env` through `cli/lib/config.sh` (also used by every script; `cli/lib/x86config.py` for
+Python) and dispatches to the scripts in `cli/libexec`, `tests/` and `tools/debug`. State of a boot (pids, sockets,
+logs) is in `$X86SIM_STATE` (default `var/run`); large scratch files in `$X86SIM_SCRATCH`.
+
+## Data flows at a glance
+
+| Flow | From | Channel | To |
+|---|---|---|---|
+| frames | backboardd (simfb) | `/dev/shm/x86code-simfb.ring` | simview, simstream, fb2png, framecheck |
+| input | simview, simtouch | `<device>/data/simhid.sock` (text lines) | backboardd (simhid) |
+| Metal | every Metal client | XPC `com.apple.metal.simulator[.<proc>]` | metalhostd |
+| Metal | metalhostd (vkmtl) | Unix socket `$X86SIM_STATE/mtlvk.sock` + memfds | mtlvk (Vulkan) |
+| IOSurface | IOSurface.framework | XPC `com.apple.IOSurface.Remote` + xpc_shmem | iosurfaced |
+| DNS | libsystem_dnssd | `/var/run/mDNSResponder` -> `$X86SIM_STATE/mDNSResponder` | mdnsresponder.py |
+| network state | hostnet.py | plist -> netconfig -> host-configd | configd_sim (SimulatorSupport) |
+| host files | FileProvider | XPC `com.apple.FileProvider.sim2host` | fpsim2host |
+| open URL/app | x86sim openurl/app | `<device>/data/tmp/x86code-openurl` | openurl job -> FrontBoard |
+| stream | simstream.py | HLS in `$X86SIM_SITE/live` | http.server :8765 -> cloudflared |
