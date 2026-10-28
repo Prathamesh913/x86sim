@@ -39,10 +39,11 @@ The project is experimental. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) f
 ```
 cli/        x86sim front end; cli/libexec: the scripts it wraps; cli/lib: configuration
 host/       simulator-side services (Mach-O, run inside Darling): simhost, simfb, simhid, iosurfaced,
-            metalhostd (+ vkmtl), fpsim2host, netconfig, openurl, simshim/{compat,diag}
+            metalhostd (+ vkmtl), fpsim2host, fseventsd, netconfig, openurl, simshim/{compat,diag}
 linux/      native Linux services: mtlvk (Rust, Metal on Vulkan), mdnsd (mDNSResponder), hostnet
 tests/      probes (tests/probes), Metal (mtlprobe + shaders) and IOSurface (iosprobe) tests, smoke test
-tools/debug core dumps, stacks, stuck processes, Darling install (dinstall.sh), container cleanup
+tools/      debug/: core dumps, stacks, stuck processes, Darling install (dinstall.sh), container cleanup;
+            runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux
 build/      Mac build scripts (mac-build-*.sh) for the host/ and tests/ binaries
 docs/       ARCHITECTURE, WORKAROUNDS, METAL, protocols/, REPOS, notebook/ (FINDINGS lab notebook), screens/
 external/   git submodules: darling and metal2vulkan (x86code branches of the designgears forks)
@@ -56,11 +57,21 @@ external/   git submodules: darling and metal2vulkan (x86code branches of the de
    make submodules
    cp x86sim.env.example x86sim.env      # then edit: paths, X86SIM_MAC, GPU settings
    ```
-2. **Extract the runtime.** On a Mac with Xcode 26.x, find the iOS 26.5 simulator runtime: run `xcrun simctl runtime
-   list`, or look under `/Library/Developer/CoreSimulator/Images/` for the mounted `.dmg`/cryptex. Copy its
-   `Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime` tree to Linux and keep the symlinks
-   (use `tar` or `rsync -a`, not a copy that follows or drops links). Set `X86SIM_RUNTIME` to its
-   `Contents/Resources/RuntimeRoot`.
+2. **Get and extract the runtime.** The runtime Xcode installs by default on Apple silicon is arm64-only; the
+   *universal* variant has the x86_64 slices. On a Mac with Xcode 26 or later:
+   ```sh
+   xcodebuild -downloadPlatform iOS -buildVersion 26.5 -architectureVariant universal -exportPath ~/simrt
+   ```
+   This downloads iOS 26.5 (23F73, about 10 GB) as an exported bundle with `Restore/iOSSimulatorRuntime_Cryptex.dmg`
+   (it also registers the runtime with simctl). Copy the bundle directory to Linux as
+   `runtimes/ios-26.5-23F73-universal/`, then extract it there (7-Zip with APFS support, `7z`; about 23 GB):
+   ```sh
+   tools/runtime/extract-runtime.py runtimes/ios-26.5-23F73-universal runtimes/ios-26.5-23F73-universal/extracted
+   ```
+   The script runs `7z x -snld` and then makes every symlink of the image again from its listing: 7-Zip writes some
+   links as empty files (a link to a link), and absolute links are made relative inside RuntimeRoot.
+   `tools/runtime/extract-runtime.py --check ...` compares an extracted tree with the image without changing it.
+   The default `X86SIM_RUNTIME` (x86sim.env.example) is that tree's `.../iOS 26.5.simruntime/Contents/Resources/RuntimeRoot`.
 3. **Build and install Darling** (bin/darling must be setuid root, so this asks for sudo):
    ```sh
    make darling-install                  # configures external/darling -> $X86SIM_PREFIX, builds, installs
@@ -103,7 +114,7 @@ listed processes), `X86CODE_NODT=all,-<label>` (os_log for one job), `X86CODE_IN
 ## Simulator-side binaries
 
 The Mach-O files in `host/` and `tests/` (`simhost`, `SimFramebuffer.framework`, `SimulatorHID.framework`,
-`libsimshim.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `netconfig`, `openurl`, `prefs`, `mtlprobe`, `iosprobe`, the
+`libsimshim.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `fseventsd`, `netconfig`, `openurl`, `prefs`, `mtlprobe`, `iosprobe`, the
 probes and diagnostic shims) are small and ours, but they are build outputs of Apple's SDK, so they are not committed.
 Build them with `make mac`. To share a build with a machine that has no Mac, pack them:
 `git ls-files --others --ignored --exclude-standard host tests | grep -v '\.new$' | tar czf x86code-host-bin.tgz -T -`,
@@ -117,8 +128,8 @@ then attach the archive to a release or copy it over.
 - Networking works: Safari loads real pages over HTTPS, Maps loads tiles, News loads articles.
 - Settings, Safari, Maps, Photos, News, Health, Calendar, Files, Preview, Reminders, Wallet, Messages, Contacts,
   Passwords, Shortcuts and Spotlight open. Known gaps are in [docs/WORKAROUNDS.md](docs/WORKAROUNDS.md) and the "Open"
-  sections of the notebook. Examples: Settings row icons stay gray, there is no live FSEvents in Files, and some
-  daemons are left out.
+  sections of the notebook. Files gets live updates (an FSEvents stand-in on Linux inotify) and hands documents to
+  Preview; some daemons are left out.
 - Tests: `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
 ## Licensing
