@@ -10,6 +10,7 @@ host program, logging to data/var/log/<label>.log), launchd_bootstrap.plist and 
 environment launchd_sim is started with). The layout and keys mirror what
 CoreSimulator produced on a Mac (research/macref/launchd_bootstrap.xml).
 """
+import json
 import os
 import plistlib
 import shutil
@@ -115,6 +116,12 @@ def main():
             plistlib.dump(plist, f)
 
     rt, home = darling(RUNTIME), darling(data)
+    # x86Code: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
+    capabilities = device + "/capabilities.plist"
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", "devicetype-iphone17,3.json")) as f:
+        caps = json.load(f)
+    with open(capabilities, "wb") as f:
+        plistlib.dump(caps, f)
     # Stand-in for the host's configd: configd_sim's SimulatorSupport plugin opens the
     # Mac's dynamic store (com.apple.SystemConfiguration.configd) to mirror network
     # state. A second configd_sim without plugins, registered under that name, serves it.
@@ -230,6 +237,11 @@ def main():
         "SIMULATOR_MAINSCREEN_SCALE": "3.000000",
         "SIMULATOR_MAINSCREEN_PITCH": "460.000000",
         "SIMULATOR_LEGACY_ASSET_SUFFIX": "iphone",
+        # x86Code: the device type's capabilities (CoreSimulator: <device type>.simdevicetype/Contents/Resources/
+        # capabilities.plist), which libMobileGestalt answers from (ArtworkTraits, displays, DeviceCornerRadius, ...).
+        # Without it the runtime's apps got by, but an installed app aborted in UIKit's
+        # -[_UIScreenComplexBoundingPathUtilities _loadBitmapForScreen:type:] (no kMGArtworkDeviceIdiom).
+        "SIMULATOR_CAPABILITIES": darling(capabilities),
         "SIMULATOR_HOST_HOME": home,
         "SIMULATOR_LOG_ROOT": home + "/Library/Logs",
         # x86Code: the simulator's libdispatch implements DISPATCH_SOURCE_TYPE_MEMORYPRESSURE as an EVFILT_VNODE watch
