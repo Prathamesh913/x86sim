@@ -102,3 +102,6 @@ core.[0-9]*
 !/docs/screens/83-app-survey-3.13.png
 !/docs/screens/84-x86sim-boot-home.png
 !/docs/screens/85-x86sim-openurl-and-tap.png
+!/docs/screens/86-files-live-update-from-linux.png
+!/docs/screens/87-preview-opens-png-from-files.png
+!/docs/screens/89-app-survey-3.14.png
