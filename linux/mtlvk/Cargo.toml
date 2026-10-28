@@ -1,0 +1,16 @@
+[package]
+name = "mtlvk"
+version = "0.1.0"
+edition = "2021"
+description = "x86Code: native Linux side of the iOS-simulator Metal stand-in (VKMTL protocol -> metal2vulkan-runtime on Vulkan)"
+license = "GPL-2.0-or-later OR LGPL-3.0-or-later"
+
+[dependencies]
+metal2vulkan-runtime = { path = "../../external/metal2vulkan/crates/metal2vulkan-runtime" }
+metal2vulkan = { path = "../../external/metal2vulkan/crates/metal2vulkan" }
+libc = "0.2"
+
+[workspace]
+
+[profile.release]
+debug = 1
