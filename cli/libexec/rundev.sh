@@ -86,7 +86,7 @@ X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py $D com.apple.cfprefsd.xpc.da
 	com.apple.searchd com.apple.corespotlightservice com.apple.dasd com.apple.contactsd com.apple.assistant_cdmd \
 	com.apple.mobileassetd com.apple.biomed com.apple.parsecd com.apple.pasteboard.pasted com.apple.bird com.apple.swcd \
 	com.apple.intelligenceplatformd com.apple.textunderstandingd com.apple.syncdefaultsd com.apple.amsaccountsd \
-	com.apple.revisiond \
+	com.apple.revisiond com.apple.installcoordinationd \
 	com.x86code.prefs=tests/probes/prefs com.x86code.openurl=host/openurl/openurl \
 	"com.x86code.fpsim2host=host/fpsim2host/fpsim2host|mach:com.apple.FileProvider.sim2host" \
 	"com.x86code.fseventsd=host/fseventsd/fseventsd|mach:com.apple.FSEvents" "$@" >/dev/null

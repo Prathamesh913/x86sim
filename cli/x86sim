@@ -41,8 +41,15 @@ Display and input
                        input through the SimulatorHID stand-in (simtouch.py; device pixels, 1179x2556)
   fps [secs]           delivered frames per second (fpsmeter.py)
 
+Apps (as xcrun simctl install/uninstall/launch)
+  install PATH.app     install an iOS-simulator app (x86_64) through installd; it gets a container and an icon
+  uninstall BUNDLEID   remove an installed app
+  launch BUNDLEID [args...]
+                       open an app through FrontBoard with launch arguments (appinstall.sh)
+
 Tests
   smoke                boot (unless running) -> home screen check -> Settings and Safari -> screenshot checks
+  apps [outdir]        install the sample apps (tests/apps), launch them, check they draw (tests/apps.sh)
   apptest <outdir> [bundle id ...]
                        open each app, answer prompts, screenshot, collect crashes (apptest.sh)
   probe metal|iosurface
@@ -193,7 +200,9 @@ case $c in
 	type|text) exec python3 "$L/simtouch.py" text "$*" ;;
 	fps) exec python3 "$L/fpsmeter.py" "${1:-10}" ;;
 	smoke) exec "$X/tests/smoke.sh" "$@" ;;
+	apps) exec "$X/tests/apps.sh" "$@" ;;
 	apptest) exec "$L/apptest.sh" "$@" ;;
+	install|uninstall|launch) exec "$L/appinstall.sh" "$c" "$@" ;;
 	probe) cmd_probe "$@" ;;
 	seedperms) exec python3 "$L/seedperms.py" "$X86SIM_DEVICE" "$@" ;;
 	build) exec make -C "$X" "$@" ;;

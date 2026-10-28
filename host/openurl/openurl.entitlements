@@ -8,5 +8,25 @@
 	<true/>
 	<key>com.apple.private.security.no-sandbox</key>
 	<true/>
+	<key>com.apple.private.mobileinstall.allowedSPI</key>
+	<array>
+		<string>Install</string>
+		<string>InstallForLaunchServices</string>
+		<string>InstallLocalProvisioned</string>
+		<string>Uninstall</string>
+		<string>UninstallForLaunchServices</string>
+		<string>Lookup</string>
+		<string>LookupForLaunchServices</string>
+	</array>
+	<key>com.apple.private.InstallCoordination.uninstall</key>
+	<true/>
+	<key>com.apple.private.InstallCoordination.ignoreRemovability</key>
+	<true/>
+	<key>com.apple.private.InstallCoordination.ignoreRestrictions</key>
+	<true/>
+	<key>com.apple.private.install.can-set-install-requestor</key>
+	<true/>
+	<key>com.apple.lsapplicationworkspace.rebuildappdatabases</key>
+	<true/>
 </dict>
 </plist>
