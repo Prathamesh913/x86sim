@@ -10,6 +10,11 @@ LLVM_TAG=${LLVM_TAG:-llvmorg-21.1.0}
 mac "set -e; rm -rf /tmp/x86dbg && mkdir -p /tmp/x86dbg && cd /tmp/x86dbg &&
 git clone -q --depth 1 --filter=blob:none --sparse -b $LLVM_TAG https://github.com/llvm/llvm-project.git >&2 &&
 cd llvm-project && git sparse-checkout set lldb/tools/debugserver lldb/include lldb/source/Host/common lldb/source/Utility >&2 &&
+# x86Code: an app stopped at its first instruction (x86sim launch -w) has no dyld image list yet, so
+# MachProcess::GetMainBinaryCPUTypes finds no main binary and debugserver picks a cpu type without a plugin in this
+# x86_64-only build (it then crashed in MachThread::ThreadDidStop). Fall back to x86_64 (Darling has only 64-bit processes).
+perl -0pi -e 's/(bool DNBArchProtocol::SetArchitecture\(uint32_t cpu_type, uint32_t cpu_subtype\) \{\n)/\1  if (g_arch_plugins.find(cpu_type) == g_arch_plugins.end() \&\& g_arch_plugins.find(CPU_TYPE_X86_64) != g_arch_plugins.end()) { cpu_type = CPU_TYPE_X86_64; cpu_subtype = CPU_SUBTYPE_X86_64_ALL; } \/\/ x86Code (Darling)\n/' lldb/tools/debugserver/source/DNBArch.cpp &&
+grep -q 'x86Code (Darling)' lldb/tools/debugserver/source/DNBArch.cpp &&
 cd lldb/tools/debugserver && xcodebuild -project debugserver.xcodeproj -target debugserver -configuration Release \
   -sdk macosx ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=12.0 CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
   SYMROOT=/tmp/x86dbg/out >&2" 
