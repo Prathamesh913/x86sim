@@ -1545,13 +1545,11 @@ static void vk_att(vkmtl_attachment* a, MTLRenderPassAttachmentDescriptor* d, VK
 	if (!g_inflight) g_inflight = [[NSMutableDictionary alloc] init];
 	g_inflight[@(_vkid)] = self;
 	pthread_mutex_unlock(&g_inflight_lock);
-	vk_push_copied();
-	wbuf b = { 0 };
-	wb_u64(&b, _queue->_vkid); wb_u64(&b, _vkid); wb_u32(&b, _count); wb_u32(&b, 0);
-	wb_put(&b, _cmds.p, _cmds.n);
-	VKTRACE("commit cb %llu: %u commands, %zu bytes", _vkid, _count, _cmds.n);
-	vk_send(VKMTL_CB_COMMIT, b.p, (uint32_t)b.n);
-	free(b.p);
+	// x86Code: scheduled handlers run before the command buffer goes to mtlvk. Run after it, a fast completion (on the
+	// completion queue) could call the completed handlers first: MTLSimImplementation then sent the client "completed"
+	// (message 101, the client drops the command buffer's ref) before "scheduled" (100), and the client crashed looking
+	// the ref up (SpringBoard SIGSEGV in -[MTLSimDevice commandBufferForReference:], FINDINGS 3.12/3.14). Metal always
+	// reports scheduled before completed.
 	NSArray* sched;
 	@synchronized (self) {
 		if (_status < MTLCommandBufferStatusScheduled) _status = MTLCommandBufferStatusScheduled;
@@ -1560,6 +1558,13 @@ static void vk_att(vkmtl_attachment* a, MTLRenderPassAttachmentDescriptor* d, VK
 	}
 	for (MTLCommandBufferHandler h in sched) h((id<MTLCommandBuffer>)self);
 	[sched release];
+	vk_push_copied();
+	wbuf b = { 0 };
+	wb_u64(&b, _queue->_vkid); wb_u64(&b, _vkid); wb_u32(&b, _count); wb_u32(&b, 0);
+	wb_put(&b, _cmds.p, _cmds.n);
+	VKTRACE("commit cb %llu: %u commands, %zu bytes", _vkid, _count, _cmds.n);
+	vk_send(VKMTL_CB_COMMIT, b.p, (uint32_t)b.n);
+	free(b.p);
 	pthread_mutex_lock(&_lock);
 	pthread_cond_broadcast(&_cond);
 	pthread_mutex_unlock(&_lock);

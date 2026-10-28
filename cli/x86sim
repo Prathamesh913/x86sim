@@ -86,8 +86,22 @@ cmd_boot() {
 		echo "x86sim: home screen up ($(cat "$ST/boot-wait.json"))"
 	else
 		echo "x86sim: no home screen after ${X86SIM_BOOT_WAIT:-300} s ($(cat "$ST/boot-wait.json")); see $ST/boot.log" >&2
+		boot_snapshot
 		return 1
 	fi
+}
+
+# x86Code: a boot that doesn't reach the home screen: keep what the next boot overwrites (boot, mtlvk, launchd and
+# spawn logs, the jobs' logs of this boot, the process list) in $X86SIM_SCRATCH/failed-boot-<time>
+boot_snapshot() {
+	local d; d="$X86SIM_SCRATCH/failed-boot-$(date +%Y%m%d-%H%M%S)"
+	mkdir -p "$d" || return
+	cp "$ST"/boot.log "$ST"/boot-wait.json "$ST"/mtlvk.log "$ST"/lsim.out "$ST"/rundev-*.log "$d"/ 2>/dev/null
+	local udid; udid=$(sed -n 's/^SIMULATOR_UDID=//p' "$X86SIM_DEVICE/sim.env" 2>/dev/null)
+	cp "$X86SIM_DPREFIX/private/var/tmp/com.apple.CoreSimulator.SimDevice.$udid/launchd.log" "$d"/ 2>/dev/null
+	find "$X86SIM_DEVICE/data/var/log" -maxdepth 1 -name '*.log' -newer "$ST/boot.pid" -exec cp {} "$d"/ \; 2>/dev/null
+	ps -eo pid,stat,etime,pcpu,args | grep -E '[m]ldr|[d]arlingserver|[R]untimeRoot' | cut -c1-250 > "$d/ps.txt"
+	echo "x86sim: logs of this boot kept in $d" >&2
 }
 
 cmd_shutdown() {
