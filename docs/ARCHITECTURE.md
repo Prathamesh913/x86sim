@@ -113,7 +113,9 @@ id, openat/mkdirat/... on behalf of extensions, package lookup, directory entrie
 
 File-system events come from the Mac's fseventsd (`com.apple.FSEvents`) on a real simulator. `host/fseventsd` serves
 that MIG protocol ([protocols/FSEVENTS.md](protocols/FSEVENTS.md)) from Linux inotify, reached through Darling's
-private syscall 598. The On My iPhone extension needs it for its volume UUID and for live updates in Files.
+private syscall 598. The On My iPhone extension needs it for its volume UUID and for live updates in Files. Each
+stream's latency is applied (events held, NoDefer, flush), as the Mac's fseventsd does. fpsim2host's package lookup
+also takes directories whose extension is a registered package type (UTType) for packages, as the Mac host does.
 
 Document ids (`did=` FileProvider items, bookmarks handed from Files to Preview) are resolved by the runtime's own
 `revisiond` (GenerationalStorage), which opens the volume root by object id 2 and documents with `openbyid_np`;
@@ -129,6 +131,27 @@ installApplication:consumeSource:options:completion:]` -> installcoordinationd -
 SpringBoard (icon). The device type's capabilities (iPhone 16, `cli/lib/devicetype-iphone17,3.json`) are written as
 `<device>/capabilities.plist` and given to MobileGestalt with `SIMULATOR_CAPABILITIES`. `tests/probes/prefs` checks cfprefsd at each boot.
 `cli/libexec/seedperms.py` pre-answers TCC/location/notification prompts like a provisioned test device.
+
+simctl's developer commands (`cli/libexec/simctl.py`: `x86sim launch|terminate|get_app_container|listapps|push|
+location|addmedia|log stream|io|pidof`) go to the same job as one-line JSON requests (`req <id> <json>`, answered by a
+`result <id> <json>` log line). The job does what CoreSimulatorBridge does inside a Mac's device, with the Bridge's
+entitlements: FrontBoard's debug options (`__DebugOptions`: arguments, environment, stdout/stderr paths for
+`--console`, wait-for-debugger), `FBSSystemService` termination, `LSApplicationProxy` containers,
+`+[UNNotificationRequest requestWithIdentifier:pushPayload:bundleIdentifier:]` for `push`, `CLSimulationManager` for
+`location`, `PHPhotoLibrary` change requests for `addmedia`. `log stream --app` relaunches the app with
+`X86CODE_OSLOG`, which turns on libsimshim's built-in os_log formatter (`host/simshim/diag/oslogdiag.m` compiled in):
+messages go to `data/var/log/oslog.<prog>.<pid>.log` without logd/diagnosticd. `io recordVideo` encodes the frame
+ring with ffmpeg.
+
+## Debugging: debugserver and LLDB
+
+`x86sim debug` (`cli/libexec/simdebug.sh`) runs LLVM's debugserver (built for macOS x86_64 from llvm-project sources by
+`build/mac-build-debugserver.sh`, deployment target 12.0 for Darling's libc++) inside the simulator's Darling
+container with `darling shell`; it attaches with Darling's ptrace/Mach task, thread and exception-port emulation.
+Linux's own `lldb` connects to it over TCP (`platform select remote-macosx`, `process connect`) and reads the Mach-O
+images from the Linux paths (`image search-paths add /Volumes/SystemRoot /`), so breakpoints and backtraces have the
+app's and the runtime's symbols. `x86sim launch -w` starts the app stopped before `main` (FrontBoard's
+`__WaitForDebugger`).
 
 ## CLI
 
@@ -151,4 +174,6 @@ logs) is in `$X86SIM_STATE` (default `var/run`); large scratch files in `$X86SIM
 | file events | Linux inotify (syscall 598) | MIG `com.apple.FSEvents` (66000/67000) | FSEvents clients (cfprefsd, LocalStorageFileProvider, ...) |
 | install app | x86sim install (appinstall.sh copies the .app into `data/tmp/x86code-install`) | `<device>/data/tmp/x86code-openurl` | openurl job -> InstallCoordination -> installd |
 | open URL/app | x86sim openurl/app | `<device>/data/tmp/x86code-openurl` | openurl job -> FrontBoard |
+| simctl commands | x86sim launch/push/... (simctl.py) | `req <id> <json>` in `<device>/data/tmp/x86code-openurl`, `result` lines in its log | openurl job -> FrontBoard, UserNotifications, Photos, CoreLocation, LaunchServices |
+| debugging | lldb (Linux) | TCP 127.0.0.1:<port> (gdb-remote) | debugserver in the Darling container -> the app (Mach task/thread/exceptions) |
 | stream | simstream.py | HLS in `$X86SIM_SITE/live` | http.server :8765 -> cloudflared |

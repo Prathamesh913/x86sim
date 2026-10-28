@@ -29,7 +29,7 @@ The project is experimental. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) f
   Darling's [build list](https://docs.darlinghq.org/build-instructions.html).
 - **Rust** (stable, via rustup) for `linux/mtlvk` and metal2vulkan.
 - **Python 3** with `PIL` (Pillow) and `dnspython`. The viewer needs PyGObject with GTK 4, the stream needs `ffmpeg`
-  (NVENC), `x86sim dismiss` needs `tesseract`, and `x86sim site` needs `cloudflared`.
+  (NVENC), `x86sim dismiss` needs `tesseract`, `x86sim site` needs `cloudflared`, and `x86sim debug` needs `lldb`.
 - **Apple's iOS 26.5 simulator runtime and Xcode**, which are not included: take the iOS 26.5 (23F73) simulator
   runtime image from Xcode on a Mac and extract it (see below). iOS 27 has no x86_64 runtime, so 26.5 is the target.
 - **A Mac with Xcode** (reachable over ssh) to compile the small simulator-side binaries in `host/` and `tests/`.
@@ -98,6 +98,15 @@ x86sim openurl https://example.com
 x86sim app com.apple.Preferences
 x86sim install MyApp.app        # an iOS-simulator build (x86_64 slice), as xcrun simctl install: icon on the home screen
 x86sim launch com.example.myapp -arg value   # as simctl launch; also: x86sim uninstall com.example.myapp
+SIMCTL_CHILD_FOO=bar x86sim launch --console --terminate-running-process com.example.myapp   # env + stdout/stderr here
+x86sim terminate com.example.myapp
+x86sim get_app_container com.example.myapp data   # app | data | groups | <group id> (Linux paths)
+x86sim listapps                 # installed apps (--json: bundle/data paths, executable, version)
+x86sim push com.example.myapp payload.json   # simulated remote notification ("aps" payload, as simctl push)
+x86sim addmedia photo.jpg clip.mov           # into the Photos library
+x86sim log stream --app com.example.myapp    # the app's os_log (relaunched; --match TEXT filters)
+x86sim io recordVideo --secs 10 out.mp4      # also: x86sim io screenshot out.png
+x86sim debug --launch com.example.myapp      # LLDB attached before main (see Debugging)
 x86sim dismiss                  # answer permission prompts on screen (OCR)
 x86sim screenshot shot.png 3    # newest frame, scaled down 3x
 x86sim stream                   # 60 fps HLS stream into $X86SIM_SITE/live
@@ -105,6 +114,7 @@ x86sim site                     # progress page + stream + http server (:8765) +
 x86sim status | logs [label] | fps 10
 x86sim smoke                    # boot -> home screen -> Settings, Safari -> screenshot checks
 x86sim apps                     # install + launch the sample apps (tests/apps), check that they draw
+tests/devtools.sh               # the developer commands above with the DevTools test app (16 checks)
 x86sim probe metal|iosurface    # minimal devices with the Metal / IOSurface test clients
 x86sim apptest out/             # open each app, answer prompts, screenshot, collect crashes
 x86sim shutdown
@@ -115,10 +125,39 @@ listed processes), `X86CODE_NODT=all,-<label>` (os_log for one job), `X86CODE_IN
 (diagnostic shims, built with `make mac-diag`), `X86CODE_MDNS=0`, `X86CODE_SEEDPERMS=0`. Debugging: `tools/debug/`
 (`lastcrash.sh`, `stuck.sh <process>`, `allstacks.sh`, `sigctx.py`) and [docs/notebook/FINDINGS.md](docs/notebook/FINDINGS.md).
 
+## Debugging
+
+Apps are debugged with **LLDB on Linux** (your distribution's `lldb` package) through LLVM's **debugserver running inside
+the Darling container** (`make mac-debugserver` builds it on the Mac from llvm-project sources: Xcode 26+ ships an
+arm64-only debugserver). `x86sim debug` starts debugserver attached to the app and LLDB connected to it:
+
+```sh
+x86sim debug --launch com.x86code.devtools   # relaunch stopped before main (x86sim launch -w) and attach
+x86sim debug com.x86code.devtools            # attach to the running app
+x86sim debug --server-only com.x86code.devtools   # only debugserver; prints the lldb command (another terminal, an IDE)
+```
+
+```
+(lldb) breakpoint set -n '$s8DevTools14ViewControllerC11viewDidLoadyyF'
+Breakpoint 1: where = DevTools`$s8DevTools14ViewControllerC11viewDidLoadyyF, address = 0x0000000100002df0
+(lldb) continue
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+(lldb) bt 4
+  * frame #0: 0x0000000100002df0 DevTools`$s8DevTools14ViewControllerC11viewDidLoadyyF
+    frame #1: 0x00000001000034c5 DevTools`$s8DevTools14ViewControllerC11viewDidLoadyyFTo + 21
+    frame #2: 0x00007fd4e1a05241 UIKitCore`-[UIViewController _sendViewDidLoadWithAppearanceProxyObjectTaggingEnabled] + 80
+    frame #3: 0x00007fd4e1a0bf26 UIKitCore`-[UIViewController loadViewIfRequired] + 1385
+```
+
+Breakpoints by name or regex (`breakpoint set -r 'DevTools.*viewDidLoad'`), continue/step, `bt` with the app's and the
+runtime's symbols, registers and memory work. Expression evaluation (`p`, `po`) does not (LLDB can't run its support
+code in the process yet). Use `kill` or `process detach` to end a session. Crashes without a debugger:
+`tools/debug/lastcrash.sh` (symbolized core) and `tools/debug/sigctx.py`.
+
 ## Simulator-side binaries
 
 The Mach-O files in `host/` and `tests/` (`simhost`, `SimFramebuffer.framework`, `SimulatorHID.framework`,
-`libsimshim.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `fseventsd`, `netconfig`, `openurl`, `prefs`, `mtlprobe`, `iosprobe`, the
+`libsimshim.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `fseventsd`, `netconfig`, `openurl`, `prefs`, `debugserver`, `mtlprobe`, `iosprobe`, the
 probes and diagnostic shims) are small and ours, but they are build outputs of Apple's SDK, so they are not committed.
 Build them with `make mac`. To share a build with a machine that has no Mac, pack them:
 `git ls-files --others --ignored --exclude-standard host tests | grep -v '\.new$' | tar czf x86code-host-bin.tgz -T -`,
@@ -138,7 +177,10 @@ then attach the archive to a release or copy it over.
   on the device through installd, with a data container and a home-screen icon; `x86sim launch` opens it with
   arguments. UIKit, SwiftUI (navigation, animation, URLSession) and MetalKit/SpriteKit apps (MTKView render loop on
   CAMetalLayer, on the GPU) run at 60 fps. Sample apps: `tests/apps`, built on the Mac by `build/mac-build-apps.sh`.
-- Tests: `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
+- Developer workflow as with simctl/Xcode: launch with environment and `--console`, `--wait-for-debugger`, terminate,
+  containers, listapps, push notifications, Photos media, os_log streaming, screenshots and MP4 recording, and LLDB
+  debugging with breakpoints and symbolic backtraces (`x86sim debug`). `x86sim location set` doesn't reach apps yet.
+- Tests: `tests/devtools.sh` (16 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
 ## Licensing
 

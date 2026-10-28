@@ -2499,3 +2499,118 @@ Darling changes in this spike (darling-xnu): getattrlist newer volume attributes
 Other changes: host/openurl install/uninstall/launch arguments (+ entitlements), cli/libexec/appinstall.sh,
 `x86sim install|uninstall|launch|apps`, rundev job com.apple.installcoordinationd, device capabilities, tests/apps
 (4 apps), build/mac-build-apps.sh, tests/apps.sh, screens 90-98.
+
+## Spike 3.16 — Developer workflow (simctl parity), LLDB debugging, FSEvents latency, leftovers (2026-10-28)
+
+**Results:**
+- **simctl's developer commands** (`cli/libexec/simctl.py`, requests to host/openurl as `req <id> <json>`):
+  `x86sim launch` with arguments, environment (`SIMCTL_CHILD_NAME=value` and `--env`), `--console` (the app's
+  stdout/stderr streamed to the terminal), `-w/--wait-for-debugger`, `--terminate-running-process`; `terminate`,
+  `get_app_container <id> [app|data|groups|<group>]`, `listapps [--json]`, `pidof`, `push` (simulated remote
+  notification, delivered to the foreground app: 99), `addmedia` (Photos library: 100), `log stream --app` (os_log of
+  an app), `io screenshot` / `io recordVideo` (MP4 from the frame ring). `location set|clear` is accepted but apps
+  don't get the location yet (below).
+- **Debugging with LLDB**: `x86sim debug [--launch] <bundle id>` attaches Linux's lldb to the app through LLVM's
+  debugserver running inside the Darling container. Breakpoints, continue/step, symbolic backtraces into the app,
+  UIKitCore and the rest of the runtime work (README "Debugging"); expression evaluation does not.
+- **tests/devtools.sh** with a new test app (tests/apps/DevTools): 16/16, three runs in a row in one boot.
+- **FSEvents latency** applied (deferral, NoDefer, flush), tests/probes/fsevprobe 3/3.
+- **Package detection**: .app/.bundle directories without a bundle bit are packages for FileProvider.
+- **suggestd** runs in the standard boot again (no crash in the boots of this spike).
+- **Two darlingserver aborts fixed** that took the whole container down (debugger page queries; a child checking in
+  after its parent died).
+
+Prior work checked first: research/willi, VibeDarling and linuxkid473 have nothing on simctl's commands, debugserver
+or FSEvents latency. Darling's docs describe debugging with its own lldb build and an external debugserver
+(docs.darlinghq.org, "Debugging"); our prefix has neither (its /usr/bin/lldb is an xcrun stub).
+
+### How CoreSimulatorBridge does simctl's commands (Mac, Xcode 27.1)
+`.../CoreSimulator.framework/Resources/Platforms/iphoneos/usr/libexec/CoreSimulatorBridge` (strings and entitlements):
+- launch: `FBSOpenApplicationService` with the launch options under `__DebugOptions` (FBSOpenApplicationOptionKey
+  DebuggingOptions): `__Arguments`, `__Environment`, `__StandardOutPath`, `__StandardErrorPath`, `__WaitForDebugger`,
+  `__DisableASLR`. At the top level FrontBoard only takes `__Arguments` (our first `--console` attempt set the paths
+  there and the app's stdout stayed /dev/null). `terminate_running_process` first terminates.
+- terminate: `-[FBSSystemService terminateApplication:forReason:andReport:withDescription:completion:]` (and an RBS
+  termination assertion); entitlement `com.apple.multitasking.termination`.
+- push: `+[UNNotificationRequest requestWithIdentifier:pushPayload:bundleIdentifier:]` added with
+  `addNotificationRequest:withCompletionHandler:` on a `UNUserNotificationCenter` for the bundle; entitlement
+  `com.apple.private.usernotifications.notification-simulator`.
+- addmedia: `PHPhotoLibrary performChangesAndWait:` with `creationRequestForAssetFrom{Image,Video}AtFileURL:`;
+  `com.apple.private.tcc.allow` = kTCCServicePhotos.
+- location: `CLSimulationManager` (clearSimulatedLocations, appendSimulatedLocation:, setLocationInterval:/Speed:/
+  Distance:, startLocationSimulation); `com.apple.locationd.authorizeapplications`.
+host/openurl now does each the same way and carries those entitlements in `__TEXT,__entitlements`.
+
+### os_log for one app without stalling the boot
+Logging stays off for the boot (no logd/diagnosticd). `--oslog` / `log stream --app` relaunches the app with
+`X86CODE_OSLOG` and `X86CODE_OSLOG_DIR` in its debug-option environment. `DYLD_INSERT_LIBRARIES` given that way is
+replaced by launchd's, so the diag shim couldn't be inserted per app; liboslogdiag's formatter
+(host/simshim/diag/oslogdiag.m, `-DSIMSHIM_OSLOG`) is now compiled into libsimshim and turns on only for processes
+with `X86CODE_OSLOG` in their environment. Messages go to `data/var/log/oslog.<prog>.<pid>.log`; `log stream`
+follows them (`--match` filters).
+
+### LLDB: debugserver inside Darling
+- Xcode 27's debugserver is arm64/arm64e only. build/mac-build-debugserver.sh builds llvm-project's
+  lldb/tools/debugserver Xcode project (sparse checkout of llvmorg-21.1.0) for macOS x86_64. Built for macOS 27 it
+  failed in Darling's dyld: `Symbol not found: __ZNSt3__117bad_function_callD1Ev` (Darling's libc++ is older);
+  `MACOSX_DEPLOYMENT_TARGET=12.0` links only symbols Darling's libc++ has (checked with nm against the prefix's
+  libc++.1.dylib).
+- `darling shell <debugserver> 127.0.0.1:<port> --attach=<pid>` joins the running simulator container; Linux lldb
+  23 (CachyOS package) connects with `platform select remote-macosx` + `process connect` and reads the Mach-O files
+  from Linux paths (`image search-paths add /Volumes/SystemRoot /`).
+- **darlingserver abort 1**: the first session took the whole container down (every process SIGILL at the same
+  second). darlingserver's core: `dtape_stub_log` abort in `mach_vm_page_range_query`, an unsafe stub that
+  debugserver calls for each memory region (qMemoryRegionInfo dirty pages). It now reports every page resident
+  (VM_PAGE_QUERY_PAGE_PRESENT), as `mach_vm_page_query` does.
+- **debugserver crashed attaching** in about half of the attempts: SIGSEGV in `MachThread::ThreadDidStop`
+  (sigctx.py on its core). Its log showed `SetDefaultArchitecture (cpu_type=0x00000007) => 0`: i386, for which this
+  x86_64-only build has no plugin. `sysctl.proc_cputype` answered 0x1000007 for the same pid (a small macOS probe
+  run in the container), so the type came from `MachProcess::GetMainBinaryCPUTypes`, which reads the main binary's
+  header from dyld's image list: an app stopped at its first instruction (`__WaitForDebugger`) may not have one yet.
+  The build patches `DNBArchProtocol::SetArchitecture` to fall back to x86_64 when there is no plugin for the type.
+  (Two Darling fallbacks for the process architecture tried on the way were reverted.)
+- `x86sim launch -w`: FrontBoard answers `openApplication` only once the app runs, so the helper no longer waits
+  for that answer; the CLI finds the waiting process in /proc (`NSpid` = the pid inside Darling).
+
+### darlingserver abort 2: a child checking in after its parent died
+During launch/terminate cycles the container died again: darlingserver SIGSEGV in `dtape_semaphore_up(NULL)` from
+`Process::notifyCheckin`. A child checking in signals its parent's fork-wait semaphore; the parent had died and its
+semaphore was already destroyed (set to NULL) while the `Process` object was still referenced. Now skipped when NULL.
+
+### FSEvents: latency
+fseventsd logged `latency 0.000` for every stream. The register request's field at 0x8c is a u64 in microseconds
+(1.5 s = 0x16e360), not an f64 (raw dump of the request). Streams now keep pending events until first event +
+latency (NoDefer: the first event after a quiet period goes at once); `f2d_flush` sends them and answers the stream's
+own last event id (answering the global current id made `FSEventStreamFlushSync` wait forever).
+tests/probes/fsevprobe: deferred stream called back once at 1.50 s for a burst of 5 files, NoDefer at 0.01 s, a
+30 s-latency stream delivered by FlushSync. History across boots is still not kept.
+
+### Package detection without a bundle bit
+`fpfs_pkg_path_lookup` (detection 0) said "not a package" for Thing.app and Thing.bundle even with the bundle bit set
+by hand in the FinderInfo xattr, so a Darling FinderInfo change (tried, reverted) wouldn't help. fpsim2host stands in
+for the Mac host, whose fileproviderd also uses LaunchServices' package types: a directory whose extension's UTType
+(`typeWithFilenameExtension:conformingToType:public.directory`) conforms to com.apple.package is a package now
+(Thing.app -> com.apple.application-bundle, Thing.bundle -> com.apple.generic-bundle; s2hprobe: package 1).
+
+### Leftovers checked
+- **suggestd**: started in 8 boots of this spike (as an extra job, then in the standard boot); no crash, no core.
+- **Widget extensions killed in the background** (PassbookWidgets, ScreenTimeWidgetExtension): launchd_sim's log says
+  "exited due to SIGKILL, ran for 0ms", but the spawn and exit lines are ~10 s apart ("ran for" is wrong under
+  Darling). chronod (the widget host) launches them for timelines and RunningBoard ends them when idle; the widgets
+  render (Maps, Calendar on the home screen). Not a bug as far as seen.
+- **Location simulation**: requests reach locationd's simulation service (`[Simulation] received daemon-side request
+  to start location simulation`, once host/openurl ran its main run loop: CLSimulationManager's proxy is on the
+  main queue) but not reliably, and no location reached an app. Open.
+- **Game Center icon** (gray wireframe in Settings) and the **black-screen hang under heavy disk load** were not
+  worked on.
+
+### Open
+- Location simulation (above); `--console` uses files (no pty); expression evaluation in LLDB.
+- FSEvents history across boots; Game Center icon; heavy-disk-load hang.
+
+Darling changes in this spike (darlingserver): `mach_vm_page_range_query`/`mach_vm_page_query` answered; fork-wait
+semaphore of a dead parent.
+
+Other changes: host/openurl (requests, entitlements, run loop), cli/libexec/simctl.py, simdebug.sh, libsimshim with
+the os_log formatter, host/debugserver (build/mac-build-debugserver.sh), host/fseventsd latency, fpsim2host package
+types, tests/apps/DevTools, tests/devtools.sh, tests/probes/fsevprobe, suggestd in rundev, screens 99-100.

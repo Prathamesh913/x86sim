@@ -119,3 +119,5 @@ core.[0-9]*
 # built test apps (tests/apps/<Name>, build/mac-build-apps.sh)
 /tests/apps/build/
 *.profraw
+!/docs/screens/99-devtools-push-location.png
+!/docs/screens/100-photos-addmedia.png
