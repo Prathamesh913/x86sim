@@ -10,6 +10,11 @@
 //
 // The calls are handled in -forwardInvocation: with the protocol's own method signatures, so argument types come from
 // FileProvider itself. Every method's signature is logged at start (data/var/log/fpsim2host.log), and every call.
+// All 16 methods are answered (tests/probes/s2hprobe exercises them over XPC): open by id, openat/mkdirat/unlinkat/
+// renameat, xattrs, package lookup (FileProvider's own fpfs_pkg_path_lookup on the path), directory entries
+// (getattrlistbulk records), dataless files (SF_DATALESS + sparse logical size; materialize copies the content in and
+// clears the flag; nothing faults on read), purgeable and sync-root marks (kept in xattrs), materialization handlers
+// (kept, never called: there are no dataless faults).
 #import <Foundation/Foundation.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
@@ -19,6 +24,8 @@
 #include <sys/stat.h>
 #include <sys/xattr.h>
 #include <sys/mount.h>
+#include <sys/attr.h>
+#include <stdbool.h>
 #include <ftw.h>
 #include <stdio.h>
 
@@ -32,6 +39,10 @@ static FILE* logf_;
 #define LOG(...) do { if (logf_) { fprintf(logf_, __VA_ARGS__); fputc('\n', logf_); fflush(logf_); } } while (0)
 
 static Protocol* proto;
+static NSMutableDictionary* handlers;   // materialization handlers by path
+// FileProvider.framework: package detection for a path (FileProvider's own code, as the Mac host runs it)
+static int (*fpfs_pkg_path_lookup)(const char* path, const char* root, bool accept_demoted, bool* is_pkg, bool* is_demoted,
+	uint64_t* type, unsigned detection);
 
 // "@?<v@?@\"NSFileHandle\"@\"NSError\">" -> the block's own type string "v@?@@" (quotes, class names dropped)
 static NSString* blockTypes(const char* ext) {
@@ -140,8 +151,12 @@ static id objArg(NSInvocation* inv, NSUInteger i) {
 }
 
 // call the completion block (the last argument) with the given values: objects for '@' slots in order, integers for
-// the others; an NSError slot gets err
+// the others (nums[i] for the i-th non-object slot, the last one repeated); an NSError slot gets err
+static void replyv(NSInvocation* inv, NSArray* objs, const long long* nums, int nnums, NSError* err);
 static void reply(NSInvocation* inv, NSArray* objs, long long num, NSError* err) {
+	replyv(inv, objs, &num, 1, err);
+}
+static void replyv(NSInvocation* inv, NSArray* objs, const long long* nums, int nnums, NSError* err) {
 	NSUInteger last = inv.methodSignature.numberOfArguments - 1;
 	id block = objArg(inv, last);
 	if (!block) return;
@@ -151,7 +166,7 @@ static void reply(NSInvocation* inv, NSArray* objs, long long num, NSError* err)
 	NSMethodSignature* bs = [NSMethodSignature signatureWithObjCTypes:bt.UTF8String];
 	NSInvocation* bi = [NSInvocation invocationWithMethodSignature:bs];
 	[bi setTarget:block];
-	NSUInteger oi = 0;
+	NSUInteger oi = 0, ni = 0;
 	for (NSUInteger a = 1; a < bs.numberOfArguments; a++) {
 		const char* t = [bs getArgumentTypeAtIndex:a];
 		if (*t == '@') {
@@ -162,8 +177,8 @@ static void reply(NSInvocation* inv, NSArray* objs, long long num, NSError* err)
 			else if (oi < objs.count) { v = objs[oi] == (id) [NSNull null] ? nil : objs[oi]; oi++; }
 			[bi setArgument:&v atIndex:a];
 		} else {
-			NSUInteger size; NSGetSizeAndAlignment(t, &size, NULL);
-			long long v = num;
+			long long v = nums[ni < (NSUInteger) nnums ? ni : (NSUInteger) nnums - 1];
+			ni++;
 			[bi setArgument:&v atIndex:a];   // little-endian: the low bytes
 		}
 	}
@@ -269,10 +284,139 @@ static void reply(NSInvocation* inv, NSArray* objs, long long num, NSError* err)
 		return;
 	}
 	if (!strcmp(name, "sim_pkgLookup:name:acceptDemotedPkg:detection:completionHandler:")) {
-		// (isPackage, isDemoted?, type, error): the host looks for package (bundle) markers; a plain directory or a
-		// file isn't one. x86Code: no package detection yet (everything is "not a package").
+		// (isPackage, isDemoted, type, error) for name in dir (or dir itself). The Mac's fileproviderd runs FileProvider's
+		// own package detection on the host path (bundle bit, registered package extensions); so do we, with the same
+		// function the framework uses for paths (fpfs_pkg_path_lookup: no host round trip).
+		NSFileHandle* dir = objArg(inv, 2);
+		NSString* pname = objArg(inv, 3);
+		BOOL accept = intArg(inv, 4) != 0;
+		unsigned detection = (unsigned) intArg(inv, 5);
+		char dpath[PATH_MAX] = "", full[PATH_MAX];
+		if (dir) fcntl(dir.fileDescriptor, F_GETPATH, dpath);
+		if (pname.length) snprintf(full, sizeof(full), "%s%s%s", dpath, dpath[0] ? "/" : "", pname.fileSystemRepresentation);
+		else snprintf(full, sizeof(full), "%s", dpath);
+		bool isPkg = false, demoted = false;
+		uint64_t type = 0;
+		int r = fpfs_pkg_path_lookup ? fpfs_pkg_path_lookup(full, NULL, accept, &isPkg, &demoted, &type, detection) : 0;
+		int e = errno;
+		long long nums[3] = { isPkg, demoted, (long long) type };
+		replyv(inv, @[], nums, 3, r < 0 ? posixError(e) : nil);
+		LOG("  -> %s: package %d demoted %d type %llu (r %d errno %d)", full, isPkg, demoted, (unsigned long long) type, r, r < 0 ? e : 0);
+		return;
+	}
+	if (!strcmp(name, "sim_makeDatalessFileAt:type:documentSize:entryCount:completionHandler:")) {
+		// APFS makes the item dataless: SF_DATALESS, the logical size, no data; reading it faults the provider in to
+		// materialize it. Here: the flag (Darling keeps BSD flags per file) and, for a file, a sparse file of the
+		// logical size. There are no faults: reading gives zeros until materializeFile.
+		NSFileHandle* fh = objArg(inv, 2);
+		long long size = intArg(inv, 4);
+		struct stat st;
+		int r = fstat(fh.fileDescriptor, &st);
+		if (r == 0 && S_ISREG(st.st_mode) && size >= 0) r = ftruncate(fh.fileDescriptor, size);
+		if (r == 0) r = fchflags(fh.fileDescriptor, st.st_flags | SF_DATALESS);
+		int e = errno;
+		LOG("  -> %d errno %d", r, r < 0 ? e : 0);
+		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
+		return;
+	}
+	if (!strcmp(name, "sim_unsetDatalessBitAt:completionHandler:")) {
+		NSFileHandle* fh = objArg(inv, 2);
+		struct stat st;
+		int r = fstat(fh.fileDescriptor, &st);
+		if (r == 0 && (st.st_flags & SF_DATALESS)) r = fchflags(fh.fileDescriptor, st.st_flags & ~SF_DATALESS);
+		int e = errno;
+		LOG("  -> %d errno %d", r, r < 0 ? e : 0);
+		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
+		return;
+	}
+	if (!strcmp(name, "sim_materializeFile:from:size:completionHandler:")) {
+		// the provider's downloaded content (from) becomes the dataless file's data (APFS swaps the extents in);
+		// here it is copied and the dataless flag cleared
+		NSFileHandle* dst = objArg(inv, 2);
+		NSFileHandle* src = objArg(inv, 3);
+		long long size = intArg(inv, 4);
+		int r = 0, e = 0;
+		char buf[65536];
+		off_t off = 0;
+		while (r == 0 && (size < 0 || off < size)) {
+			size_t want = sizeof(buf);
+			if (size >= 0 && (long long) want > size - off) want = (size_t) (size - off);
+			ssize_t n = pread(src.fileDescriptor, buf, want, off);
+			if (n < 0) { r = -1; break; }
+			if (n == 0) break;
+			if (pwrite(dst.fileDescriptor, buf, n, off) != n) { r = -1; break; }
+			off += n;
+		}
+		if (r == 0) r = ftruncate(dst.fileDescriptor, off);
+		struct stat st;
+		if (r == 0 && fstat(dst.fileDescriptor, &st) == 0 && (st.st_flags & SF_DATALESS))
+			r = fchflags(dst.fileDescriptor, st.st_flags & ~SF_DATALESS);
+		e = errno;
+		LOG("  -> %lld bytes, %d errno %d", (long long) off, r, r < 0 ? e : 0);
+		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
+		return;
+	}
+	if (!strcmp(name, "sim_markPurgeable:flags:syncRoot:completionHandler:")) {
+		// APFS purgeable marking (the system may delete the file's data under storage pressure). Nothing purges here;
+		// the flags are kept in an xattr so they can be read back.
+		NSFileHandle* fh = objArg(inv, 2);
+		uint64_t flags = (uint64_t) intArg(inv, 3);
+		int r = fsetxattr(fh.fileDescriptor, "com.apple.x86code.purgeable", &flags, sizeof(flags), 0, 0);
+		int e = errno;
+		LOG("  -> %d errno %d", r, r < 0 ? e : 0);
+		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
+		return;
+	}
+	if (!strcmp(name, "sim_setSyncRoot:flags:completionHandler:")) {
+		// APFS marks the directory a File Provider sync root. Darling's fsctl answers "no enclosing sync root" for
+		// every item (misc/fsctl.c); the mark is kept in an xattr.
+		NSFileHandle* fh = objArg(inv, 2);
+		int flags = (int) intArg(inv, 3);
+		int r = fsetxattr(fh.fileDescriptor, "com.apple.x86code.syncroot", &flags, sizeof(flags), 0, 0);
+		int e = errno;
+		LOG("  -> %d errno %d", r, r < 0 ? e : 0);
+		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
+		return;
+	}
+	if (!strcmp(name, "sim_registerMaterializationHandler:forURL:completionHandler:")) {
+		// the host calls the handler when something reads a dataless item under the URL. Without dataless faults
+		// (see makeDatalessFileAt) it is never called; it is kept so unregister finds it.
+		id handler = objArg(inv, 2);
+		NSURL* url = objArg(inv, 3);
+		if (url && handler) handlers[url.path] = handler;
+		LOG("  -> registered (%lu)", (unsigned long) handlers.count);
 		reply(inv, @[], 0, nil);
-		LOG("  -> not a package");
+		return;
+	}
+	if (!strcmp(name, "sim_unregisterMaterializationHandlerForURL:completionHandler:")) {
+		NSURL* url = objArg(inv, 2);
+		if (url) [handlers removeObjectForKey:url.path];
+		LOG("  -> unregistered (%lu)", (unsigned long) handlers.count);
+		reply(inv, @[], 0, nil);
+		return;
+	}
+	if (!strcmp(name, "sim_dirEntryHelper:completionHandler:")) {
+		// the next directory entries of the directory, as getattrlistbulk records (FileProvider's fpfs_fgetdirentries
+		// reads up to 32 KB of length-prefixed records and parses each with ATTR_CMN_RETURNED_ATTRS), and their count.
+		// The descriptor is shared with the client's, so successive calls continue where the last one stopped.
+		NSFileHandle* fh = objArg(inv, 2);
+		struct attrlist al = { ATTR_BIT_MAP_COUNT, 0,
+			ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_FSID | ATTR_CMN_OBJTYPE | ATTR_CMN_CRTIME |
+			ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME | ATTR_CMN_OWNERID | ATTR_CMN_GRPID |
+			ATTR_CMN_ACCESSMASK | ATTR_CMN_FLAGS | ATTR_CMN_GEN_COUNT | ATTR_CMN_DOCUMENT_ID | ATTR_CMN_FILEID |
+			ATTR_CMN_PARENTID | ATTR_CMN_ADDEDTIME,
+			0, ATTR_DIR_LINKCOUNT | ATTR_DIR_ENTRYCOUNT, ATTR_FILE_LINKCOUNT | ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE |
+			ATTR_FILE_DATALENGTH, ATTR_CMNEXT_LINKID };
+		NSMutableData* d = [NSMutableData dataWithLength:0x8000];
+		int n = getattrlistbulk(fh.fileDescriptor, &al, d.mutableBytes, d.length, FSOPT_PACK_INVAL_ATTRS | FSOPT_ATTR_CMN_EXTENDED);
+		int e = errno;
+		if (n < 0) { reply(inv, @[[NSNull null]], 0, posixError(e)); LOG("  -> errno %d", e); return; }
+		// the records' total length
+		size_t used = 0;
+		for (int i = 0; i < n; i++) used += *(uint32_t*) ((char*) d.bytes + used);
+		d.length = used;
+		reply(inv, @[d], n, nil);
+		LOG("  -> %d entries, %zu bytes", n, used);
 		return;
 	}
 	// anything else: not supported here
@@ -301,6 +445,8 @@ int main(int argc, char** argv) {
 		logf_ = fopen(p, "a");
 		void* fp = dlopen("/System/Library/Frameworks/FileProvider.framework/FileProvider", RTLD_NOW);
 		FPSimulatorSupportInterface = fp ? dlsym(fp, "FPSimulatorSupportInterface") : NULL;
+		fpfs_pkg_path_lookup = fp ? dlsym(fp, "fpfs_pkg_path_lookup") : NULL;
+		handlers = [NSMutableDictionary new];
 		if (!FPSimulatorSupportInterface) { LOG("fpsim2host: no FPSimulatorSupportInterface (%s)", dlerror()); return 1; }
 		NSXPCInterface* iface = FPSimulatorSupportInterface();
 		proto = iface.protocol;

@@ -44,6 +44,7 @@ core.[0-9]*
 /tests/probes/csprobe2
 /tests/probes/disptest
 /tests/probes/docidprobe
+/tests/probes/s2hprobe
 /tests/probes/dvprobe
 /tests/probes/entblobprobe
 /tests/probes/entprobe
