@@ -30,6 +30,7 @@ core.[0-9]*
 /tests/metal/shaders/probe.metallib
 # Mach-O binaries built on the Mac (build/mac-build-*.sh); see README "Simulator-side binaries"
 /host/fpsim2host/fpsim2host
+/host/fseventsd/fseventsd
 /host/iosurfaced/iosurfaced
 /host/metalhostd/metalhostd
 /host/netconfig/netconfig
@@ -42,6 +43,7 @@ core.[0-9]*
 /tests/probes/csprobe
 /tests/probes/csprobe2
 /tests/probes/disptest
+/tests/probes/docidprobe
 /tests/probes/dvprobe
 /tests/probes/entblobprobe
 /tests/probes/entprobe

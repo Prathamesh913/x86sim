@@ -48,6 +48,7 @@ mac:
 	build/mac-build-iosurface.sh
 	build/mac-build-metal.sh
 	build/mac-build-fpsim2host.sh
+	build/mac-build-fseventsd.sh
 	build/mac-build-jobs.sh
 
 mac-diag:

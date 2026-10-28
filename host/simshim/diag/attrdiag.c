@@ -47,3 +47,29 @@ static int d_getattrlistat(int dfd, const char* path, struct attrlist* al, void*
 DYLD_INTERPOSE(d_getattrlist, getattrlist)
 DYLD_INTERPOSE(d_fgetattrlist, fgetattrlist)
 DYLD_INTERPOSE(d_getattrlistat, getattrlistat)
+
+// x86Code: by-id lookups (document ids: FileProvider/GenerationalStorage resolve "did=" items this way)
+#include <sys/mount.h>
+extern int openbyid_np(fsid_t* fsid, fsobj_id_t* objid, int flags);
+extern ssize_t fsgetpath(char* buf, size_t bufsize, fsid_t* fsid, uint64_t objid);
+static void lg2(const char* line) { if (on) write(2, line, strlen(line)); }
+static int d_openbyid_np(fsid_t* fsid, fsobj_id_t* objid, int flags)
+{ int r = openbyid_np(fsid, objid, flags); int e = errno; char l[200];
+	snprintf(l, sizeof l, "openbyid_np fsid %d:%d id %llu flags %#x -> %d errno %d\n", fsid ? fsid->val[0] : -1, fsid ? fsid->val[1] : -1,
+		objid ? *(unsigned long long*) objid : 0, flags, r, r < 0 ? e : 0); lg2(l); errno = e; return r; }
+static ssize_t d_fsgetpath(char* buf, size_t sz, fsid_t* fsid, uint64_t objid)
+{ ssize_t r = fsgetpath(buf, sz, fsid, objid); int e = errno; char l[1300];
+	snprintf(l, sizeof l, "fsgetpath fsid %d:%d id %llu -> %zd errno %d %s\n", fsid ? fsid->val[0] : -1, fsid ? fsid->val[1] : -1,
+		(unsigned long long) objid, r, r < 0 ? e : 0, r > 0 ? buf : ""); lg2(l); errno = e; return r; }
+static int d_open(const char* path, int flags, int mode)
+{ int r = open(path, flags, mode); int e = errno;
+	if (on && path && !strncmp(path, "/.vol/", 6)) { char l[300]; snprintf(l, sizeof l, "open %s -> %d errno %d\n", path, r, r < 0 ? e : 0); lg2(l); }
+	errno = e; return r; }
+static int d_openat(int dfd, const char* path, int flags, int mode)
+{ int r = openat(dfd, path, flags, mode); int e = errno;
+	if (on && path && !strncmp(path, "/.vol/", 6)) { char l[300]; snprintf(l, sizeof l, "openat %s -> %d errno %d\n", path, r, r < 0 ? e : 0); lg2(l); }
+	errno = e; return r; }
+DYLD_INTERPOSE(d_openbyid_np, openbyid_np)
+DYLD_INTERPOSE(d_fsgetpath, fsgetpath)
+DYLD_INTERPOSE(d_open, open)
+DYLD_INTERPOSE(d_openat, openat)

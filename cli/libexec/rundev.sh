@@ -34,6 +34,11 @@ rm -rf $D/data/var/log/*.log $D/data/Library/Preferences/com.x86code*.plist
 # x86Code: com.x86code.openurl (host/openurl/openurl) serves cli/libexec/simtouch.py openurl <url>
 # x86Code: com.x86code.fpsim2host (host/fpsim2host) stands in for the Mac host's FileProvider service
 # (com.apple.FileProvider.sim2host: open by id, openat/mkdirat/... for File Provider extensions; FINDINGS 3.13)
+# x86Code: revisiond (GenerationalStorage: document id -> file id; FileProvider resolves every "did=" item through it,
+# so Preview could open nothing Files handed over: "can't resolve did=... [70: Stale NFS file handle]", FINDINGS 3.14)
+# x86Code: com.x86code.fseventsd (host/fseventsd) stands in for the Mac host's fseventsd (com.apple.FSEvents: volume
+# UUIDs, live file-system events from Linux inotify; the On My iPhone extension needs it for item lookups and live
+# updates in Files; FINDINGS 3.14)
 # x86Code: com.apple.PosterBoard is a LaunchAngel (draws the wallpaper; SpringBoard's PRSService looks up its endpoint)
 # x86Code: Metal (host/metalhostd) is on by default for every process (CoreAnimation's render server, the default
 # wallpaper, apps): X86CODE_METAL unset = all; X86CODE_METAL=0 = software rendering only; a process list
@@ -81,8 +86,10 @@ X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py $D com.apple.cfprefsd.xpc.da
 	com.apple.searchd com.apple.corespotlightservice com.apple.dasd com.apple.contactsd com.apple.assistant_cdmd \
 	com.apple.mobileassetd com.apple.biomed com.apple.parsecd com.apple.pasteboard.pasted com.apple.bird com.apple.swcd \
 	com.apple.intelligenceplatformd com.apple.textunderstandingd com.apple.syncdefaultsd com.apple.amsaccountsd \
+	com.apple.revisiond \
 	com.x86code.prefs=tests/probes/prefs com.x86code.openurl=host/openurl/openurl \
-	"com.x86code.fpsim2host=host/fpsim2host/fpsim2host|mach:com.apple.FileProvider.sim2host" "$@" >/dev/null
+	"com.x86code.fpsim2host=host/fpsim2host/fpsim2host|mach:com.apple.FileProvider.sim2host" \
+	"com.x86code.fseventsd=host/fseventsd/fseventsd|mach:com.apple.FSEvents" "$@" >/dev/null
 # x86Code: pre-answer the permission prompts (TCC, location, notifications) for the apps we test, as a test device is
 # set up: an unanswered prompt covers the app (cli/libexec/seedperms.py). X86CODE_SEEDPERMS=0 leaves the device as it is.
 [ "${X86CODE_SEEDPERMS:-1}" != 0 ] && python3 cli/libexec/seedperms.py $D
