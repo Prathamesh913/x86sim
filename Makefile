@@ -6,7 +6,7 @@ cfg = $(shell X86SIM_ROOT='$(ROOT)' sh -c '. cli/lib/config.sh; echo "$$$(1)"')
 PREFIX := $(call cfg,X86SIM_PREFIX)
 DBUILD := $(call cfg,X86SIM_DARLING_BUILD)
 
-.PHONY: all help submodules mtlvk darling darling-configure darling-install mac mac-diag test probes smoke clean
+.PHONY: all help submodules mtlvk darling darling-configure darling-install mac mac-diag mac-debugserver test probes smoke clean
 
 all: mtlvk darling
 
@@ -18,6 +18,7 @@ help:
 	@echo "                        SUDO_PASS from the environment or a sudo prompt)"
 	@echo "make mac                build host/ and tests/ Mach-O binaries on \$$X86SIM_MAC (Xcode, ssh)"
 	@echo "make mac-diag           build the optional diagnostic shims (host/simshim/diag)"
+	@echo "make mac-debugserver    build debugserver (macOS x86_64) for x86sim debug"
 	@echo "make probes             Metal and IOSurface probes (boot their own minimal device)"
 	@echo "make smoke              smoke test on the running boot (or boots one)"
 
@@ -53,6 +54,10 @@ mac:
 
 mac-diag:
 	build/mac-build-diag.sh
+
+# x86Code: LLVM's debugserver for macOS x86_64 (x86sim debug), from llvm-project sources on the Mac
+mac-debugserver:
+	build/mac-build-debugserver.sh
 
 probes:
 	tests/metal/run-probe.sh
