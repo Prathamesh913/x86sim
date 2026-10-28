@@ -27,7 +27,8 @@ rm -rf $D/data/var/log/*.log $D/data/Library/Preferences/com.x86code*.plist
 # corespotlightservice; with them the daemons a Mac's simulator runs that Spotlight, Files and others look up: dasd
 # (background tasks), contactsd, assistant_cdmd (query understanding), mobileassetd, biomed, parsecd, pasted (the
 # pasteboard), bird (com.apple.bird.token), swcd, intelligenceplatformd, textunderstandingd (FINDINGS 3.12).
-# suggestd is left out: it crashes at boot.
+# x86Code: suggestd (left out since 3.12: SIGSEGV at boot) runs since the Darling fixes of 3.13-3.16; no crash in 5
+# boots of 3.16 (FINDINGS 3.16).
 # x86Code: syncdefaultsd (com.apple.syncdefaultsd, the iCloud key-value store) and amsaccountsd (AppleMediaServices'
 # accounts) trapped in CloudKit until Darling's proc_pidinfo(PROC_PIDPATHINFO) returned 0 like XNU: cloudd took every
 # client for dead and answered container requests with (nil, nil) (FINDINGS 3.13). Both run on a Mac's simulator.
@@ -86,7 +87,7 @@ X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py $D com.apple.cfprefsd.xpc.da
 	com.apple.searchd com.apple.corespotlightservice com.apple.dasd com.apple.contactsd com.apple.assistant_cdmd \
 	com.apple.mobileassetd com.apple.biomed com.apple.parsecd com.apple.pasteboard.pasted com.apple.bird com.apple.swcd \
 	com.apple.intelligenceplatformd com.apple.textunderstandingd com.apple.syncdefaultsd com.apple.amsaccountsd \
-	com.apple.revisiond com.apple.installcoordinationd \
+	com.apple.revisiond com.apple.installcoordinationd com.apple.suggestd \
 	com.x86code.prefs=tests/probes/prefs com.x86code.openurl=host/openurl/openurl \
 	"com.x86code.fpsim2host=host/fpsim2host/fpsim2host|mach:com.apple.FileProvider.sim2host" \
 	"com.x86code.fseventsd=host/fseventsd/fseventsd|mach:com.apple.FSEvents" "$@" >/dev/null
