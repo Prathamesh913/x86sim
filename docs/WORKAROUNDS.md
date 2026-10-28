@@ -19,8 +19,8 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | SimRenderServer's com.apple.IOSurface.Remote | host/iosurfaced | Surfaces as shared anonymous memory; no compression, no GPU-private surfaces. |
 | Host mDNSResponder | linux/mdnsd | Unicast DNS (GetAddrInfo, QueryRecord). Register/Browse/Resolve are accepted but return nothing (no multicast DNS, no Bonjour). |
 | Host configd (network state for configd_sim's SimulatorSupport) | linux/hostnet + host/netconfig + com.x86code.host-configd | A snapshot of the default-route interface at boot; not updated when Linux networking changes. |
-| Host fileproviderd (com.apple.FileProvider.sim2host) | host/fpsim2host | open by id, openat/mkdirat/unlinkat/renameat, xattrs. Not implemented: dirEntryHelper, dataless files/materialization, purgeable, sync roots, package detection. |
-| Host fseventsd | (none) | Missing: LocalStorageFileProvider gets no FSEvents service (no live updates in Files). |
+| Host fileproviderd (com.apple.FileProvider.sim2host) | host/fpsim2host | All 16 methods. Dataless files are SF_DATALESS + a sparse file of the logical size: nothing faults on read (materialization handlers are kept but never called); purgeable and sync-root marks are only recorded (xattrs). |
+| Host fseventsd (com.apple.FSEvents) | host/fseventsd + Darling syscall 598 (inotify) | Live events for registered paths (trees watched with inotify), volume UUID, persistent event ids. No event history across boots (MustScanSubDirs + HistoryDone instead); latency not applied; streams on `/` watch only the device's data directory. |
 | `simctl openurl` / `simctl launch` | host/openurl (com.x86code.openurl) | Opens through FrontBoard's open-application service, as lsd does after choosing an app; carries the entitlements SpringBoard checks. |
 | `simctl privacy grant` / provisioned test device | cli/libexec/seedperms.py | Writes TCC, location and notification answers into the device for the apps tested. |
 | Host /System/Library/Frameworks lookups by absolute path | run-launchd-sim.sh (CoreSpotlight link into the Darling prefix) | Only CoreSpotlight; others the simulator might open on the host path are absent. |
@@ -40,16 +40,18 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | **csops entitlement blobs** go to Darling's syscall instead of libsystem_sim_kernel's | simshim.c | The runtime's version fails a short buffer with ENOENT instead of ERANGE. Faithful fix would be in the runtime (not ours) or a matching kernel answer. |
 | **Siri session language** pre-set (`com.apple.assistant.backedup` "Session Language" = en-US) | mksimdevice.py | assistantd would set it on a Mac's device; without it AFPreferences recomputes in a loop on the main thread. |
 | **Permission prompts answered by OCR** (`x86sim dismiss`: tesseract finds "Allow" buttons and taps them) | simtouch.py | For prompts seedperms.py does not pre-answer. Test convenience only. |
-| **Daemons left out of the standard boot**: suggestd (SIGSEGV at boot); logd, diagnosticd (see above) | rundev.sh | Each is an open bug, not a design choice. |
+| **Daemons left out of the standard boot**: suggestd (SIGSEGV at boot); logd, diagnosticd (see above) | rundev.sh | Each is an open bug, not a design choice. (revisiond was missing too and is now started: FINDINGS 3.14.) |
 | **The standard boot lists its jobs** (about 70 labels in rundev.sh) instead of loading every LaunchDaemon of the runtime | rundev.sh | Jobs are added as apps need them, each with the reason in a comment. A Mac's device loads the whole set. |
 | **Fresh container per boot**: killsim.sh kills every Darling process, then `darling shutdown` | run-launchd-sim.sh | Leftover processes and two launchd_sims on one device break new boots; killing processes inside a running container leaves darlingserver in a state where new jobs hang. |
 | **statfs reports `apfs`** for local Linux file systems | Darling (libsystem_kernel statfs conversion) | FileProvider only accepts APFS volumes (the iOS simulator only runs on APFS). |
 | **chflags flags stored in an xattr** (`user.x86code.bsdflags`, hidden from listxattr) | Darling (helper/misc/bsdflags.h) | Linux has no BSD file flags; this keeps them per file across processes. |
 | **fsctl answers APFS requests as for a plain directory tree**; unknown ones ENOTTY | Darling (misc/fsctl.c) | Enough for FileProvider's sync-root and dir-stat queries. |
 | **O_SYMLINK on regular files/directories reopens through /proc/self/fd** | Darling (fcntl/openat.c) | Linux O_PATH descriptors can't be read; XNU's O_SYMLINK only differs for symlinks. |
+| **setrlimit(RLIMIT_NOFILE) below the current limit succeeds and changes nothing** | Darling (misc/setrlimit.c) | mldr keeps each thread's darlingserver socket at the top of the process's initial fd range; a lowered limit made thread creation abort (revisiond). Faithful: Darling's internal fds below the limit, or a limit enforced only on the process's own fds. |
+| **Document ids are the inode's low 32 bits**; fsgetpath/openbyid_np resolve ids (and object id 2, the volume root) only from paths some process got from getattrlist | Darling (getattrlist_generic.c, misc/fsgetpath.c) | Linux can't open by inode number. A file nobody has stat'ed through getattrlist since its id was handed out cannot be found by id. |
 | `NOTE_WL_SYNC_IPC` knotes accepted as no-ops; `memorystatus_control`, `kqueue_workloop_ctl` succeed | Darling (darling-xnu, libkqueue) | No memory pressure / jetsam, no sync-IPC priority inheritance. |
 | `SIOCGCONNINFO` left ENOTTY | Darling (sockets) | Answering it made Network.framework abort on a recursive lock. |
-| Runtime symlinks lost during extraction restored from a Mac | runtimes/ (local, not in the repo) | Extraction tooling issue; see the README's runtime setup. |
+| Runtime symlinks that 7-Zip skips or writes empty | tools/runtime/extract-runtime.py | Made again from the image's own listing after extraction (README setup step 2). |
 
 ## Diagnostics that change behaviour only when enabled (opt-in)
 
@@ -63,7 +65,8 @@ required parts.
 - `xpc_init_services` was skipped in simshim (launchd_sim never answered the pid-domain uncork); removed once the
   underlying Darling bugs were fixed.
 - Settings' gray row icons were first blamed on Metal; they also happen with software rendering and remain open
-  (in-process IconServices store lookup misses; FINDINGS "Settings row icons are gray ... (not Metal)").
+  (in-process IconServices store lookup misses; FINDINGS "Settings row icons are gray ... (not Metal)"). Not seen
+  in the boots of 3.14 (colored rows).
 - The workloop interposer (`host/simshim/diag/workloop_shim.c`) predates kernel workloops in Darling; it is kept for
   reference and not used.
 - simfb's fixed 40 ms delay before copying a frame was replaced by waiting for GPU completion.

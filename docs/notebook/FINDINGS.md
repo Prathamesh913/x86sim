@@ -2281,3 +2281,156 @@ Other changes:
 - cli/libexec/run-launchd-sim.sh: /etc/localtime.
 - host/simshim/compat/simshim.c: sim2host skip for com.apple.FileProvider.sim2host.
 - Screens 78-83.
+
+## Spike 3.14 — Preview opens documents from Files, FSEvents, revisiond, host file services, runtime setup (2026-10-28)
+
+**Results:**
+- **Files hands documents to Preview.** A PNG tapped in Files (or in Files' search results) opens in Preview (87).
+  Files' On My iPhone lists the folder normally afterwards, with the PNG's last-opened time (88): the
+  "Content Unavailable" after the hand-off is gone.
+- **Files gets live updates.** A file written from Linux into the On My iPhone folder appears in the open Files window
+  within a second (86). host/fseventsd serves com.apple.FSEvents from Linux inotify.
+- **fpsim2host answers all 16 FPSimulatorSupport methods** (tests/probes/s2hprobe).
+- **The SpringBoard MTLSimDevice crash (open since 3.12) is explained and fixed** (vkmtl's scheduled/completed order).
+- **App survey:** 18 apps open and draw, no app crashes (89).
+- **Runtime setup is reproducible:** tools/runtime/extract-runtime.py; a fresh extraction matched the working tree.
+- The boot that "died at startup" was not reproduced in about 25 boots; one boot hung black under heavy disk load
+  (below).
+
+Prior work checked first: research/willi, VibeDarling and linuxkid473 have nothing on FSEvents/fseventsd, openbyid_np,
+GenerationalStorage/revisiond, fsgetpath of document ids or RLIMIT_NOFILE with mldr's RPC sockets.
+
+### Preview couldn't resolve "did=" items: three missing pieces
+Preview logged `Error resolving bookmark; bookmark: fp:/.../com.apple.FileProvider.LocalStorage//did=791935814;
+error: ... -1005 ... NSFileProviderResolverErrorDomain -1012`; Files later logged "Got a nil url from fetchURL for item
+... -1005", fileproviderd "Cannot get URL for item ID localstorage/did=...", and the On My iPhone extension
+"can't resolve did=791935814 [70: Stale NFS file handle]". Each fix exposed the next:
+
+1. **FSEvents** (`FSEventsCopyUUIDForDevice: FSEvents_connect() => Unknown service name`): the extension had no
+   volume UUID and no live updates. New host/fseventsd (below).
+2. **revisiond wasn't running.** `did=` ids are document ids (GenerationalStorage). `GSLibraryResolveDocumentId2`
+   asks revisiond (`com.apple.revisiond`, `-[GSClient getFileIdForDocumentId:onDevice:reply:]`) for the file id, then
+   `openbyid_np(fsid, fileid)` and checks the document id of what it opened. With no revisiond, the reply block was
+   never called, file id 0 was opened (ENOENT), and the extension reported ESTALE. rundev now starts
+   com.apple.revisiond (a LaunchDaemon of the runtime, RunAtLoad/KeepAlive on a Mac's simulator). Then:
+   - revisiond aborted at its first thread: mldr printed **"Failed to create socket"**. revisiond sets
+     RLIMIT_NOFILE to 1000; mldr gives every thread its own darlingserver socket and puts those at the top of the
+     *initial* fd range (socket_bitmap_get, from 1048575 down), so `dup2` to the high fd failed with the lowered limit.
+     Fix (darling-xnu setrlimit.c): a request below the current Linux limit succeeds and changes nothing. (Recording
+     the lower value for getrlimit made notifyd abort; notifyd's own request, {10240, RLIM_INFINITY}, had always
+     failed with EPERM on Linux, which it ignores.)
+   - revisiond: `fstatfs(58) failed; error 2`, "Failed creating library for 58": it opens the volume root as
+     `openbyid_np(fsid 58, object id 2)` (2 = an APFS/HFS root). **openbyid_np (BSD 479) didn't exist.** New in
+     misc/fsgetpath.c: resolved like fsgetpath, then opened by path; object id 2 is the mount point, found from any
+     path of that device the shared id table knows (walking up while the parent has the same st_dev).
+   - Document ids are the inode's low 32 bits (3.13); getattrlist now remembers them in the fsgetpath table too, and
+     fsgetpath accepts a 32-bit id that matches the inode's low bits.
+   - Result: revisiond logs `getFileIdForDocumentId:... reply(791935814, ...)` and "Created new entry for
+     </Containers/Shared/AppGroup/.../File Provider Storage/Notes from Linux.txt dev:3a docID:...>"; its library lives
+     in the device (paths are relative to the device's home), nothing is written to Linux's /home.
+3. Preview then opened the PNG (87).
+
+Tools: tests/probes/docidprobe (getattrlist document id, openbyid_np by it, statfs fsid), host/simshim/diag/attrdiag
+also logs openbyid_np/fsgetpath/`/.vol` opens.
+
+### host/fseventsd: com.apple.FSEvents from inotify
+- **Protocol** ([protocols/FSEVENTS.md](../protocols/FSEVENTS.md)), reconstructed from the runtime's FSEvents.framework
+  MIG stubs: f2d 66000 register (5 descriptors: client port, path offsets/blob, exclusion offsets/blob; dev, flags,
+  latency, sinceWhen), 66001 flush, 66002 server UUID, 66003 current id, 66004 last id before time, 66005 purge,
+  66006 unregister; d2f 67000 callback (offsets, raw flags, ids, path blob). The raw flag bits and their mapping to
+  FSEventStreamEventFlags come from `implementation_callback_rpc`.
+- **inotify from a simulator process.** Simulator processes link the runtime's libsystem_kernel; Darling's
+  `__linux_inotify_*` exports are out of reach. New Darling-private syscall 598 (darling-xnu x86code_inotify.c):
+  init1, add_watch (vchroot-expanded path), rm_watch; events are read() from the Linux fd.
+- **Watches.** Every stream path is watched with its tree; new directories get watches as they appear; a missing
+  path is watched through its nearest existing ancestor. A stream on "/" (searchd/corespotlight, 6 exclusions) first
+  walked all of Linux through /Volumes/SystemRoot (30,000 watches, then a hang); streams on an ancestor of the device
+  now watch the device's data directory (about 9,500 directories). The watch table is indexed by watch descriptor.
+- **Clients at boot:** cfprefsd (Preferences directories, file events), profiled, nsurlsessiond, navd, MobileAsset,
+  searchd, and LocalStorageFileProvider (volume UUID, short "since" streams for catch-up, file-event streams for the
+  open folder).
+- **History:** none. Event ids persist across boots (a lease file), the volume UUID too; a stream starting at an older
+  id gets MustScanSubDirs for its paths, then HistoryDone (the catch-up streams unregister right after it).
+- **Client lifetime:** the client's port dying stops events; the stream goes when its port has no senders or on
+  unregister. (Destroying the stream on the dead-name notification made the client's own unregister fail with
+  "f2d_unregister_rpc() => (ipc/mig) server died (-308)".)
+
+### fpsim2host: the remaining 8 methods
+What the Mac's fileproviderd does for each (from FileProvider's fpfs_* callers in the runtime) and what we do:
+
+| Method | Mac host | Here |
+|---|---|---|
+| pkgLookup | package detection on the host path | FileProvider's own `fpfs_pkg_path_lookup` on the path (was: always "not a package") |
+| dirEntryHelper | next directory entries without materializing | getattrlistbulk records (≤ 32 KB, with ATTR_CMN_RETURNED_ATTRS) and their count; the shared fd continues |
+| makeDatalessFileAt | APFS dataless item (SF_DATALESS, logical size) | SF_DATALESS via fchflags (Darling keeps BSD flags in an xattr) + sparse file of the size |
+| unsetDatalessBitAt | clears SF_DATALESS | same |
+| materializeFile | the downloaded content becomes the file's data | copied in, flag cleared |
+| markPurgeable | APFS purgeable marks | kept in an xattr (nothing purges) |
+| setSyncRoot | APFS sync root | kept in an xattr (Darling's fsctl still answers "no sync root") |
+| register/unregisterMaterializationHandler | handler called on a dataless fault | kept; never called (no faults) |
+
+The completion block's integer slots now take separate values (pkgLookup's (BOOL, BOOL, u64, error)).
+tests/probes/s2hprobe calls each over XPC as a job (`x86sim boot "com.x86code.s2hprobe=tests/probes/s2hprobe|<dir>"`):
+all answer; makeDataless gives size 12345 with flags 0x40000000, materialize gives the content with flags 0.
+Package detection with detection 0 (what LocalStorage passes) reports .app/.bundle directories without the bundle bit
+as plain directories.
+
+### SpringBoard SIGSEGV in -[MTLSimDevice commandBufferForReference:] (open since 3.12)
+- Seen again in boot 5 of the first loop (twice in a row, 15:11:09 and 15:11:20). tools/debug/sigctx.py: the fault is
+  in the block of `commandBufferForReference:`, which takes `unordered_map::find(ref)->second` without checking for
+  end(). handleMainConnectionReplies calls it for message 100 (scheduled) and 101 (completed).
+- Both messages come from Apple's MTLSimImplementation inside metalhostd, driven by our VKMTLCommandBuffer's
+  handlers. `commit` sent the command buffer to mtlvk and *then* ran the scheduled handlers; the completion arrives
+  on another queue after ~10 ms, so a preempted commit thread let the completed handlers run first. The client got
+  101 (and released the ref), then 100 for a ref it no longer had.
+- Fix (host/metalhostd/vkmtl.m): scheduled handlers run before the command buffer is sent. `x86sim probe metal` 46/46.
+
+### Runtime setup (README step 2) checked against how it was done
+- Spike 0 and "Linux-side extraction": the universal runtime comes from `xcodebuild -downloadPlatform iOS
+  -buildVersion 26.5 -architectureVariant universal -exportPath ~/simrt` on a Mac (the installed runtimes are
+  arm64-only), and `7z x -snld` of `Restore/iOSSimulatorRuntime_Cryptex.dmg` on Linux. The README said to copy the
+  installed `.simruntime` from a Mac, which gives the arm64-only runtime.
+- 3.4: 80 links had come out as empty files and were restored from a Mac by hand (restored-symlinks.tsv).
+  7-Zip 26.05 instead skips 6 ("Dangerous link via another link was ignored", exit code 2), and `-snld` writes
+  absolute links (/System/...) relative to the archive root, i.e. broken.
+- tools/runtime/extract-runtime.py does the extraction and then makes each of the image's 317 links again from
+  `7z l -slt` (absolute ones relative inside RuntimeRoot). `--check` compares a tree with the image. A fresh
+  extraction (12 min) matched the working tree in names, sizes, types and link targets (727,870 entries), except four
+  dangling TTS voice links that are now relative too.
+- `make help`, `make mtlvk`, `make darling` (existing build dir) and a fresh cmake configure of external/darling work;
+  `make darling-install` needs sudo (not run).
+
+### Boots
+- About 25 boots this spike (two loops of 5 and 6 boots, the rest while testing): no boot where every process was
+  signalled at once. The second loop (after the vkmtl fix) had no crash of any process in 6 boots.
+- First loop, boot 2 (during the 7z extraction, nice/ionice'd): SpringBoard and backboardd spawned, no frame after
+  4 min. Nothing in their logs; mtlvk's log was overwritten by the next boot. `x86sim boot` now keeps the logs of a
+  boot that doesn't reach the home screen in `$X86SIM_SCRATCH/failed-boot-<time>`.
+
+### Files: navigation back crashed (seen only before the fixes)
+- While "did=" resolution failed, going back from a tag view in Files (back button or the Browse tab) crashed Files
+  every time (SIGSEGV in objc_msgSend from `-[_UIViewControllerTransitionContext _runAlongsideCompletions]`, a
+  released object in a transition's alongside-completion), and DocumentManagerUICore.Service crashed going back in
+  Preview's browser. After revisiond and openbyid_np, the same back navigation works. Not investigated further.
+
+### Open (next)
+- fseventsd has no event history; the latency isn't applied.
+- Dataless files don't fault (no materialization on read).
+- A boot hung black once under heavy disk load (logs now kept).
+- Settings row icons were colored in this spike's boots (89); the gray-icon issue of 3.8 was not seen.
+- From 3.12: suggestd (left out), the Game Center icon.
+
+Darling changes in this spike (darling-xnu):
+- syscall 598: inotify for simulator processes (x86code_inotify.c);
+- openbyid_np (479); fsgetpath/openbyid of document ids and of object id 2 (the volume root);
+- setrlimit(RLIMIT_NOFILE) below the current limit succeeds without changing it.
+
+Installed without sudo (copy + rename into darling-prefix): libsystem_kernel.
+
+Other changes:
+- host/fseventsd (new), build/mac-build-fseventsd.sh, rundev jobs com.x86code.fseventsd and com.apple.revisiond;
+- host/fpsim2host: all methods; tests/probes/s2hprobe, docidprobe; attrdiag by-id logging;
+- host/metalhostd/vkmtl.m: scheduled before commit;
+- cli/x86sim: failed-boot log snapshot;
+- tools/runtime/extract-runtime.py, README setup; docs/protocols/FSEVENTS.md;
+- Screens 86-89.

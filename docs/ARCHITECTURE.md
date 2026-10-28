@@ -15,7 +15,7 @@ programs in this repo: some run **inside Darling** as simulator binaries (`host/
               seedperms, run-launchd-sim.sh                  -> the runtime's daemons and agents (backboardd, SpringBoard,
                                                                 cfprefsd, lsd, runningboardd, ..., apps)
                                                              -> our jobs: metalhostd, iosurfaced, netconfig,
-                                                                host-configd, fpsim2host, openurl, prefs
+                                                                host-configd, fpsim2host, fseventsd, openurl, prefs
                                                           every simulator process: DYLD_INSERT libkqueue_sim (Darling)
                                                                                    + libsimshim (host/simshim/compat)
 
@@ -104,11 +104,20 @@ interface as Setup:/State: keys), loaded by `host/netconfig` into a second `conf
 `com.apple.SystemConfiguration.configd` (`com.x86code.host-configd`), which the simulator's configd_sim mirrors. Sockets
 and routing sockets themselves are Darling's (PF_ROUTE, socket options, EVFILT_SOCK).
 
-## Host file services: fpsim2host
+## Host file services: fpsim2host, fseventsd, revisiond
 
 FileProvider sends some operations to the Mac host's fileproviderd (`com.apple.FileProvider.sim2host`): open by file
-id, openat/mkdirat/... on behalf of extensions. `host/fpsim2host` serves that interface inside the simulator. Darling
-reports `kern.osproductversion` 26.4 to simulator processes (the host macOS version the simulator expects).
+id, openat/mkdirat/... on behalf of extensions, package lookup, directory entries, dataless files.
+`host/fpsim2host` serves that interface inside the simulator (all 16 methods). Darling reports
+`kern.osproductversion` 26.4 to simulator processes (the host macOS version the simulator expects).
+
+File-system events come from the Mac's fseventsd (`com.apple.FSEvents`) on a real simulator. `host/fseventsd` serves
+that MIG protocol ([protocols/FSEVENTS.md](protocols/FSEVENTS.md)) from Linux inotify, reached through Darling's
+private syscall 598. The On My iPhone extension needs it for its volume UUID and for live updates in Files.
+
+Document ids (`did=` FileProvider items, bookmarks handed from Files to Preview) are resolved by the runtime's own
+`revisiond` (GenerationalStorage), which opens the volume root by object id 2 and documents with `openbyid_np`;
+Darling resolves both from the paths `getattrlist` has handed out (`fsgetpath.c`).
 
 ## Test helpers inside the device
 
@@ -134,5 +143,6 @@ logs) is in `$X86SIM_STATE` (default `var/run`); large scratch files in `$X86SIM
 | DNS | libsystem_dnssd | `/var/run/mDNSResponder` -> `$X86SIM_STATE/mDNSResponder` | mdnsresponder.py |
 | network state | hostnet.py | plist -> netconfig -> host-configd | configd_sim (SimulatorSupport) |
 | host files | FileProvider | XPC `com.apple.FileProvider.sim2host` | fpsim2host |
+| file events | Linux inotify (syscall 598) | MIG `com.apple.FSEvents` (66000/67000) | FSEvents clients (cfprefsd, LocalStorageFileProvider, ...) |
 | open URL/app | x86sim openurl/app | `<device>/data/tmp/x86code-openurl` | openurl job -> FrontBoard |
 | stream | simstream.py | HLS in `$X86SIM_SITE/live` | http.server :8765 -> cloudflared |
