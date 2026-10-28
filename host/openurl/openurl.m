@@ -246,9 +246,12 @@ static NSDictionary* location(NSDictionary* q) {
 		id loc = MSG(id, id, SEL, double, double)([NSClassFromString(@"CLLocation") alloc], sel_getUid("initWithLatitude:longitude:"),
 			[q[@"lat"] doubleValue], [q[@"lon"] doubleValue]);
 		MSG(void, id, SEL, id)(m, sel_getUid("appendSimulatedLocation:"), loc);
+		// as CoreSimulatorBridge: one location, delivered every second and repeated (locationd's simulation
+		// controller only sends while it has a next location to send)
+		MSG(void, id, SEL, double)(m, sel_getUid("setLocationInterval:"), 1.0);
+		MSG(void, id, SEL, unsigned long)(m, sel_getUid("setLocationRepeatBehavior:"), 1);
 		MSG(void, id, SEL)(m, sel_getUid("startLocationSimulation"));
 	}
-	MSG(void, id, SEL)(m, sel_getUid("flush"));
 	// x86Code: the manager's ivars (its NSXPCConnection) for diagnosis
 	NSMutableString* iv = [NSMutableString new];
 	unsigned n = 0;
@@ -304,6 +307,11 @@ int main(void) {
 	@autoreleasepool {
 		NSString* home = @(getenv("HOME") ?: "/private/var/tmp");
 		home_ = home;
+		// x86Code: diagnosis: this process's os_log into var/log/oslog.openurl.<pid>.log through libsimshim, when <data>/tmp/x86code-openurl.oslog exists
+		if (access([home stringByAppendingString:@"/tmp/x86code-openurl.oslog"].UTF8String, F_OK) == 0) {
+			setenv("X86CODE_OSLOG", "all", 1);
+			setenv("X86CODE_OSLOG_DIR", [home stringByAppendingString:@"/var/log"].UTF8String, 1);
+		}
 		logf_ = fopen([home stringByAppendingString:@"/var/log/x86code-openurl.log"].UTF8String, "a");
 		dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
 		dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_NOW);
