@@ -7,11 +7,12 @@ set -e
 . "$(dirname "$0")/mac-env.sh"
 CC="$SIMCC -O1 -Wall -Wno-deprecated-declarations"
 W=$(mktemp -d "$X86SIM_SCRATCH/macbuild.XXXXXX")
-tar cf - -C "$X/host/netconfig" netconfig.m -C "$X/host/openurl" openurl.m openurl.entitlements -C "$X/tests/probes" prefs.c | mac "
+tar cf - -C "$X/host/netconfig" netconfig.m -C "$X/host/openurl" openurl.m openurl.entitlements -C "$X/tests/probes" prefs.c fsevprobe.c | mac "
 rm -rf /tmp/x86jobs && mkdir -p /tmp/x86jobs && cd /tmp/x86jobs && tar xf - &&
 $CC -fobjc-arc -framework Foundation -framework SystemConfiguration -o netconfig netconfig.m >&2 &&
 $CC -fobjc-arc -framework Foundation -Wl,-sectcreate,__TEXT,__entitlements,openurl.entitlements -o openurl openurl.m >&2 &&
 $CC -framework CoreFoundation -o prefs prefs.c >&2 &&
-tar cf - netconfig openurl prefs" | tar xf - -C "$W"
-mv "$W/netconfig" "$X/host/netconfig/netconfig"; mv "$W/openurl" "$X/host/openurl/openurl"; mv "$W/prefs" "$X/tests/probes/prefs"; rmdir "$W"
+$CC -framework CoreFoundation -o fsevprobe fsevprobe.c >&2 &&
+tar cf - netconfig openurl prefs fsevprobe" | tar xf - -C "$W"
+mv "$W/netconfig" "$X/host/netconfig/netconfig"; mv "$W/openurl" "$X/host/openurl/openurl"; mv "$W/prefs" "$X/tests/probes/prefs"; mv "$W/fsevprobe" "$X/tests/probes/fsevprobe"; rmdir "$W"
 ls -la "$X/host/netconfig/netconfig" "$X/host/openurl/openurl" "$X/tests/probes/prefs"

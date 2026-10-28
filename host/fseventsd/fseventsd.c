@@ -87,6 +87,7 @@ static int ino_fd = -1;
 #define F_FILEEVENTS 0x10
 
 // ---- state ----
+struct batch;
 struct stream {
 	mach_port_t priv;       // our receive right, the client's handle for flush/unregister
 	mach_port_t client;     // send right to the client's d2f port
@@ -98,6 +99,12 @@ struct stream {
 	char** excl;
 	char mount[1024];       // dev != 0: the mount point paths are relative to
 	int dropped;
+	// x86Code: latency, as fseventsd applies it: events wait in `pend` until `due` (first event + latency, or with
+	// kFSEventStreamCreateFlagNoDefer the first event of a quiet period goes out at once); flush sends them now
+	double latency;
+	struct batch* pend;
+	double due, last_sent;
+	uint64_t last_id;       // id of the last event sent to this stream (flush answers it: FlushSync waits for it)
 	struct stream* next;
 };
 static struct stream* streams;
@@ -220,6 +227,9 @@ static void batch_add(struct batch* b, const char* path, uint32_t flags, uint64_
 	b->blen += l;
 }
 static void batch_free(struct batch* b) { free(b->offs); free(b->flags); free(b->ids); free(b->blob); memset(b, 0, sizeof *b); }
+static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+static pthread_cond_t due_cv = PTHREAD_COND_INITIALIZER;
+#define F_NODEFER 0x02
 
 // returns the mach_msg result
 static kern_return_t send_batch(struct stream* s, struct batch* b) {
@@ -295,6 +305,38 @@ static void dispatch_event(struct pending* pend, int np, const char* full, uint3
 	}
 }
 
+// x86Code: send a stream's pending events (mu held)
+static void send_pending(struct stream* st) {
+	st->due = 0;
+	if (!st->pend || !st->pend->n) return;
+	st->last_id = st->pend->ids[st->pend->n - 1];
+	kern_return_t kr = send_batch(st, st->pend);
+	if (kr == MACH_SEND_INVALID_DEST) { mach_port_deallocate(mach_task_self(), st->client); st->client = MACH_PORT_NULL; }
+	else if (kr) st->dropped = 1;
+	batch_free(st->pend);
+	st->last_sent = now_s();
+}
+
+static void* latency_thread(void* arg) {
+	pthread_mutex_lock(&mu);
+	for (;;) {
+		double t = now_s(), next = 0;
+		for (struct stream* st = streams; st; st = st->next) {
+			if (!st->due) continue;
+			if (st->due <= t) send_pending(st);
+			else if (!next || st->due < next) next = st->due;
+		}
+		if (!next) pthread_cond_wait(&due_cv, &mu);
+		else {
+			struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+			double w = next - t, sec = ts.tv_sec + ts.tv_nsec / 1e9 + w;
+			ts.tv_sec = (time_t) sec; ts.tv_nsec = (long) ((sec - ts.tv_sec) * 1e9);
+			pthread_cond_timedwait(&due_cv, &mu, &ts);
+		}
+	}
+	return NULL;
+}
+
 static void* inotify_thread(void* arg) {
 	static char buf[64 * 1024] __attribute__((aligned(8)));
 	for (;;) {
@@ -340,11 +382,18 @@ static void* inotify_thread(void* arg) {
 			if (isdir && (e->mask & (L_IN_CREATE | L_IN_MOVED_TO)) && wanted(full)) watch_tree(full, 0);
 			if (np) dispatch_event(pend, np, full, raw, isdir);
 		}
+		double t = now_s();
 		for (int k = 0; k < np; k++) {
+			struct stream* st = pend[k].s;
 			if (pend[k].b.n) {
-				kern_return_t kr = send_batch(pend[k].s, &pend[k].b);
-				if (kr == MACH_SEND_INVALID_DEST) { mach_port_deallocate(mach_task_self(), pend[k].s->client); pend[k].s->client = MACH_PORT_NULL; }
-				else if (kr) pend[k].s->dropped = 1;
+				// x86Code: into the stream's pending batch; sent by the latency thread when due
+				if (!st->pend) st->pend = calloc(1, sizeof *st->pend);
+				for (int e = 0; e < pend[k].b.n; e++)
+					batch_add(st->pend, pend[k].b.blob + pend[k].b.offs[e], pend[k].b.flags[e], pend[k].b.ids[e]);
+				if (!st->due) {
+					st->due = (st->flags & F_NODEFER) && t - st->last_sent >= st->latency ? t : t + st->latency;
+					pthread_cond_signal(&due_cv);
+				}
 			}
 			batch_free(&pend[k].b);
 		}
@@ -367,7 +416,7 @@ typedef struct {
 	mach_msg_type_number_t offsetsCnt, pathsCnt;
 	int nexcl;
 	mach_msg_type_number_t exclOffsetsCnt, exclPathsCnt;
-	double latency;
+	uint64_t latency_us;    // x86Code: microseconds (1.5 s = 1500000); was taken for an f64 and read as 0
 	uint32_t flags;
 	uint64_t since;
 } register_req_t;
@@ -406,6 +455,7 @@ static int mount_for_dev(int dev, char* out, size_t outlen) {
 static void free_stream(struct stream* s) {
 	for (int i = 0; i < s->npaths; i++) { free(s->paths[i]); free(s->roots[i]); }
 	for (int i = 0; i < s->nexcl; i++) free(s->excl[i]);
+	if (s->pend) { batch_free(s->pend); free(s->pend); }
 	free(s->paths); free(s->roots); free(s->excl); free(s);
 }
 static void remove_stream_locked(struct stream* s) {
@@ -426,6 +476,7 @@ static void handle_register(register_req_t* r, mach_msg_header_t* rep) {
 	s->client = r->client.name;
 	s->dev = r->dev;
 	s->flags = r->flags;
+	s->latency = r->latency_us < 3600000000ULL ? r->latency_us / 1e6 : 0;
 	s->npaths = r->npaths;
 	s->nexcl = r->nexcl;
 	s->paths = unpack(r->paths.address, r->paths.size, r->offsets.address, r->npaths);
@@ -458,7 +509,7 @@ static void handle_register(register_req_t* r, mach_msg_header_t* rep) {
 	if (prev) mach_port_deallocate(mach_task_self(), prev);
 
 	LOG("register stream %#x dev %d flags %#x latency %.3f since %llu, %d path(s), %d excluded", s->priv, s->dev,
-		s->flags, r->latency, (unsigned long long) r->since, s->npaths, s->nexcl);
+		s->flags, s->latency, (unsigned long long) r->since, s->npaths, s->nexcl);
 	for (int i = 0; i < s->npaths; i++) LOG("  path %s", s->roots[i]);
 
 	pthread_mutex_lock(&mu);
@@ -540,6 +591,7 @@ int main(int argc, char** argv) {
 	mach_port_move_member(mach_task_self(), service, portset);
 
 	if (ino_fd >= 0) { pthread_t t; pthread_create(&t, NULL, inotify_thread, NULL); }
+	{ pthread_t t; pthread_create(&t, NULL, latency_thread, NULL); }
 
 	union { mach_msg_header_t head; char buf[8192]; } req;
 	union { mach_msg_header_t head; char buf[512]; } rep;
@@ -590,10 +642,16 @@ int main(int argc, char** argv) {
 			handle_register((register_req_t*) h, &rep.head);
 			hist_stream = streams;
 			break;
-		case 66001: {  // flush (stream port): events are sent as they come; answer the current id
+		case 66001: {  // flush (stream port): the stream's pending events go out now; answer the current id
 			id_rep_t* r = (id_rep_t*) &rep;
 			r->head.msgh_size = sizeof *r;
-			pthread_mutex_lock(&mu); r->id = cur_id; pthread_mutex_unlock(&mu);
+			pthread_mutex_lock(&mu);
+			struct stream* fs = find_stream(h->msgh_local_port);
+			if (fs) send_pending(fs);
+			// x86Code: the stream's own last event: FSEventStreamFlushSync waits until its callback has seen this
+			// id; the global current id (events of other streams included) made it wait forever
+			r->id = fs ? fs->last_id : cur_id;
+			pthread_mutex_unlock(&mu);
 			if (verbose) LOG("flush %#x", h->msgh_local_port);
 			break;
 		}

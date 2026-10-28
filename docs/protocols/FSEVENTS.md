@@ -44,7 +44,7 @@ Register request (0xa0 bytes):
 0x74 int npaths
 0x78 u32 offsets count, 0x7c u32 path blob size
 0x80 int nexcl, 0x84 u32 excluded offsets count, 0x88 u32 excluded blob size
-0x8c f64 latency
+0x8c u64 latency in microseconds (1.5 s = 1500000; FSEventStreamCreate's CFTimeInterval converted by the client)
 0x94 u32 FSEventStreamCreateFlags (0x10 FileEvents, 0x40 UseExtendedData, 0x100 WithDocID, ...)
 0x98 u64 sinceWhen     UINT64_MAX = kFSEventStreamEventIdSinceNow
 ```
@@ -91,8 +91,9 @@ File-event streams (flag 0x10) get the item's path; other streams get the direct
 - One inotify instance; every registered path is watched with its directory tree (new directories are added as
   they appear). A path that doesn't exist yet is watched through its nearest existing ancestor. A stream on `/` or
   another ancestor of the device watches the device's data directory instead of all of Linux.
-- Events are matched against each stream's paths and exclusions, coalesced per path within one read, and sent at
-  once (the latency is not applied).
+- Events are matched against each stream's paths and exclusions, coalesced per path, and held for the stream's latency
+  (from the first event; with kFSEventStreamCreateFlagNoDefer the first event after a quiet period goes at once);
+  f2d_flush sends what is pending.
 - Event ids increase across boots (a lease of 10,000 ids is kept in `$HOME/var/db/x86code-fseventsd/eventid`); the
   volume UUID is fixed per device (`.../uuid`). There is no event history: a stream that starts at an id from before
   this boot gets MustScanSubDirs for each of its paths and then HistoryDone.
