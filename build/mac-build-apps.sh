@@ -2,10 +2,10 @@
 # x86Code: build the iOS-simulator test apps tests/apps/<Name> (x86_64 only, no Xcode project) on the Mac ($X86SIM_MAC)
 # and copy the ad-hoc signed <Name>.app bundles back to tests/apps/build/. The sources and the icon helper go over ssh
 # as a tar, the build runs in /tmp/x86apps on the Mac and that directory is removed afterwards; nothing stays there.
-#   build/mac-build-apps.sh [name ...]     (default: HelloUIKit SwiftUIDemo MetalDemo SpriteDemo)
+#   build/mac-build-apps.sh [name ...]     (default: HelloUIKit SwiftUIDemo MetalDemo SpriteDemo DevTools)
 set -e
 . "$(dirname "$0")/mac-env.sh"
-APPS=${*:-HelloUIKit SwiftUIDemo MetalDemo SpriteDemo}
+APPS=${*:-HelloUIKit SwiftUIDemo MetalDemo SpriteDemo DevTools}
 for n in $APPS; do
 	[ -f "$X/tests/apps/$n/Info.plist" ] || { echo "no app $n (tests/apps/$n/Info.plist)" >&2; exit 1; }
 done
@@ -35,6 +35,7 @@ for app in $(cat apps.txt); do
 		SwiftUIDemo) c=0A84FF; l=S ;;
 		MetalDemo) c=6A1B9A; l=M ;;
 		SpriteDemo) c=F57C00; l=P ;;
+		DevTools) c=2E7D32; l=D ;;
 		*) c=444444; l=A ;;
 	esac
 	./mkicon "$b/AppIcon60x60@2x.png" 120 $l $c
