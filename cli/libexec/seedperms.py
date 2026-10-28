@@ -23,6 +23,8 @@ APPS = {
     "com.apple.Passbook": "Wallet", "com.apple.MobileSMS": "Messages", "com.apple.MobileAddressBook": "Contacts",
     "com.apple.Passwords": "Passwords", "com.apple.reminders": "Reminders", "com.apple.mobileslideshow": "Photos",
     "com.apple.shortcuts": "Shortcuts",
+    # x86Code: the test apps (tests/apps; DevTools gets pushes and the simulated location in tests/devtools.sh)
+    "com.x86code.devtools": "DevTools", "com.x86code.hellouikit": "HelloUIKit",
 }
 TCC_SERVICES = ["kTCCServiceAll", "kTCCServicePhotos", "kTCCServicePhotosAdd", "kTCCServiceAddressBook",
                 "kTCCServiceCalendar", "kTCCServiceReminders", "kTCCServiceCamera", "kTCCServiceMicrophone",

@@ -44,8 +44,25 @@ Display and input
 Apps (as xcrun simctl install/uninstall/launch)
   install PATH.app     install an iOS-simulator app (x86_64) through installd; it gets a container and an icon
   uninstall BUNDLEID   remove an installed app
-  launch BUNDLEID [args...]
-                       open an app through FrontBoard with launch arguments (appinstall.sh)
+  launch [--console] [-w|--wait-for-debugger] [--terminate-running-process] [--oslog] [--env K=V] BUNDLEID [args...]
+                       open an app through FrontBoard with arguments and environment (SIMCTL_CHILD_NAME=value in
+                       our environment -> NAME=value); --console streams its stdout/stderr here (simctl.py)
+  terminate BUNDLEID   stop a running app (FBSSystemService, as simctl terminate)
+  get_app_container BUNDLEID [app|data|groups|GROUPID]
+                       Linux path of the app's bundle / data container / app-group containers
+  listapps [--json]    installed apps (LaunchServices), with type, name and bundle path
+  push [BUNDLEID] PAYLOAD.json|-
+                       simulated remote notification (as simctl push; "Simulator Target Bundle" in the payload)
+  location set LAT,LON | location clear
+                       simulated device location (CLSimulationManager, as simctl location)
+  addmedia FILE...     add photos/videos to the Photos library (as simctl addmedia)
+  log stream [--app BUNDLEID] [--process NAME] [--match TEXT]
+                       os_log of an app (relaunched; libsimshim formats os_log into a file) or of a process
+  pidof BUNDLEID       pid of the running app (inside Darling)
+  debug [--launch] [--server-only] [--port N] BUNDLEID|PID [-- lldb args]
+                       LLDB attached to the app through debugserver in the container (simdebug.sh)
+  io screenshot [out.png] | io recordVideo [--codec h264|hevc] [--secs N] OUT.mp4
+                       as simctl io: newest frame / MP4 from the frame ring until Ctrl-C
 
 Tests
   smoke                boot (unless running) -> home screen check -> Settings and Safari -> screenshot checks
@@ -202,7 +219,9 @@ case $c in
 	smoke) exec "$X/tests/smoke.sh" "$@" ;;
 	apps) exec "$X/tests/apps.sh" "$@" ;;
 	apptest) exec "$L/apptest.sh" "$@" ;;
-	install|uninstall|launch) exec "$L/appinstall.sh" "$c" "$@" ;;
+	install|uninstall) exec "$L/appinstall.sh" "$c" "$@" ;;
+	debug) exec "$L/simdebug.sh" "$@" ;;
+	launch|terminate|get_app_container|listapps|push|location|addmedia|log|io|pidof) exec python3 "$L/simctl.py" "$c" "$@" ;;
 	probe) cmd_probe "$@" ;;
 	seedperms) exec python3 "$L/seedperms.py" "$X86SIM_DEVICE" "$@" ;;
 	build) exec make -C "$X" "$@" ;;

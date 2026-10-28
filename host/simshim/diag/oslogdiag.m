@@ -31,11 +31,20 @@ static int on(void)
 	if (enabled < 0) {
 		const char* e = getenv("X86CODE_OSLOG");
 		static char fbuf[1024];
+#ifdef SIMSHIM_OSLOG
+		// x86Code: built into libsimshim (build/mac-build-simshim.sh) for `x86sim launch --oslog` / `x86sim log
+		// stream --app`: only the environment (X86CODE_OSLOG, set for one app through FrontBoard's debug options;
+		// DYLD_INSERT_LIBRARIES given that way is replaced by launchd's), log directory X86CODE_OSLOG_DIR
+		const char* dir = getenv("X86CODE_OSLOG_DIR");
+		if (!dir) e = NULL;
+#else
+		const char* dir = X86CODE_DATA_DIR "/var/log";
 		if (!e) {
 			// or the first line of data/oslog.filter (jobs launched by runningboard don't get our environment)
 			int ffd = open(X86CODE_DATA_DIR "/oslog.filter", O_RDONLY);
 			if (ffd >= 0) { ssize_t n = read(ffd, fbuf, sizeof(fbuf) - 1); close(ffd); if (n > 0) { fbuf[n] = 0; fbuf[strcspn(fbuf, "\n")] = 0; e = fbuf; } }
 		}
+#endif
 		const char* me = getprogname();
 		int en = 0;
 		if (e && me) {
@@ -46,8 +55,8 @@ static int on(void)
 			}
 		}
 		if (en) {
-			char p[300];
-			snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/oslog.%s.%d.log", me, getpid());
+			char p[1024];
+			snprintf(p, sizeof(p), "%s/oslog.%s.%d.log", dir, me, getpid());
 			fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 		}
 		enabled = en && fd >= 0;
@@ -147,9 +156,13 @@ static void emit(os_log_t log, os_log_type_t type, const char* fmt, uint8_t* buf
 			write(fd, line, n < 8400 ? n : 8399);
 			// x86Code: call stack for messages containing the first line of data/oslog.bt (max 8 per process)
 			static char bt[256]; static int btinit, btn;
+#ifndef SIMSHIM_OSLOG
 			if (!btinit) { btinit = 1; int bfd = open(X86CODE_DATA_DIR "/oslog.bt", O_RDONLY);
 				if (bfd >= 0) { ssize_t k = read(bfd, bt, sizeof(bt) - 1); close(bfd); if (k > 0) { bt[k] = 0; char* nl = strchr(bt, '\n'); if (nl) *nl = 0; } } }
 			if (bt[0] && btn < 8 && strstr(out, bt)) { btn++; const char* st = [[[NSThread callStackSymbols] description] UTF8String]; write(fd, st, strlen(st)); write(fd, "\n", 1); }
+#else
+			(void) bt; (void) btinit; (void) btn;
+#endif
 		}
 	}
 	busy = 0;

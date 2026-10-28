@@ -103,9 +103,207 @@ static void openViaLS(NSURL* url, NSString* u) {
 	fprintf(logf_, "openurl (ls) %s: %d %s\n", u.UTF8String, ok, err.description.UTF8String ?: ""); fflush(logf_);
 }
 
+// x86Code: simctl's other app commands, as CoreSimulatorBridge does them inside a Mac's device. A request is one line
+// "req <id> <json>" with "cmd"; the answer is one log line "result <id> <json>" (cli/libexec/appinstall.sh waits for it).
+//   launch     {bundle, args, env, stdout, stderr, waitForDebugger, terminate}: FBSOpenApplicationService with the
+//              Bridge's debug options (__DebugOptions: __Arguments, __Environment, __StandardOutPath/__StandardErrorPath
+//              for --console, __WaitForDebugger); terminate = terminate_running_process first. Answer: pid.
+//   terminate  {bundle}: -[FBSSystemService terminateApplication:forReason:andReport:withDescription:completion:]
+//   container  {bundle}: LSApplicationProxy bundleURL / dataContainerURL / groupContainerURLs (get_app_container)
+//   listapps   {}: every installed app (LSApplicationWorkspace allInstalledApplications), as simctl listapps
+//   push       {bundle, payload}: +[UNNotificationRequest requestWithIdentifier:pushPayload:bundleIdentifier:] added
+//              through a UNUserNotificationCenter for that bundle (entitlement ...usernotifications.notification-simulator)
+//   location   {lat, lon} or {clear}: CLSimulationManager (locationd's simulation interface)
+//   addmedia   {paths}: PHPhotoLibrary performChangesAndWait: creationRequestForAssetFrom{Image,Video}AtFileURL:
+static NSString* home_;
+
+static void answer(NSString* rid, NSDictionary* r) {
+	NSData* j = [NSJSONSerialization dataWithJSONObject:r options:0 error:nil];
+	fprintf(logf_, "result %s %s\n", rid.UTF8String, j ? (const char*)[[NSString alloc] initWithData:j encoding:NSUTF8StringEncoding].UTF8String : "{}");
+	fflush(logf_);
+}
+
+static NSString* devPath(NSString* p) { return [p hasPrefix:@"/"] ? p : [home_ stringByAppendingPathComponent:p]; }
+
+static NSDictionary* terminateApp(NSString* bid) {
+	dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+	id svc = MSG(id, id, SEL)(NSClassFromString(@"FBSSystemService"), sel_getUid("sharedService"));
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	__block NSDictionary* r = @{ @"ok": @NO, @"error": @"no answer in 15 s" };
+	void (^completion)(BOOL) = ^(BOOL ok) {
+		// FBSSystemService answers NO without an error when the app isn't running (CoreSimulatorBridge's message)
+		r = ok ? @{ @"ok": @YES } : @{ @"ok": @NO, @"error": @"not running or termination failed" };
+		dispatch_semaphore_signal(done);
+	};
+	// reason 5 = FBSTerminationReasonUserInitiated? the Bridge passes its own; any reason terminates
+	MSG(void, id, SEL, id, long, BOOL, id, id)(svc, sel_getUid("terminateApplication:forReason:andReport:withDescription:completion:"),
+		bid, 5, NO, @"Termination requested by simulator host", completion);
+	dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
+	return r;
+}
+
+static NSDictionary* launchApp(NSDictionary* q) {
+	NSString* bid = q[@"bundle"];
+	if ([q[@"terminate"] boolValue]) terminateApp(bid);
+	NSMutableDictionary* d = [@{ @"__UnlockDevice": @YES, @"__ActivateSuspended": @NO } mutableCopy];
+	// x86Code: arguments, environment, standard output paths and wait-for-debugger are FBSDebugOptionKey* values in the
+	// FBSOpenApplicationOptionKeyDebuggingOptions dictionary (__DebugOptions), as CoreSimulatorBridge passes them;
+	// at the top level FrontBoard only takes __Arguments
+	NSMutableDictionary* dbg = [NSMutableDictionary new];
+	if ([q[@"args"] count]) d[@"__Arguments"] = dbg[@"__Arguments"] = q[@"args"];
+	if ([q[@"env"] count]) dbg[@"__Environment"] = q[@"env"];
+	if (q[@"stdout"]) dbg[@"__StandardOutPath"] = devPath(q[@"stdout"]);
+	if (q[@"stderr"]) dbg[@"__StandardErrorPath"] = devPath(q[@"stderr"]);
+	if ([q[@"waitForDebugger"] boolValue]) dbg[@"__WaitForDebugger"] = @YES;
+	if (dbg.count) d[@"__DebugOptions"] = dbg;
+	id svc = MSG(id, id, SEL)(NSClassFromString(@"FBSOpenApplicationService"), sel_getUid("serviceWithDefaultShellEndpoint"));
+	id opts = MSG(id, id, SEL, id)(NSClassFromString(@"FBSOpenApplicationOptions"), sel_getUid("optionsWithDictionary:"), d);
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	__block NSDictionary* r = @{ @"ok": @NO, @"error": @"no reply in 30 s" };
+	void (^completion)(id, NSError*) = ^(id process, NSError* err) {
+		if (err) r = @{ @"ok": @NO, @"error": err.description ?: @"?" };
+		else {
+			int pid = [process respondsToSelector:sel_getUid("pid")] ? MSG(int, id, SEL)(process, sel_getUid("pid")) : -1;
+			r = @{ @"ok": @YES, @"pid": @(pid) };
+		}
+		dispatch_semaphore_signal(done);
+	};
+	MSG(void, id, SEL, id, id, id)(svc, sel_getUid("openApplication:withOptions:completion:"), bid, opts, completion);
+	// x86Code: with __WaitForDebugger FrontBoard answers only once the app runs (after a debugger resumed it): don't
+	// hold the helper; the caller finds the waiting process itself (cli/libexec/simctl.py)
+	BOOL waits = [q[@"waitForDebugger"] boolValue];
+	if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (waits ? 5 : 30) * NSEC_PER_SEC)) && waits)
+		return @{ @"ok": @YES, @"pid": @(-1), @"waiting": @YES };
+	return r;
+}
+
+static NSString* urlPath(id u) { return [u isKindOfClass:NSURL.class] ? [u path] : nil; }
+
+static NSDictionary* appInfo(id proxy) {
+	NSMutableDictionary* a = [NSMutableDictionary new];
+	#define PUT(key, sel) { id v = [proxy respondsToSelector:sel_getUid(sel)] ? MSG(id, id, SEL)(proxy, sel_getUid(sel)) : nil; \
+		if ([v isKindOfClass:NSURL.class]) v = [v path]; if ([v isKindOfClass:NSString.class]) a[key] = v; }
+	PUT(@"CFBundleIdentifier", "bundleIdentifier");
+	PUT(@"CFBundleDisplayName", "localizedName");
+	PUT(@"CFBundleExecutable", "bundleExecutable");
+	PUT(@"CFBundleVersion", "bundleVersion");
+	PUT(@"CFBundleShortVersionString", "shortVersionString");
+	PUT(@"ApplicationType", "applicationType");
+	PUT(@"Path", "bundleURL");
+	PUT(@"DataContainer", "dataContainerURL");
+	#undef PUT
+	id groups = [proxy respondsToSelector:sel_getUid("groupContainerURLs")] ? MSG(id, id, SEL)(proxy, sel_getUid("groupContainerURLs")) : nil;
+	if ([groups isKindOfClass:NSDictionary.class] && [groups count]) {
+		NSMutableDictionary* g = [NSMutableDictionary new];
+		for (id k in groups) if (urlPath(groups[k])) g[k] = urlPath(groups[k]);
+		a[@"GroupContainers"] = g;
+	}
+	return a;
+}
+
+static NSDictionary* listApps(void) {
+	id w = MSG(id, id, SEL)(NSClassFromString(@"LSApplicationWorkspace"), sel_getUid("defaultWorkspace"));
+	NSMutableDictionary* all = [NSMutableDictionary new];
+	for (id p in MSG(id, id, SEL)(w, sel_getUid("allInstalledApplications"))) {
+		NSDictionary* a = appInfo(p);
+		if (a[@"CFBundleIdentifier"]) all[a[@"CFBundleIdentifier"]] = a;
+	}
+	return @{ @"ok": @YES, @"apps": all };
+}
+
+static NSDictionary* container(NSString* bid) {
+	id p = MSG(id, id, SEL, id)(NSClassFromString(@"LSApplicationProxy"), sel_getUid("applicationProxyForIdentifier:"), bid);
+	NSDictionary* a = p ? appInfo(p) : nil;
+	if (!a[@"Path"]) return @{ @"ok": @NO, @"error": [NSString stringWithFormat:@"no app %@ installed", bid] };
+	return @{ @"ok": @YES, @"app": a };
+}
+
+static NSDictionary* push(NSString* bid, NSDictionary* payload) {
+	dlopen("/System/Library/Frameworks/UserNotifications.framework/UserNotifications", RTLD_NOW);
+	id req = MSG(id, id, SEL, id, id, id)(NSClassFromString(@"UNNotificationRequest"),
+		sel_getUid("requestWithIdentifier:pushPayload:bundleIdentifier:"), NSUUID.UUID.UUIDString, payload, bid);
+	if (!req) return @{ @"ok": @NO, @"error": @"UNNotificationRequest from the payload failed (no \"aps\"?)" };
+	id center = MSG(id, id, SEL, id)([NSClassFromString(@"UNUserNotificationCenter") alloc], sel_getUid("initWithBundleIdentifier:"), bid);
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	__block NSDictionary* r = @{ @"ok": @NO, @"error": @"no answer in 15 s" };
+	void (^completion)(NSError*) = ^(NSError* err) {
+		r = err ? @{ @"ok": @NO, @"error": err.description } : @{ @"ok": @YES };
+		dispatch_semaphore_signal(done);
+	};
+	MSG(void, id, SEL, id, id)(center, sel_getUid("addNotificationRequest:withCompletionHandler:"), req, completion);
+	dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
+	return r;
+}
+
+static NSDictionary* location(NSDictionary* q) {
+	dlopen("/System/Library/Frameworks/CoreLocation.framework/CoreLocation", RTLD_NOW);
+	static id m;
+	if (!m) m = [NSClassFromString(@"CLSimulationManager") new];
+	if (!m) return @{ @"ok": @NO, @"error": @"no CLSimulationManager" };
+	MSG(void, id, SEL)(m, sel_getUid("stopLocationSimulation"));
+	MSG(void, id, SEL)(m, sel_getUid("clearSimulatedLocations"));
+	if (![q[@"clear"] boolValue]) {
+		id loc = MSG(id, id, SEL, double, double)([NSClassFromString(@"CLLocation") alloc], sel_getUid("initWithLatitude:longitude:"),
+			[q[@"lat"] doubleValue], [q[@"lon"] doubleValue]);
+		MSG(void, id, SEL, id)(m, sel_getUid("appendSimulatedLocation:"), loc);
+		MSG(void, id, SEL)(m, sel_getUid("startLocationSimulation"));
+	}
+	MSG(void, id, SEL)(m, sel_getUid("flush"));
+	// x86Code: the manager's ivars (its NSXPCConnection) for diagnosis
+	NSMutableString* iv = [NSMutableString new];
+	unsigned n = 0;
+	Ivar* ivs = class_copyIvarList(object_getClass(m), &n);
+	for (unsigned i = 0; i < n; i++) {
+		const char* t = ivar_getTypeEncoding(ivs[i]);
+		if (t && t[0] == '@') [iv appendFormat:@"%s=%@; ", ivar_getName(ivs[i]), object_getIvar(m, ivs[i])];
+	}
+	free(ivs);
+	return @{ @"ok": @YES, @"manager": iv };
+}
+
+static NSDictionary* addMedia(NSArray* paths) {
+	dlopen("/System/Library/Frameworks/Photos.framework/Photos", RTLD_NOW);
+	id lib = MSG(id, id, SEL)(NSClassFromString(@"PHPhotoLibrary"), sel_getUid("sharedPhotoLibrary"));
+	Class cr = NSClassFromString(@"PHAssetChangeRequest");
+	NSMutableArray* bad = [NSMutableArray new];
+	NSError* err = nil;
+	BOOL ok = MSG(BOOL, id, SEL, id, NSError**)(lib, sel_getUid("performChangesAndWait:error:"), ^{
+		for (NSString* p in paths) {
+			NSURL* u = [NSURL fileURLWithPath:devPath(p)];
+			NSString* e = u.pathExtension.lowercaseString;
+			BOOL video = [@[ @"mov", @"mp4", @"m4v" ] containsObject:e];
+			id r = MSG(id, id, SEL, id)(cr, sel_getUid(video ? "creationRequestForAssetFromVideoAtFileURL:" : "creationRequestForAssetFromImageAtFileURL:"), u);
+			if (!r) [bad addObject:p];
+		}
+	}, &err);
+	if (!ok || bad.count) return @{ @"ok": @NO, @"error": err.description ?: @"", @"failed": bad };
+	return @{ @"ok": @YES, @"added": @(paths.count) };
+}
+
+static void request(NSString* rest) {
+	NSRange sp = [rest rangeOfString:@" "];
+	if (sp.location == NSNotFound) return;
+	NSString* rid = [rest substringToIndex:sp.location];
+	NSData* j = [[rest substringFromIndex:sp.location + 1] dataUsingEncoding:NSUTF8StringEncoding];
+	NSDictionary* q = [NSJSONSerialization JSONObjectWithData:j options:0 error:nil];
+	if (![q isKindOfClass:NSDictionary.class]) { answer(rid, @{ @"ok": @NO, @"error": @"bad request" }); return; }
+	NSString* c = q[@"cmd"];
+	NSDictionary* r;
+	if ([c isEqual:@"launch"]) r = launchApp(q);
+	else if ([c isEqual:@"terminate"]) r = terminateApp(q[@"bundle"]);
+	else if ([c isEqual:@"container"]) r = container(q[@"bundle"]);
+	else if ([c isEqual:@"listapps"]) r = listApps();
+	else if ([c isEqual:@"push"]) r = push(q[@"bundle"], q[@"payload"]);
+	else if ([c isEqual:@"location"]) r = location(q);
+	else if ([c isEqual:@"addmedia"]) r = addMedia(q[@"paths"]);
+	else r = @{ @"ok": @NO, @"error": [NSString stringWithFormat:@"unknown cmd %@", c] };
+	answer(rid, r);
+}
+
 int main(void) {
 	@autoreleasepool {
 		NSString* home = @(getenv("HOME") ?: "/private/var/tmp");
+		home_ = home;
 		logf_ = fopen([home stringByAppendingString:@"/var/log/x86code-openurl.log"].UTF8String, "a");
 		dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
 		dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_NOW);
@@ -113,12 +311,15 @@ int main(void) {
 		const char* path = [home stringByAppendingString:@"/tmp/x86code-openurl"].UTF8String;
 		for (;;) {
 			@autoreleasepool {
-				usleep(300000);
+				// x86Code: run the main run loop between polls: CoreLocation (CLSimulationManager) and others deliver on the
+				// main queue, which a plain usleep() loop never drains
+				[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
 				NSString* s = [NSString stringWithContentsOfFile:@(path) encoding:NSUTF8StringEncoding error:nil];
 				if (!s) continue;
 				unlink(path);
 				for (NSString* line in [s componentsSeparatedByString:@"\n"]) {
 					NSString* u = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+					if ([u hasPrefix:@"req "]) { request([u substringFromIndex:4]); continue; }
 					// "app <bundle id>[\t<arg>...]": launch (arguments tab-separated)
 					if ([u hasPrefix:@"app "]) {
 						NSArray* f = [[u substringFromIndex:4] componentsSeparatedByString:@"\t"];
