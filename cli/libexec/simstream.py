@@ -83,6 +83,12 @@ while ff is None or ff.poll() is None:
                 frame, seq = f[5], f[3]
         if ff is None:
             ff = start(stride)
+            # x86Code: a 1 MB pipe (F_SETPIPE_SZ, the default limit): a 12 MB frame in ~12 writes, not ~190
+            try:
+                import fcntl
+                fcntl.fcntl(ff.stdin.fileno(), 1031, 1 << 20)
+            except OSError:
+                pass
         try:
             ff.stdin.write(frame)
             ff.stdin.flush()

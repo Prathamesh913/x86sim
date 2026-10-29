@@ -33,6 +33,11 @@ Fallback: the old framebuffer.bgra file ({w, h, stride, seq} + rows), which simf
     cli/libexec/fbring.py            print the ring's state
 ```
 
+**Wakeups (version 2).** After each publish simfb calls Linux `futex(FUTEX_WAKE)` on the low 32 bits of the
+header's `seq` (offset 32; a shared futex, the page is a `/dev/shm` file; Darling processes make Linux syscalls
+directly). Readers wait with `FUTEX_WAIT` on that word (`fbring.Ring.wait(seq, timeout)`, which falls back to 4 ms
+polling for a version-1 ring), so nothing wakes while the screen is still.
+
 The ring is recreated by each boot's simfb; `x86sim boot` deletes the old file first so a stale frame is never taken
 for the new boot's.
 

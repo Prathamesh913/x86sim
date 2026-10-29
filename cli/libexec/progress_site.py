@@ -97,8 +97,17 @@ if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=u}else if(window.Hls&&H
 
 if __name__ == "__main__":
     build()
+    # x86Code: the live JPEG only when the screen changed (at most every 3 s; the ring's futex wakes us), the page
+    # every 60 s
+    ring, seen, built = fbring.Ring(), None, time.time()
     while "--loop" in sys.argv:
-        time.sleep(3)
-        live_frame()
-        if int(time.time()) % 60 < 3:
+        t0 = time.time()
+        seq = ring.wait(seen, max(1.0, 60 - (t0 - built))) if seen else ring.seq()
+        if seq != seen or not seq:
+            seen = live_frame() if seq else None
+            if not seq:
+                time.sleep(3)
+        if time.time() - built >= 60:
             build()
+            built = time.time()
+        time.sleep(max(0.0, 3 - (time.time() - t0)))

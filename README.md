@@ -118,6 +118,8 @@ x86sim status | logs [label] | fps 10
 x86sim smoke                    # boot -> home screen -> Settings, Safari -> screenshot checks
 x86sim apps                     # install + launch the sample apps (tests/apps), check that they draw
 tests/devtools.sh               # the developer commands above with the DevTools test app (16 checks)
+tests/perf.py all               # short performance run: idle CPU/wakeups/RSS per process, launch times, scroll frame
+                                # times (p50/p95/p99) and touch->frame latency (seconds each; see FINDINGS 3.18)
 x86sim probe metal|iosurface    # minimal devices with the Metal / IOSurface test clients
 x86sim apptest out/             # open each app, answer prompts, screenshot, collect crashes
 x86sim shutdown
@@ -192,6 +194,10 @@ then attach the archive to a release or copy it over.
   containers, listapps, push notifications, Photos media, os_log streaming, screenshots and MP4 recording, and LLDB
   debugging with breakpoints, symbolic backtraces and Objective-C/C expressions (`x86sim debug`), simulated location
   (a point, a route between waypoints, Apple's scenarios) for CLLocationManager and Maps.
+- Performance (FINDINGS 3.18, RTX 5090): idle home screen about 4% of one core for the whole stack (simulator,
+  Darling, mtlvk, viewer, stream), boot to home screen 27 s, Settings/Safari/Maps/News first frame after 0.4-0.9 s,
+  scrolling with GPU work per frame p50 ~1 ms and touch-to-frame latency p50 ~12 ms. Frame pacing is not locked to
+  60 Hz yet (frames follow input and commits; p95 frame interval ~22 ms while scrolling).
 - Tests: `tests/devtools.sh` (22 checks), `tests/fsevhist.sh` (FSEvents history across boots, 5 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
 ## Licensing

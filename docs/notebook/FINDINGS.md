@@ -2761,3 +2761,72 @@ devices; its bind table), and `SIMULATOR_AUDIO_SETTINGS_PATH` is only for volume
 - Opt-in for now: `X86CODE_AUDIO=1 x86sim boot`.
 - Paused at the user's request (performance first). Clipboard sync, rotation/software keyboard and Swift LLDB
   expressions were not started: backlog.
+
+### Performance and idle efficiency (short runs only)
+Measured with `tests/perf.py` (new): CPU and context switches (wakeups) per process from /proc, frame publish times
+from the ring's slots, touch-moved -> first published frame latency, launch = `x86sim app` -> first frame / 1 s
+without frames. One boot at a time, each run seconds long. Machine: 16 threads, RTX 5090.
+
+| | before | after |
+|---|---|---|
+| Boot to home screen | 37 s | 27 s |
+| Idle (settled home screen), whole stack | 35% of a core, 28,300 wakeups/s | 4.0%, 3,600 wakeups/s |
+| HLS stream at idle (ffmpeg + simstream) | 31.8%, 24,000 wakeups/s | 0.9%, 200 wakeups/s |
+| First minutes after boot: installd | 48-53%, 31,000 wakeups/s (darlingserver 115,000/s) | real work only, 850 wakeups/s |
+| Present: GPU wait in simfb (scroll) | avg 11.0 ms, 22 of 225 presents dropped | avg 5.7 ms, 0 dropped |
+| mtlvk per command buffer, commit -> done | p50 14.0 ms, p95 49.8 ms | p50 1.7 ms, p95 3.9-5.4 ms |
+| mtlvk GPU time per command buffer | p50 11.9 ms, p95 13.6 ms | p50 1.0 ms, p95 1.6-4.4 ms |
+| Settings scroll, frame interval | p50 11.7, p95 28.0, p99 45.6 ms; >25 ms: 36 of 585 | p50 11.0-11.9, p95 19.0-21.6, p99 40-48 ms; >25 ms: 11-23 of ~500-665 |
+| darlingserver while scrolling | 92% | 61-76% |
+| First frame after launch: Settings / Safari / Maps / News | 916 / 344 / 487 / 462 ms | 637-700 / 428-580 / 389-429 / 359-854 ms |
+
+Touch -> frame latency (first touch-moved line to the first frame published after it) is p50 7-50 ms across runs:
+it includes UIKit's scroll threshold (the list moves only after ~10 pt), so it is noisy; the viewer adds up to one
+display refresh.
+
+Causes and fixes:
+- **Stream and viewer polled at 60 Hz.** simstream wrote a 12 MB frame to ffmpeg 60 times a second whether or not
+  anything changed, and ffmpeg cropped/scaled each on the CPU; simview's GTK tick callback woke at the display rate.
+  simfb now wakes readers with a Linux futex on the ring's seq word (ring version 2: Darling processes make Linux
+  syscalls directly), `fbring.Ring.wait` sleeps on it; simview hands frames to GTK from a waiting thread;
+  simstream sends frames only when they change (wallclock timestamps, variable frame rate up to 60 fps, the last
+  frame again every 0.25 s for the HLS segments and a keyframe every 0.25 s), scales on the GPU
+  (`hwupload_cuda,scale_cuda`) and uses a 1 MB pipe; the site loop re-encodes its JPEG only after a change.
+- **A darlingserver RPC per cancellation point.** Darling's `CANCELATION_POINT` (read, open, close, ...) asked
+  darlingserver `pthread_canceled` every time. A thread is only marked through `__pthread_markcancel`, which libpthread
+  calls on its own process's threads, so libsystem_kernel now answers "not canceled" locally until a thread of the
+  process was marked (darling-xnu).
+- **A getcpu syscall per `_os_cpu_number`.** libmalloc/libdispatch ask for the CPU on hot paths (one installd thread:
+  30,000 getcpu/s). Linux keeps `node << 12 | cpu` in TSC_AUX; `rdtscp` reads it without a syscall (darling-xnu,
+  libsyscall/os/tsd.h; CPUs without RDTSCP keep the syscall).
+- **Compositing into host pages.** CA's render targets are IOSurface textures over imported host memory, so every
+  blended layer was read and written across PCIe (GPU 8-12 ms for a home-screen or Spotlight frame). mtlvk now draws
+  render targets over IOSurfaces of >= 1M pixels in VRAM (one device-local texture per surface, shared by every
+  texture over the same memfd pages and offset) and copies the result to the surface once at the end of each command
+  buffer that wrote it (render-pass attachments, blit destinations, compute textures, replaceRegion). Smaller surfaces
+  stay in host pages: with a 128x128 threshold iconservicesagent's icons came out gray (it writes surfaces with the CPU
+  and then draws into them; the proxy missed the CPU's writes). `MTLVK_VRAM_TARGETS=0` turns it off.
+- `MTLVK_TIMING=1` prints per-command-buffer encode / commit->done / GPU-time percentiles.
+
+### darlingserver crashes seen
+- `ipc_mqueue_receive_results: strange wait_result` (-1, THREAD_WAITING) when LLDB attached to SpringBoard: a signal
+  delivered as a Mach exception to the debugger, the microthread resumed by an interrupt while blocked in
+  `mach_exception_raise`'s receive. Now an interrupted receive (MACH_RCV_INTERRUPTED) instead of a panic; the
+  container survived the next attach.
+- After the debugger went away without a clean detach, SpringBoard stayed suspended (XNU resumes a task when the
+  suspender's task port dies; darlingserver does not). Open.
+- Once, during launches with `x86sim terminate` in between: `Thread has both a pending call and a pending
+  continuation` (thread.cpp:484, std::runtime_error -> abort). Not reproduced in the next run. Open.
+
+### Still open (performance)
+- Frame pacing is not locked to the display: frames follow touch events and commits (77-86 frames/s while
+  dragging with moves every 8 ms), and the publish time includes the GPU wait, so intervals vary (p95 ~20 ms). A
+  vsync-paced SwapSubmit callback / display link timing in simfb is the next step; 120 Hz would need a ProMotion
+  device type (the device is an iPhone 16, 60 Hz).
+- darlingserver is still the busiest process while scrolling (61-76%): its profile is flat (Mach message RPCs,
+  `dtape_share_region`, `memoryRegionInfo` parsing /proc maps, getuid/getpid per call).
+- vchroot path resolution lstat()s every component of every path (installd: ~21,000 lstat/s during its post-boot
+  scan); a cache of resolved directories would cut that.
+- SpringBoard's main thread wakes ~600 times a second at idle (a 30 Hz mk_timer plus a second timer, ~5 RPCs per
+  run-loop iteration); identifying the timer needs a debugger session that detaches cleanly.
+- The NVIDIA driver's own threads poll every 10 ms in mtlvk and simview (~100 wakeups/s each); not ours.

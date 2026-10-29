@@ -65,8 +65,10 @@ specific subsystems (sync XPC, entitlements, os_log to files, vnode sources, Clo
 backboardd loads `SimFramebuffer.framework` from `SIMULATOR_FRAMEBUFFER_FRAMEWORK`. Ours (`host/simfb`) reports one
 built-in display named `LCD` ([protocols/CADISPLAY.md](protocols/CADISPLAY.md)), gives CoreAnimation IOSurface
 swapchains and copies each completed present into a shared-memory ring in Linux's `/dev/shm`
-([protocols/SIMFB.md](protocols/SIMFB.md)). Linux readers: `simview.py` (GTK4 window), `simstream.py` (ffmpeg NVENC
-H.264, 60 fps low-latency HLS into the site directory), `fb2png.py` (screenshots), `fpsmeter.py`, `framecheck.py`.
+([protocols/SIMFB.md](protocols/SIMFB.md)). Every publish wakes Linux readers through a futex on the ring's seq word
+(ring version 2), so they sleep while the screen doesn't change. Linux readers: `simview.py` (GTK4 window),
+`simstream.py` (ffmpeg NVENC H.264, variable frame rate up to 60 fps, low-latency HLS into the site directory),
+`fb2png.py` (screenshots), `fpsmeter.py`, `framecheck.py`, `progress_site.py`.
 
 ## Input: simhid
 
@@ -84,7 +86,9 @@ socket (VKMTL protocol, [protocols/METAL.md](protocols/METAL.md)) to `linux/mtlv
 it on Vulkan with **metal2vulkan** (`external/metal2vulkan`, branch x86code: Metal API on Vulkan + AIR to SPIR-V
 translation). Buffer and texture memory is shared without copies: simulator memory is memfd-backed (darlingserver),
 metalhostd obtains the fd with syscall 599 and passes it with `SCM_RIGHTS`; mtlvk imports it
-(`VK_EXT_external_memory_host`). CoreAnimation's render server, the wallpaper and apps all use it
+(`VK_EXT_external_memory_host`). Render targets over IOSurfaces of the screen's size are the exception: mtlvk draws
+them in VRAM and copies them to the surface's pages once per command buffer (blending into host pages crossed PCIe
+for every layer). CoreAnimation's render server, the wallpaper and apps all use it
 (`X86CODE_METAL=all`, default; `0` = software rendering). Details: [METAL.md](METAL.md).
 
 ## Cross-process surfaces: iosurfaced
