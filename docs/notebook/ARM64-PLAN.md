@@ -435,6 +435,14 @@ Fix: TZ link + simhost/launchd start both run inside `limited.sh` via `cli/libex
 
 Verification (SECS=55, A64_JOBS=min, SHARED=0, MEM_MAX=10G): darlingserver IN; guests IN=31 OUT=0; `memory.current`≈904 MB / `memory.max`=10 GB.
 
+### Contained SHARED=0 home (noshared8)
+Recipe: `X86CODE_A64_SHARED=0` `CODECACHE_MB=8` `X86SIM_MEM_MAX=14G` std jobs + PosterBoard, device wiped.
+- **Home at 199 s** (seq 6→43, bright 0.2097 / dark 0.7414). Screenshot: `docs/screens/arm64/05-noshared-home-contained.png`.
+- Containment: scope `x86sim-2352419`, guests IN=34 OUT=0, darlingserver IN.
+- At home: sum guest VmRSS **8382 MB**; cgroup `memory.current` **~3500 MB** (shared pages once); `memory.max`=14G.
+- Faster than the earlier uncontained 372 s control (same recipe, host less loaded / warmer caches).
+- Note: `memory.current` under-counts host pressure; boot waiters also abort if sum VmRSS > ~14 GB.
+
 ### Still open (stage 3 remainder / stage 4 prep)
 1. Fix shared-cache SpringBoard boot (linking/invalidation races or thunk-boundary crashes under contention).
 2. Then re-measure shared boot-to-home + memory; restore chronod/FileProvider if it fits.
