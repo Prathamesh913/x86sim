@@ -234,6 +234,11 @@ def main():
         "DYLD_FALLBACK_FRAMEWORK_PATH": rt + "/System/Library/Frameworks",
         "DYLD_FALLBACK_LIBRARY_PATH": rt + "/usr/lib",
     }
+    # the x86_64 dyld shared cache (build/mac-build-dyldcache.sh; FINDINGS, dyld shared cache): dyld_sim maps it at 0x7FF800000000,
+    # which Darling's mldr reserves for processes that have this variable. X86SIM_DYLD_CACHE=0: no cache
+    cache = os.path.join(PROJECT, "runtimes", "dyld-cache-23F73-x86_64")
+    if os.environ.get("X86SIM_DYLD_CACHE", "1") != "0" and os.path.isfile(cache + "/dyld_sim_shared_cache_x86_64"):
+        child_defaults["DYLD_SHARED_CACHE_DIR"] = darling(cache) + "/"
     env = dict(child_defaults)
     env.update({
         "DYLD_ROOT_PATH": rt,

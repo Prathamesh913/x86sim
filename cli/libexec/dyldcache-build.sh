@@ -3,7 +3,8 @@
 # update_dyld_sim_shared_cache (a macOS x86_64 tool: Foundation, CoreFoundation, libobjc, libc++, libsqlite3, all in
 # Darling's prefix). It runs in its own short-lived Darling container (a separate prefix, so a booted simulator's
 # darlingserver is not touched), inside cli/libexec/limited.sh (40 MB/s disk cap). ~1 min CPU, ~4.4 GB written.
-# Then the image table gets this host's inodes (dyldcache.py localize). See docs/notebook/FINDINGS.md (dyld shared cache).
+# The cache holds the runtime's dylibs plus the host's libsystem_kernel/platform/pthread, i.e. Darling's: rebuild after
+# reinstalling those (dyld would load the new files as roots and patch the cache per process). See docs/notebook/FINDINGS.md (dyld shared cache).
 #   dyldcache-build.sh [out dir] [reference dir to compare with]
 #   X86SIM_CACHE_PREFIX: the build's Darling prefix (default $X86SIM_SCRATCH/cache-prefix, removed afterwards)
 set -e
@@ -25,6 +26,9 @@ DPREFIX="$P" "$X/cli/libexec/limited.sh" "$X86SIM_DARLING" shell "$V$RES/update_
 DPREFIX="$P" "$X86SIM_DARLING" shutdown >/dev/null 2>&1 || true
 trap - EXIT
 [ -f "$OUT/dyld_sim_shared_cache_x86_64" ] || { echo "build failed, see $OUT/stderr.txt" >&2; tail -5 "$OUT/stderr.txt" >&2; exit 1; }
-python3 "$X/cli/libexec/dyldcache.py" localize "$OUT"
-[ -n "$REF" ] && python3 "$X/cli/libexec/dyldcache.py" compare "$OUT" "$REF"
 case $P in "${X86SIM_SCRATCH:-$HOME/scratch/x86code}"/*) rm -rf "$P" ;; esac
+# the builder records Linux inodes already (Darling's stat); localize only fixes a cache built elsewhere or a re-extract
+python3 "$X/cli/libexec/dyldcache.py" localize "$OUT"
+(cd "$OUT" && ionice -c3 nice -n19 sha256sum dyld_sim_shared_cache_x86_64* > SHA256SUMS)
+# informational: a Mac-built cache differs where it holds macOS's libsystem_kernel/platform/pthread (here: Darling's)
+if [ -n "$REF" ]; then python3 "$X/cli/libexec/dyldcache.py" compare "$OUT" "$REF" || true; fi

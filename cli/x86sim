@@ -69,6 +69,8 @@ Apps (as xcrun simctl install/uninstall/launch)
 
 Tests
   smoke                boot (unless running) -> home screen check -> Settings and Safari -> screenshot checks
+  cache build [dir]    build the x86_64 dyld shared cache from the runtime (own Darling container, disk capped)
+  cache check|localize|compare ...   inspect it / give it this host's inodes / compare two caches
   apps [outdir]        install the sample apps (tests/apps), launch them, check they draw (tests/apps.sh)
   apptest <outdir> [bundle id ...]
                        open each app, answer prompts, screenshot, collect crashes (apptest.sh)
@@ -256,6 +258,11 @@ case $c in
 	launch|terminate|get_app_container|listapps|push|location|addmedia|log|io|pidof) exec python3 "$L/simctl.py" "$c" "$@" ;;
 	probe) cmd_probe "$@" ;;
 	seedperms) exec python3 "$L/seedperms.py" "$X86SIM_DEVICE" "$@" ;;
+	cache) case $1 in
+		build) shift; exec "$L/dyldcache-build.sh" "$@" ;;
+		check|localize|compare) exec python3 "$L/dyldcache.py" "$@" ;;
+		*) usage ;;
+		esac ;;
 	build) exec make -C "$X" "$@" ;;
 	*) echo "x86sim: unknown command $c" >&2; usage >&2; exit 2 ;;
 esac

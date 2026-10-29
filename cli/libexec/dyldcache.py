@@ -118,8 +118,12 @@ def main():
             try:
                 st = os.stat(rt + path)
             except FileNotFoundError:
-                missing += 1
-                continue
+                # libsystem_kernel/platform/pthread come from the host side: Darling's prefix
+                try:
+                    st = os.stat(x86config.get("X86SIM_PREFIX") + "/libexec/darling" + path)
+                except FileNotFoundError:
+                    missing += 1
+                    continue
             want = (int(st.st_mtime), st.st_ino)
             if want == (mtime, inode):
                 match += 1

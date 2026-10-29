@@ -19,6 +19,7 @@ unchanged. In the local checkouts, `origin` = designgears (SSH), `upstream` = or
 | `external/darling/src/external/dyld` | git@github.com:designgears/darling-dyld.git | darlinghq/darling-dyld (`main`) | `63f667cf` |
 | `external/darling/src/external/libunwind` | git@github.com:designgears/darling-libunwind.git | darlinghq/darling-libunwind (`main`) | `a91da1a0` |
 | `external/darling/src/external/objc4` | git@github.com:designgears/darling-objc4.git | darlinghq/darling-objc4 (`master`) | `1a12df76` |
+| `external/darling/src/external/sqlite` | git@github.com:designgears/darling-sqlite.git | darlinghq/darling-sqlite (`master`) | `3472e256` |
 | `external/metal2vulkan` | git@github.com:designgears/metal2vulkan.git | steelbrain/metal2vulkan (`master`) | `f6a96b7d` |
 
 metal2vulkan is dual-licensed GPL-2.0-or-later OR LGPL-3.0-or-later; LICENSE files are kept.
@@ -68,6 +69,7 @@ against designgears.
 - darling-dyld `c98ef6c` Set ALLOW_LIBRARY_INTERPOSING so newer dyld_sim keeps __interpose tuples
 - darling-libunwind `d4b2749` Disable relative lookup tables (clang 23) that bundled ld64 cannot link
 - darling-objc4 `9927f0a` Do not pass -DNDEBUG: objc4 always defines OBJC_IS_DEBUG_BUILD=1
+- darling-sqlite `999dc2c` sqlite3_serialize (SQLITE_ENABLE_DESERIALIZE) and sqlite3_exec_b for update_dyld_sim_shared_cache
 - metal2vulkan `a980409` Translator fixes: global bindings, front_facing bool builtin, no uvec4 units for 16-byte leaves (tests with changed goldens marked `#[ignore]`)
 
 ## Clone

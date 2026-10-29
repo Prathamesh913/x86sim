@@ -3036,3 +3036,54 @@ starting; it waits for a frame newer than the boot, but the ring in /dev/shm sur
 - RPC count per operation (CFRunLoop port-set moves, port deallocations); shared-memory transport.
 - SpringBoard's 30 Hz parallax tick (UIKit's simulator provider; Reduce Motion is the only switch).
 - `x86sim boot`'s home-screen check can see the previous boot's ring.
+
+### 3.22 The x86_64 dyld shared cache, built on Linux (2026-10-28)
+
+| | before (no cache) | after (cache) |
+|---|---|---|
+| Stack anon + shmem + swap | 11.9 GB at 17 min (0.34 GB in RAM, 11.55 GB swapped; host under memory pressure); round 3: ~8.5 GB anon at 10 min | **3.49 GB** at 10 min (anon 2.29, shmem 1.13, swap 0.07) |
+| Processes in the scope | 114 | 106 |
+| Simulator process anon | 190-300 MB each | ~30-110 MB (SpringBoard 110, Settings 113, chronod 95, daemons ~30) |
+| Sum of Pss / Shared_Clean | 0.60 GB (+10.8 GB SwapPss) / 1.3 GB | 4.1 GB / 25.7 GB (the cache's clean pages, counted in every process) |
+| Boot to home | 51 s (round 3) | 67 s (first boot with a cold cache file in the page cache) |
+| Settings cold launch, first frame | 1.0-2.4 s (round 3; the old boot had no frame ring) | 347 ms (settled 3.3 s) |
+| Safari cold launch, first frame | — | 228 ms (settled 4.7 s) |
+
+**Building it.** The runtime ships `Contents/Resources/update_dyld_sim_shared_cache` (macOS 13 x86_64: Foundation,
+CoreFoundation, libobjc, libc++, libsqlite3). It runs under Darling once Darling's sqlite (3.32.3) exports
+`sqlite3_serialize` (SQLITE_ENABLE_DESERIALIZE) and Apple's `sqlite3_exec_b` (designgears/darling-sqlite). `x86sim cache
+build` (cli/libexec/dyldcache-build.sh) runs it in its own short-lived Darling prefix ($X86SIM_SCRATCH/cache-prefix,
+not the booted container's) inside limited.sh: 8.5 min at the 40 MB/s cap, 4.4 GB in 6 subcaches (+ .map; no .atlas
+under Darling, dyld doesn't need it). A Mac build (build/mac-build-dyldcache.sh) is kept in
+runtimes/dyld-cache-23F73-x86_64-mac as a reference only. `x86sim cache compare` against it: the same 3316 dylibs, the
+same addresses for all but 12, subcaches .00-.04 the same size; the difference is that the cache contains the *host's*
+libsystem_kernel/platform/pthread (they are not in the runtime): macOS's on a Mac, Darling's here (0x38000 larger, which
+shifts the 12 dylibs after it in .05). So the Mac-built cache is wrong for Darling (Apple's real libsystem_kernel in every
+process) and the Linux build is the right one. Rebuild after reinstalling those three libraries (dyld would load the new
+files as roots).
+
+**How dyld_sim uses it.** DYLD_SHARED_CACHE_DIR (CoreSimulator sets it the same way; sim.env now has it,
+X86SIM_DYLD_CACHE=0 off) -> `dyld_sim_shared_cache_x86_64` + `.01`-`.05`. dyld_sim never calls shared_region_check_np /
+shared_region_map_and_slide_2_np: `mapSplitCachePrivate` mmaps every mapping MAP_FIXED|MAP_PRIVATE from the file at the
+cache's own addresses (0x7FF800000000-0x7FFE00000000, 24 GB, no slide info: simulator caches don't slide), after
+fcntl(F_ADDFILESIGS_RETURN) (Darling already reports the signed range). So every process maps the same file pages at
+the same addresses; only written pages become private. Each dylib's FileID {inode, device, mtime} in the cache must
+match the file on disk or dyld loads the file as a root; the builder under Darling records Linux inodes, and
+`x86sim cache check|localize` verifies/rewrites them (a Mac-built cache has the Mac's inodes).
+
+**Darling: mldr reserves the range.** On Linux 0x7FF8...-0x7FFE... is where the randomized stack (top 16 GB) and the
+top-down mmap area land, and dyld_sim's MAP_FIXED would map over them. mldr now reserves it (PROT_NONE, MAP_NORESERVE,
+MAP_FIXED_NOREPLACE) at the start of main for processes that have DYLD_SHARED_CACHE_DIR; when it is taken (about half
+the time), it re-execs once with ADDR_NO_RANDOMIZE (stack just below TASK_SIZE; children inherit it); failing that it
+hides the variable and the process runs without the cache. Verified after boot: 87 of 87 simulator processes map the
+cache, all at identical addresses.
+
+**Where the remaining 3.5 GB is.** shmem 1.13 GB (IOSurfaces, frame ring, Metal buffers), mtlvk ~0.27 GB anon,
+darlingserver 74 MB, and ~30-110 MB of private dirty per simulator process (objc/Swift runtime data, heaps, the pages
+dyld writes for interposing (simshim, libkqueue_sim) and __DATA_DIRTY). The < 1 GB target is not met yet.
+
+### Open (after 3.22)
+- Remaining per-process private dirty: break it down (smaps per mapping) between cache __DATA/__DATA_DIRTY COW, heaps
+  and interposing patches; shmem 1.1 GB.
+- SpringBoard still maps Darling's libsystem_kernel/platform/pthread from disk (inodes match inside the container):
+  check whether that is the host dyld's own loads or dyld_sim treating them as roots.

@@ -81,6 +81,19 @@ required parts.
 
 ## Backlog (not started or unfinished)
 
+- Home indicator gestures: a swipe up from the bottom edge doesn't go home or open the app switcher. Check that
+  simview/simhid send edge-swipe touches the way SpringBoard's system gesture recognizers expect (edge/region flags,
+  digitizer surface events).
+- iOS 27.x (foldable iPhone etc.): BLOCKED on architecture. Checked 2026-10-28 on the Mac (Xcode 27.1): the iOS 27.0
+  runtime (24A434) supports arm64 only, and so does 26.5 23F77; 23F73 is the last universal (x86_64) runtime. Running
+  27.x would need either arm64 code running on x86_64 Linux (binary translation of the whole runtime: a large project
+  with a heavy perf cost) or porting the stack to arm64 Linux hardware (Darling is x86_64 only today). Needs a decision.
+- Apple's simulator MCP server: research what Apple ships (which tool, the transport, and which simctl/CoreSimulator calls
+  it makes) and make it work against x86sim. If it needs macOS, provide a compatible MCP server on Linux backed by x86sim
+  (boot, install, launch, screenshot, tap/type, logs).
+- Scroll wheel in simview: wheel and touchpad scroll events should scroll the content (as on a Mac simulator:
+  scroll events or a synthesized two-finger pan), not be ignored.
+
 - Audio: host/simaudio (in-process HAL stand-in) + cli/libexec/simaudio.py (PipeWire), opt-in with
   `X86CODE_AUDIO=1`; AVAudioEngine fails at the output unit's initialize (FINDINGS 3.18). A faithful version would
   answer coreaudiod's MIG protocol on `com.apple.audio.audiohald`.
