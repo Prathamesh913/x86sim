@@ -22,9 +22,12 @@ import x86config  # noqa: E402  (cli/lib/config.sh: repo root, Darling prefix, r
 
 PROJECT = x86config.ROOT
 RUNTIME = x86config.get("X86SIM_RUNTIME")
-# x86Code: jobs that stay eager (RunAtLoad/KeepAlive as Apple ships them); the rest start on first lookup (see below)
+# x86Code: jobs that stay eager (RunAtLoad/KeepAlive as Apple ships them); the rest start on first lookup (see below).
+# sleepd: Apple ships RunAtLoad; boot-a64 std keeps it for cold-boot BKS/XPC stability. Without EAGER the
+# slim-by-default pass below strips RunAtLoad and sleepd never starts under on-demand-only launchd_sim.
 EAGER = {"com.apple.SpringBoard", "com.apple.backboardd", "com.apple.runningboardd", "com.apple.configd_sim",
-         "com.apple.syslogd", "com.apple.UserEventAgent-System", "com.apple.distnoted.xpc.daemon"}
+         "com.apple.syslogd", "com.apple.UserEventAgent-System", "com.apple.distnoted.xpc.daemon",
+         "com.apple.sleepd"}
 PREFIX = x86config.get("X86SIM_PREFIX")
 MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
 # x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by rundev.sh)
@@ -126,13 +129,20 @@ def main():
             del plist["LimitLoadToSessionType"]
         # x86Code: slim by default. launchd_sim starts a job with MachServices at the first lookup of one of them; what
         # RunAtLoad / KeepAlive (true, or SuccessfulExit) starts eagerly at boot runs whether anything uses it or not
-        # (assistantd, locationd, identityservicesd, ids_simd, navd, sleepd, revisiond, amsaccountsd: ~100 MB each
+        # (assistantd, locationd, identityservicesd, ids_simd, navd, revisiond, amsaccountsd: ~100 MB each
         # here). Those become on-demand, except what the home screen itself needs (EAGER). X86SIM_EAGER=1: Apple's.
         if os.environ.get("X86SIM_EAGER") != "1" and job not in EAGER and plist.get("MachServices"):
             plist.pop("RunAtLoad", None)
             ka = plist.get("KeepAlive")
             if ka is True or (isinstance(ka, dict) and "SuccessfulExit" in ka):
                 del plist["KeepAlive"]
+        # arm64: launchd_sim never leaves on-demand-only; SpringBoard is still spawned as "system support"
+        # immediately while backboardd stays pending then speculative. If launchd_sim later aborts, SB's
+        # late BKSHIDEventDeliveryManager init sees a nil connection and brk#0. Keep RunAtLoad for now
+        # (home needs SB); sleepd EAGER above is the cold-boot BKS stabilizer. Optional delay: set
+        # X86CODE_DELAY_SB=1 to drop SpringBoard RunAtLoad (caller must kickstart after backboardd).
+        if ARM64 and job == "com.apple.SpringBoard" and os.environ.get("X86CODE_DELAY_SB") == "1":
+            plist.pop("RunAtLoad", None)
         if os.environ.get("X86CODE_JOBLOG") == "1":
             # X86CODE_JOBLOG=1: job output and os_log (OS_ACTIVITY_DT_MODE) to data/var/log/<label>.log
             log = darling(data + "/var/log/" + job + ".log")
