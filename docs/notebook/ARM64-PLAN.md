@@ -443,6 +443,16 @@ Recipe: `X86CODE_A64_SHARED=0` `CODECACHE_MB=8` `X86SIM_MEM_MAX=14G` std jobs + 
 - Faster than the earlier uncontained 372 s control (same recipe, host less loaded / warmer caches).
 - Note: `memory.current` under-counts host pressure; boot waiters also abort if sum VmRSS > ~14 GB.
 
+### Shared-cache boot: thunk table race (fix in 2bb1649)
+Full boot under `SHARED=1` (and even `SAFE=1`) SIGSEGVed in `GuestThread::CallSVC` at
+`call *0x20(%rax,%r14,1)` — same host rip offset `…c90ae` in SpringBoard, PosterBoard, and
+WidgetRenderer. `g_thunks` is a `vector` that `add_thunk` grows during dyld stub binding with no
+synchronization; a concurrent `CallSVC` can use a reallocated `data()` pointer.
+
+Fix (`linux/arm64jit`): `reserve(kMaxThunks)` so `data()` never moves; mutex around `push_back`;
+publish length via `std::atomic` release/acquire (`thunk_count()`). CallSVC bounds-checks against
+the published count. Microtests (sharestress) already passed; re-measure shared boot-to-home next.
+
 ### Still open (stage 3 remainder / stage 4 prep)
 1. Fix shared-cache SpringBoard boot (linking/invalidation races or thunk-boundary crashes under contention).
 2. Then re-measure shared boot-to-home + memory; restore chronod/FileProvider if it fits.
