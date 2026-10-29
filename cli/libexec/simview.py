@@ -11,6 +11,11 @@ to the simulator's hardware keyboard (host/simhid). F1 or Ctrl+H = home button, 
 up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in)."""
 import os, threading, socket, struct, sys, time
 import gi
+# x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole 1179x2556 texture (12 MB) for every
+# frame, and on the NVIDIA driver ~75% of that CPU time is kernel time inside the driver's ioctls: 46% of a core at
+# 60 fps (40% with gl). The cairo renderer scales the frame into the window's shm buffer on the CPU instead: 13%,
+# the compositor's cost unchanged (perf: tests on a synthetic 60 Hz ring). GSK_RENDERER=vulkan|gl still overrides.
+os.environ.setdefault("GSK_RENDERER", "cairo")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk

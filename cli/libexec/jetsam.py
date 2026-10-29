@@ -11,7 +11,9 @@ extensions that chronod and PosterBoard started stayed resident (~6 GB with swap
     X86SIM_JETSAM_KEEP most recently suspended ones (default 1)
 Daemons are never touched; RunningBoard relaunches what it needs, as after a jetsam kill. Something relaunched right
 away (the wallpaper's poster extension) would be killed and relaunched in a loop: each kill of the same executable
-doubles its grace period (up to 10 minutes). X86SIM_JETSAM=0 disables it.
+doubles its grace period (up to 10 minutes), and one that comes back within RELAUNCH s of its kill is never killed
+again (SpringBoard relaunches Spotlight, its home-screen search host, on the next home-button press: each kill cost a
+full cold launch, ~1.5 s of CPU, usually right when the user opens an app). X86SIM_JETSAM=0 disables it.
     cli/libexec/jetsam.py [--once] [-v]"""
 import os, signal, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
@@ -26,7 +28,10 @@ CLK = os.sysconf("SC_CLK_TCK")
 BOOT = time.time() - float(open("/proc/uptime").read().split()[0])
 BACKOFF_MAX = 600.0
 _kills = {}   # executable -> kills so far (each doubles its grace period)
-NEVER = ("SpringBoard.app/", "PosterBoard.app/")   # system apps RunningBoard may background; never reclaimed here
+_killed_at = {}   # executable -> time of its last kill
+_kept = set()   # executables relaunched right after a kill: left alone from then on
+RELAUNCH = 60.0
+NEVER = ("SpringBoard.app/", "PosterBoard.app/", "Spotlight.app/")   # system apps RunningBoard may background; never reclaimed here
 
 
 def darling_pids():
@@ -67,6 +72,12 @@ def sweep(verbose=False):
     if not marks:
         return []
     procs = darling_pids()
+    for _, exe, start in procs.values():
+        k = _killed_at.get(exe)
+        if k is not None and exe not in _kept and k < start < k + RELAUNCH:
+            _kept.add(exe)
+            print("%s jetsam: %s came back %.0f s after its kill; keeping it" % (
+                time.strftime("%H:%M:%S"), exe.split("/")[-1], start - k), flush=True)
     apps = []
     killed = []
     for dpid, since in marks:
@@ -74,6 +85,8 @@ def sweep(verbose=False):
         if not pr or pr[2] > since + 1:   # gone, or the pid was reused after the suspension was recorded
             continue
         lpid, exe, _ = pr
+        if exe in _kept:
+            continue
         age = now - since
         grace = min(BACKOFF_MAX, (EXT if ".appex/" in exe else APP) * (2 ** _kills.get(exe, 0)))
         if ".appex/" in exe:
@@ -89,6 +102,7 @@ def sweep(verbose=False):
         try:
             os.kill(lpid, signal.SIGKILL)
             _kills[exe] = _kills.get(exe, 0) + 1
+            _killed_at[exe] = time.time()
             print("%s jetsam: killed %s (pid %d, suspended %.0f s)" % (
                 time.strftime("%H:%M:%S"), exe.split("/")[-1], dpid, age), flush=True)
         except OSError:
