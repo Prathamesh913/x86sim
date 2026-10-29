@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <atomic>
+#include <optional>
 #include <dynarmic/interface/A64/a64.h>
 #include <dynarmic/interface/A64/config.h>
 #include <dynarmic/interface/exclusive_monitor.h>
@@ -44,6 +46,8 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     bool *done = nullptr;   // the innermost call()'s completion flag; the exit stub sets it
     int depth = 0;          // nesting of call() on this thread (native -> guest -> native -> guest ...)
     u64 svc_count = 0;
+    std::atomic<uint32_t> sig_pending{0};  // async signals recorded by the native handler (signals.cpp)
+    uint8_t sig_info[32][104];            // their Darwin siginfo
 
     GuestThread();
     ~GuestThread() override;
@@ -119,6 +123,9 @@ u64 guest_of_callable(const void *native);  // inverse (0 if not a trampoline)
 extern "C" void a64_tramp_entry();           // callconv.S
 
 // Special handlers for libsystem functions (handlers.cpp). Returns null if the export needs no special handling.
+void h_sigaction(GuestThread &t, u32 i);  // signals.cpp
+void h_platform_sigaction(GuestThread &t, u32 i);
+void deliver_signals(GuestThread &t);
 Handler special_handler(const std::string &name, int *nfixed, const char **native_name);
 bool is_guest_code_export(const std::string &name);  // setjmp family: emitted as arm64 code in the stub dylib
 size_t emit_guest_code(const std::string &name, uint32_t *out, u32 slow_thunk);  // arm64 code for those, returns instruction count

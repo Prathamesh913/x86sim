@@ -77,7 +77,7 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
     depth++;
     static const bool step = getenv("X86CODE_A64_STEP");  // debugging: one instruction per run, exact fault PCs
     if (step) while (!finished) jit->Step();
-    else while (!finished) jit->Run();
+    else while (!finished) { jit->Run(); if (sig_pending.load(std::memory_order_relaxed)) deliver_signals(*this); }
     depth--;
     done = outer_done;
     NRet r{jit->GetRegister(0), jit->GetRegister(1), jit->GetVector(0)[0], jit->GetVector(1)[0]};

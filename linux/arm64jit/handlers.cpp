@@ -46,24 +46,6 @@ static void h_workqueue_setup(GuestThread &t, u32 i) {  // (struct pthread_workq
     t.set_x(0, (u32)fn(&c, t.x(1)));
 }
 
-// int __sigaction(int, struct __sigaction *{handler, tramp, mask, flags}, struct sigaction *{handler, mask, flags})
-static void h_sigaction(GuestThread &t, u32 i) {
-    struct NSA { u64 handler, tramp; uint32_t mask; int flags; } nsa;
-    struct OSA { u64 handler; uint32_t mask; int flags; } *osa = (OSA *)t.x(2);
-    NSA *p = nullptr;
-    if (t.x(1)) {
-        nsa = *(NSA *)t.x(1);
-        nsa.handler = cb(nsa.handler);
-        static u64 tramp = (u64)dsym("_sigtramp");
-        if (tramp) nsa.tramp = tramp;
-        p = &nsa;
-    }
-    auto *fn = (int (*)(int, NSA *, OSA *))g_thunks[i].native;
-    int r = fn((int)t.x(0), p, osa);
-    if (r == 0 && osa) osa->handler = uncb(osa->handler);
-    t.set_x(0, (u32)r);
-}
-
 // _simple_* formatters (libsystem_platform's async-signal-safe printf).
 static void simple_out(GuestThread &t, int fd, const std::string &s) {
     (void)t;
@@ -246,7 +228,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"__pthread_workqueue_init_with_workloop", h_callbacks<0, 1, 2>}, {"_pthread_workqueue_setdispatch_np", h_callbacks<0>},
         {"_pthread_workqueue_setup", h_workqueue_setup}, {"_pthread_introspection_hook_install", h_introspection_hook},
         {"_mach_msg_server", h_callbacks<0>}, {"_mach_msg_server_once", h_callbacks<0>},
-        {"_mach_msg_server_importance", h_callbacks<0>}, {"___sigaction", h_sigaction},
+        {"_mach_msg_server_importance", h_callbacks<0>}, {"___sigaction", h_sigaction}, {"___platform_sigaction", h_platform_sigaction},
         {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
         {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
         {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite},

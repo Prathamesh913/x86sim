@@ -192,15 +192,7 @@ static u64 build_syscall_helpers() {
 
 // Faults that dynarmic's fastmem handler doesn't recover: report the guest state (last block entry) before Darling's
 // handler reports the host side.
-static struct sigaction g_old_segv, g_old_bus;
-static void on_fault(int sig, siginfo_t *si, void *uc) {
-    auto *ctx = (ucontext_t *)uc;
-    char buf[256];
-    int n = snprintf(buf, sizeof buf, "arm64host: signal %d addr %p rip %#llx\n", sig, si->si_addr, (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP]);
-    if (write(2, buf, n) < 0) {}
-    if (GuestThread *t = GuestThread::current())
-        logf("guest pc %#lx lr %#lx sp %#lx x0 %#lx x1 %#lx x8 %#lx", (unsigned long)t->jit->GetPC(), (unsigned long)t->x(30),
-             (unsigned long)t->sp(), (unsigned long)t->x(0), (unsigned long)t->x(1), (unsigned long)t->x(8));
+static void peek() {
     if (const char *pk = getenv("X86CODE_A64_PEEK"))  // debug: comma-separated guest addresses to dump (8 bytes each)
         for (const char *q = pk; *q;) {
             char *e; u64 a = strtoull(q, &e, 16);
@@ -208,6 +200,22 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
             logf("peek %#lx: %#lx", (unsigned long)a, (unsigned long)*(u64 *)a);
             q = *e == ',' ? e + 1 : e;
         }
+}
+static struct sigaction g_old_segv, g_old_bus;
+static void on_fault(int sig, siginfo_t *si, void *uc) {
+    auto *ctx = (ucontext_t *)uc;
+    char buf[256];
+    int n = snprintf(buf, sizeof buf, "arm64host: signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
+                     (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP], (unsigned long long)ctx->uc_mcontext.gregs[REG_ERR]);
+    if (write(2, buf, n) < 0) {}
+    if (getenv("X86CODE_A64_FAULTBYTES")) {  // debug: the faulting host instruction's first bytes
+        auto *ip = (const uint8_t *)ctx->uc_mcontext.gregs[REG_RIP];
+        logf("rip bytes %02x %02x %02x %02x %02x %02x", ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
+    }
+    if (GuestThread *t = GuestThread::current())
+        logf("guest pc %#lx lr %#lx sp %#lx x0 %#lx x1 %#lx x8 %#lx", (unsigned long)t->jit->GetPC(), (unsigned long)t->x(30),
+             (unsigned long)t->sp(), (unsigned long)t->x(0), (unsigned long)t->x(1), (unsigned long)t->x(8));
+    peek();
     struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;
     if (old->sa_flags & SA_SIGINFO) old->sa_sigaction(sig, si, uc);
     else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) old->sa_handler(sig);
@@ -220,6 +228,7 @@ static void install_fault_report() {
 }
 
 void print_stats() {
+    peek();
     if (!getenv("X86CODE_A64_STATS")) return;
     logf("exit after %.1f ms", ms_since(g_t0));
     extern u64 g_thunk_counts[0x10000];
