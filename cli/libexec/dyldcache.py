@@ -12,6 +12,7 @@ per host. Run it again after re-extracting the runtime.
 
   dyldcache.py check    [cache dir] [runtime root]   how many images match the files on disk
   dyldcache.py localize [cache dir] [runtime root]   rewrite the image table to match (in place, idempotent)
+  dyldcache.py compare  <cache dir> <reference dir>  layout, mappings, dylib list/addresses and bytes of each file
 """
 import os
 import struct
@@ -45,7 +46,63 @@ def images(f):
         yield off + i * IMAGE_INFO.size, mtime, inode, path
 
 
+def layout(path):
+    with open(path, "rb") as f:
+        h = f.read(0x400)
+        mo, mc = struct.unpack_from("<II", h, 0x138)  # mappingWithSlideOffset, count
+        maps = [struct.unpack_from("<QQQQQQII", h, mo + i * 56) for i in range(mc)]
+        return {"magic": h[:16], "uuid": h[0x58:0x68].hex(), "platform": struct.unpack_from("<I", h, 0xD8)[0],
+                "region": struct.unpack_from("<QQ", h, 0xE0), "mappings": maps}
+
+
+def compare(a, b):
+    """Exit 0 if the two caches have the same layout and dylibs (addresses included); report byte differences."""
+    names = sorted(n for n in os.listdir(b) if n.startswith(CACHE) and not n.endswith((".map", ".atlas")))
+    bad = 0
+    for n in names:
+        pa, pb = os.path.join(a, n), os.path.join(b, n)
+        if not os.path.exists(pa):
+            print(f"{n}: missing"); bad += 1; continue
+        la, lb = layout(pa), layout(pb)
+        for k in ("magic", "platform", "region", "mappings"):
+            if la[k] != lb[k]:
+                print(f"{n}: {k} differs: {la[k]} != {lb[k]}"); bad += 1
+        same = os.path.getsize(pa) == os.path.getsize(pb)
+        diff = 0
+        if same:
+            with open(pa, "rb") as fa, open(pb, "rb") as fb:
+                while True:
+                    x, y = fa.read(1 << 22), fb.read(1 << 22)
+                    if not x:
+                        break
+                    if x != y:
+                        diff += sum(1 for i in range(0, len(x), 4096) if x[i:i + 4096] != y[i:i + 4096])
+        print(f"{n}: size {'same' if same else 'differs'}, {diff} differing 4K pages, uuid {la['uuid'] == lb['uuid'] and 'same' or 'differs'}")
+    with open(os.path.join(a, CACHE), "rb") as fa, open(os.path.join(b, CACHE), "rb") as fb:
+        ia = [(p, addr) for addr, p in ((e[0], e[3]) for e in images_addr(fa))]
+        ib = [(p, addr) for addr, p in ((e[0], e[3]) for e in images_addr(fb))]
+    if ia != ib:
+        sa, sb = set(ia), set(ib)
+        print(f"dylibs differ: {len(sa - sb)} only here, {len(sb - sa)} only in the reference"); bad += 1
+    else:
+        print(f"{len(ia)} dylibs, same paths and addresses")
+    sys.exit(1 if bad else 0)
+
+
+def images_addr(f):
+    f.seek(0)
+    off, count = struct.unpack_from("<II", f.read(0x200), 0x1C0)
+    f.seek(off)
+    table = f.read(IMAGE_INFO.size * count)
+    for i in range(count):
+        addr, mtime, inode, path_off, _ = IMAGE_INFO.unpack_from(table, i * IMAGE_INFO.size)
+        f.seek(path_off)
+        yield addr, mtime, inode, f.read(1024).split(b"\0", 1)[0].decode()
+
+
 def main():
+    if len(sys.argv) >= 4 and sys.argv[1] == "compare":
+        compare(sys.argv[2], sys.argv[3])
     if len(sys.argv) < 2 or sys.argv[1] not in ("check", "localize"):
         sys.exit(__doc__)
     cache_dir, rt = default_dirs()
