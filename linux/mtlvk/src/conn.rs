@@ -120,10 +120,28 @@ pub struct State {
     /// render pipeline can be written to var/metal/failed/ and replayed with the metal2vulkan CLI.
     lib_bytes: HashMap<u64, Vec<u8>>,
     func_src: HashMap<u64, (u64, String)>,
+    /// x86Code: VRAM render targets (default; MTLVK_VRAM_TARGETS=0 turns them off). A render-target texture over an IOSurface's host pages
+    /// is drawn through a device-local texture (`proxies`: texture id -> the host texture), and the texels its
+    /// command buffer wrote are copied to the host pages once, at the end of that command buffer. Drawing straight
+    /// into host pages makes every blended layer cross PCIe twice (8-12 ms of GPU time for a home-screen frame).
+    /// Textures over the same surface pages (`buf_keys`: buffer -> memfd dev/inode/offset) share one VRAM texture;
+    /// views of a proxied texture count as it (`proxy_views`).
+    vram_targets: bool,
+    proxies: HashMap<u64, Texture>,
+    proxy_views: HashMap<u64, u64>,
+    shared_vram: HashMap<(u64, u64, u64, u64, u64, u64, u32), Texture>,
+    buf_keys: HashMap<u64, (u64, u64, u64)>,
+    written: std::cell::RefCell<std::collections::BTreeSet<u64>>,
 }
 
 const PAGE: u64 = 4096;
 static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// x86Code: smallest render target (in pixels) drawn in VRAM (MTLVK_VRAM_MIN_PIXELS, default 1,000,000: the screen
+/// and the compositor's full-size passes). Smaller surfaces stay in their host pages: iconservicesagent's icons
+/// (CPU-written surfaces it later draws into) came out gray when proxied, as the proxy missed the CPU's writes.
+static VRAM_MIN_PIXELS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+    std::env::var("MTLVK_VRAM_MIN_PIXELS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000_000)
+});
 
 /// x86Code: MTLVK_TIMING=1: per command buffer, the time to encode it (CB_COMMIT received -> committed), from commit
 /// to the completed handler, and the GPU's own time; a summary (avg/p50/p95/max in ms) every 300 command buffers.
@@ -148,7 +166,22 @@ fn timing_add(enc: f64, done: f64, gpu: f64) {
 impl State {
     pub fn new(device: Device, out: Sink) -> Res<State> {
         let helper = device.new_command_queue().map_err(err("helper queue"))?;
-        Ok(State { device, objs: HashMap::new(), mirrors: HashMap::new(), helper, out, log: std::env::var_os("MTLVK_LOG").is_some(), lib_bytes: HashMap::new(), func_src: HashMap::new() })
+        let vram_targets = std::env::var("MTLVK_VRAM_TARGETS").map(|v| v != "0").unwrap_or(true);
+        if vram_targets {
+            eprintln!("mtlvk: render targets over IOSurfaces are drawn in VRAM (MTLVK_VRAM_TARGETS)");
+        }
+        Ok(State { device, objs: HashMap::new(), mirrors: HashMap::new(), helper, out, log: std::env::var_os("MTLVK_LOG").is_some(), lib_bytes: HashMap::new(), func_src: HashMap::new(),
+            vram_targets, proxies: HashMap::new(), proxy_views: HashMap::new(), shared_vram: HashMap::new(), buf_keys: HashMap::new(),
+            written: Default::default() })
+    }
+
+    /// x86Code: note that a command writes texture `id` (a proxied one is copied back at the end of the command
+    /// buffer).
+    fn mark(&self, id: u64) {
+        let id = *self.proxy_views.get(&id).unwrap_or(&id);
+        if self.proxies.contains_key(&id) {
+            self.written.borrow_mut().insert(id);
+        }
     }
 
     fn buf(&self, id: u64) -> Res<&Buffer> {
@@ -239,6 +272,9 @@ impl State {
                 let id = r.u64();
                 self.objs.remove(&id);
                 self.mirrors.remove(&id);
+                self.proxies.remove(&id);
+                self.proxy_views.remove(&id);
+                self.buf_keys.remove(&id);
                 None
             }
             TEX_NEW => {
@@ -471,6 +507,13 @@ impl State {
             self.objs.insert(id, Obj::Buf(b));
             return Ok(false);
         };
+        if self.vram_targets {
+            // SAFETY: fstat of the fd we were given.
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstat(fd, &mut st) } == 0 {
+                self.buf_keys.insert(id, (st.st_dev as u64, st.st_ino as u64, off));
+            }
+        }
         let map_off = off & !(PAGE - 1);
         let delta = off - map_off;
         let map_len = ((delta + length.max(1) + PAGE - 1) & !(PAGE - 1)) as usize;
@@ -614,6 +657,41 @@ impl State {
             eprintln!("mtlvk: texture {id:#x} over buffer {buf:#x} (+{offset}, row {bpr}{}): {:?} {}x{} usage {:?}",
                 if iosurface != 0 { ", IOSurface" } else { "" }, desc.pixel_format, desc.width, desc.height, desc.usage);
         }
+        if self.vram_targets && iosurface != 0 && planar == 0 && desc.usage.contains(TextureUsage::RENDER_TARGET)
+            && desc.texture_type == TextureType::Type2D && desc.mipmap_level_count == 1 && desc.sample_count == 1
+            && desc.array_length == 1 && desc.width * desc.height >= *VRAM_MIN_PIXELS
+        {
+            let key = self.buf_keys.get(&buf).map(|k| (k.0, k.1, k.2 + offset, bpr, desc.width, desc.height, desc.pixel_format.as_raw() as u32));
+            let vram = match key.and_then(|k| self.shared_vram.get(&k).cloned()) {
+                Some(v) => Ok(v),
+                None => {
+                    let mut d2 = desc.clone();
+                    d2.resource_options = ResourceOptions::from_raw(0x20).map_err(err("options"))?;   // Private
+                    match self.device.new_texture(&d2) {
+                        Ok(v) => {
+                            let (w, h) = (desc.width, desc.height);
+                            let r = self.helper_blit(|e| e.copy_from_texture_to_texture(&t, 0, 0, Origin::new(0, 0, 0), Size::new(w, h, 1), &v, 0, 0, Origin::new(0, 0, 0)));
+                            r.map(|_| v)
+                        }
+                        Err(e) => Err(format!("{e}")),
+                    }
+                }
+            };
+            match vram {
+                Ok(v) => {
+                    if let Some(k) = key {
+                        self.shared_vram.insert(k, v.clone());
+                    }
+                    if self.log {
+                        eprintln!("mtlvk: texture {id:#x}: drawn in VRAM, copied to the surface after each command buffer");
+                    }
+                    self.proxies.insert(id, t);
+                    self.objs.insert(id, Obj::Tex(v));
+                    return Ok(0);
+                }
+                Err(e) => eprintln!("mtlvk: texture {id:#x}: no VRAM proxy ({e}); drawing into the surface"),
+            }
+        }
         self.objs.insert(id, Obj::Tex(t));
         Ok(0)
     }
@@ -627,6 +705,10 @@ impl State {
             Some(Obj::Tex(t)) => t.clone(),
             _ => return Err(format!("no texture {parent:#x}")),
         };
+        let root = *self.proxy_views.get(&parent).unwrap_or(&parent);
+        if self.proxies.contains_key(&root) {
+            self.proxy_views.insert(id, root);
+        }
         let pf = PixelFormat::try_from(pf).map_err(err("pixel format"))?;
         let tt = TextureType::try_from(ttype).map_err(err("texture type"))?;
         let v = if has_swizzle != 0 {
@@ -803,6 +885,7 @@ impl State {
         let (level, slice) = (r.u32() as u64, r.u32() as u64);
         let (bpr, bpi, len) = (r.u64(), r.u64(), r.u64());
         let data = r.bytes(len as usize);
+        self.mark(id);
         let t = self.tex(id)?.clone();
         // x86Code: diagnostics, MTLVK_DUMP_REPLACE=<dir> saves every replaceRegion's bytes
         if let Some(dir) = std::env::var_os("MTLVK_DUMP_REPLACE") {
@@ -994,6 +1077,18 @@ impl State {
             }
         }
         enc.end()?;
+        let written: Vec<u64> = std::mem::take(&mut *self.written.borrow_mut()).into_iter().collect();
+        if !written.is_empty() {
+            let mut be = cb.blit_command_encoder().map_err(err("blit encoder"))?;
+            for id in written {
+                if let (Some(host), Ok(v)) = (self.proxies.get(&id), self.tex(id)) {
+                    let (w, h) = (v.width(), v.height());
+                    be.copy_from_texture_to_texture(v, 0, 0, Origin::new(0, 0, 0), Size::new(w, h, 1), host, 0, 0, Origin::new(0, 0, 0))
+                        .map_err(err("copy back"))?;
+                }
+            }
+            be.end_encoding().map_err(err("end blit"))?;
+        }
         let mirrors: Vec<Mirror> = self.mirrors.values().cloned().collect();
         for m in &mirrors {
             m.to_gpu();
@@ -1069,6 +1164,7 @@ impl State {
                 let d = c.u64();
                 let (slice, level) = (c.u32() as u64, c.u32() as u64);
                 let origin = Origin::new(c.u64(), c.u64(), c.u64());
+                self.mark(d);
                 enc.copy_from_buffer_to_texture(self.buf(s)?, so, bpr, bpi, size, self.tex(d)?, slice, level, origin, BlitOption::None)
                     .map_err(err("copy buffer to texture"))?;
             }
@@ -1089,6 +1185,7 @@ impl State {
                 let d = c.u64();
                 let (ds, dl) = (c.u32() as u64, c.u32() as u64);
                 let dor = Origin::new(c.u64(), c.u64(), c.u64());
+                self.mark(d);
                 enc.copy_from_texture_to_texture(self.tex(s)?, ss, sl, so, size, self.tex(d)?, ds, dl, dor).map_err(err("copy texture"))?;
             }
             C_FILL => {
@@ -1122,6 +1219,7 @@ impl State {
             }
             C_CS_TEXTURE => {
                 let (t, index) = (c.u64(), c.u32());
+                self.mark(t);
                 let t = if t == 0 { None } else { Some(self.tex(t)?) };
                 enc.set_texture(t, index).map_err(e)?;
             }
@@ -1260,6 +1358,8 @@ impl State {
             let (level, slice, plane, load, store, _pad) = (c.u32(), c.u32(), c.u32(), c.u32(), c.u32(), c.u32());
             let clear = [c.f64(), c.f64(), c.f64(), c.f64()];
             let (rt, rl, rs) = (c.u64(), c.u32(), c.u32());
+            self.mark(t);
+            self.mark(rt);
             let tex = if t == 0 { None } else { Some(self.tex(t)?.clone()) };
             resolves.push((if rt == 0 { None } else { Some(self.tex(rt)?.clone()) }, rl as u64, rs as u64));
             Ok((tex, level as u64, slice as u64, plane as u64, load as u64, store as u64, clear))

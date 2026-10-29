@@ -262,7 +262,10 @@ def launch(bundle):
 
 
 def terminate(bundle):
-    subprocess.run([X86SIM, "terminate", bundle], capture_output=True, timeout=30)
+    try:
+        subprocess.run([X86SIM, "terminate", bundle], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        print("    (terminate %s timed out)" % bundle)
 
 
 def main(a):
