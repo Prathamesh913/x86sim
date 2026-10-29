@@ -5,7 +5,7 @@ set -euo pipefail
 S=${1:?src}; O=${2:?out}; mkdir -p "$O"
 SIM="xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2"
 MAC="xcrun -sdk macosx clang -arch arm64 -O2"
-for t in hello bench threads signals; do $SIM -o "$O/$t.sim" "$S/$t.c"; done
+for t in hello bench threads signals fp16; do $SIM -o "$O/$t.sim" "$S/$t.c"; done
 $MAC -o "$O/bench.mac" "$S/bench.c"
 xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O1 -fobjc-arc -framework Foundation -o "$O/cfprobe.sim" "$S/cfprobe.m"
 xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O1 -fobjc-arc -framework Foundation -o "$O/threxit.sim" "$S/threxit.m"

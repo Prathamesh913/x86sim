@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/syscall.h>
 #include <ucontext.h>
 #include <execinfo.h>
 #include <dlfcn.h>
@@ -256,7 +257,7 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
 // SIGABRT from native code (Darling's libsystem, dynarmic asserts): native and guest backtraces, then the default.
 static void on_abrt(int, siginfo_t *si, void *) {
     void *bt[32]; int n = backtrace(bt, 32);
-    logf("SIGABRT (code %d pid %d): native backtrace:", si->si_code, si->si_pid);
+    logf("SIGABRT (code %d pid %d) on tid %ld: native backtrace:", si->si_code, si->si_pid, (long)syscall(SYS_gettid));
     for (int i = 0; i < n; i++) {
         Dl_info di{};
         if (dladdr(bt[i], &di) && di.dli_fname) logf("  %p %s+%#lx %s", bt[i], di.dli_fname, (unsigned long)((char *)bt[i] - (char *)di.dli_fbase), di.dli_sname ? di.dli_sname : "");

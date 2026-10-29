@@ -46,7 +46,17 @@ static void *thread_start(void *p) {
     if (__builtin_setjmp(jb) == 0) r = GuestThread::self().call(a.fn, {a.arg});
     else {
         r = t_exit_value;
+        if (g_trace) logf("thread_start: unwound from pthread_exit (tid %ld)", (long)syscall(SYS_gettid));
         GuestThread::self().reset_after_unwind();
+        if (g_trace) logf("thread_start: new Jit, returning %#lx", (unsigned long)r);
+        // A detached thread that ended in pthread_exit (NSThread: +[NSThread exit]) aborted in Darling's thread
+        // termination afterwards (cause not found yet, ARM64-PLAN stage 2 gaps). Nobody joins it: park it instead.
+        // tl_joinable is bit 0 of byte 49 of Darling's x86_64 struct pthread_s.
+        static auto *self = (u64 (*)())dsym("pthread_self");
+        if (!(*(uint8_t *)(self() + 49) & 1)) {
+            static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
+            for (;;) dsleep(100000);
+        }
     }
     t_exit_jmp = outer;
     return (void *)r;
@@ -234,6 +244,18 @@ static void h_pthread_exit(GuestThread &t, u32 i) {
         logf("pthread_exit on the main thread (linux tid %ld, pid %d): parking it", (long)syscall(SYS_gettid), (int)getpid());
         static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
         for (;;) dsleep(100000);
+    }
+    // pthread_cleanup_push records are guest code (the macro links them into pthread_self()->__cleanup_stack, at +8
+    // in both layouts): run them here, newest first, before Darling sees the thread end.
+    {
+        static auto *self = (u64 (*)())dsym("pthread_self");
+        u64 th = self(), exit_value = t.x(0);
+        struct Rec { u64 routine, arg, next; };
+        while (Rec *r = *(Rec **)(th + 8)) {
+            *(u64 *)(th + 8) = r->next;
+            if (r->routine) t.call(r->routine, {r->arg});
+        }
+        t.set_x(0, exit_value);
     }
     if (t_exit_jmp) { t_exit_value = t.x(0); __builtin_longjmp(*t_exit_jmp, 1); }
     logf("pthread_exit on a thread not started by us (tid %ld): Darling's pthread_exit", (long)syscall(SYS_gettid));
