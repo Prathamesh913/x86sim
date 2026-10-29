@@ -37,6 +37,7 @@ Goal: run the arm64-only iOS 27.x simulator runtime on x86_64 Linux with near-na
   broke on callbacks, blocks and varargs), FEX/Box64 thunks, ARM64EC entry/exit thunks, Rosetta 2 (AOT + JIT).
 - **QEMU/Unicorn:** complete but slow (3-10x). Use as a correctness oracle, not to ship.
 
+- [joshuaswarren/metal2vk](https://github.com/joshuaswarren/metal2vk) (MIT): Metal Shading Language compute kernels (source, not AIR) → Vulkan SPIR-V via clang + a metal_stdlib shim + patched clspv; no graphics pipelines or Metal API. A reference for compute features in our AIR path (simdgroup_matrix, cooperative matrix, Metal 4 tensor ops) and a possible compute test corpus.
 ## Architecture
 
 One x86_64 Linux process per simulator process:
