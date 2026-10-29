@@ -29,14 +29,16 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.runningboardd com.apple.lsd com.apple.containermanagerd com.apple.containermanagerd.system
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
-	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd"
+	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
+	com.apple.cloudd com.apple.diagnosticd"
 # x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No PosterBoard: it spawns a flock of
 # poster extensions (~450 MB each, 10+ processes, +5 GB) that push SHARED=0 past 13 GB before home. No chronod
 # (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
 # A64_JOBS=slim drops sleepd + usernotificationsd (~400-450 MB RSS each under the JIT); home + one app
 # does not need them. Default std keeps them for cold-boot stability (BKS XPC). A64_SLIM=1 (default)
-# parks Spotlight / WidgetRenderer before dyld (X86CODE_A64_SLIM_PARK) so SpringBoard's
-# RunningBoard assertions stay satisfied without paying JIT memory — replaces slim-reaper.sh.
+# parks Spotlight / WidgetRenderer before dyld (X86CODE_A64_SLIM_PARK). Without cloudd+diagnosticd
+# in the job set, securityd busy-retries those Mach lookups (~1.9 cores idle). Those two stay
+# runnable (not parked): a parked MachServices daemon accepts the lookup then hangs clients forever.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination"
@@ -93,12 +95,18 @@ L=$DPREFIX/private/var/tmp/com.apple.CoreSimulator.SimDevice.$UDID/launchd.log
 rm -f "$L" "$L".1 "$L".2
 R="/Volumes/SystemRoot$X86SIM_RUNTIME"
 # Default slim park list: path substrings matched in arm64host before dyld. A64_SLIM=0 clears it.
+# Do not park MachServices daemons (cloudd, diagnosticd): lookup succeeds then clients block forever
+# on the unreplied port. Those are in MIN so securityd's lookups resolve to real (lean) processes.
+PARK_LIST='Spotlight.app,WidgetRenderer'
 if [ "${A64_SLIM:-1}" = 1 ] && [ "${A64_JOBS:-std}" != full ]; then
-	grep -q '^X86CODE_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null || \
-		echo 'X86CODE_A64_SLIM_PARK=Spotlight.app,WidgetRenderer' >>"$D/sim.env"
+	if grep -q '^X86CODE_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null; then
+		sed -i "s|^X86CODE_A64_SLIM_PARK=.*|X86CODE_A64_SLIM_PARK=$PARK_LIST|" "$D/sim.env"
+	else
+		echo "X86CODE_A64_SLIM_PARK=$PARK_LIST" >>"$D/sim.env"
+	fi
 	# File fallback: launchd does not pass sim.env into job environ; arm64host reads this path.
 	mkdir -p /home/bobby/scratch/x86code
-	echo 'Spotlight.app,WidgetRenderer' > /home/bobby/scratch/x86code/a64-slim-park
+	echo "$PARK_LIST" > /home/bobby/scratch/x86code/a64-slim-park
 else
 	rm -f /home/bobby/scratch/x86code/a64-slim-park
 fi

@@ -573,13 +573,44 @@ A page-map `block_ranges` replacement was built then **reverted** (launchd_sim S
 new map). Guest stacks stay **8 MB** (1 MB previously crashed SB). IR-free / compact maps /
 `madvise` of freed guest heap remain next.
 
+### Idle CPU fix (2026-10-29): cloudd + diagnosticd in MIN
+
+**Root cause:** after slim-park, idle home still burned ~1.9 cores. strace + logs:
+
+- `securityd` wrote ~250 log lines/s: `daemon error while acquiring session … com.apple.cloudd … error 3`
+- `launchd_sim` served a tight failed-lookup storm for `com.apple.cloudd` and `com.apple.diagnosticd`
+  (neither was in the arm64 MIN LaunchDaemons set)
+- `SIGSTOP securityd` → launchd dropped to ~0.3% (fully coupled)
+
+**Fix in `cli/libexec/arm64/boot-a64.sh`:** add `com.apple.cloudd` and `com.apple.diagnosticd` to
+MIN (on-demand MachServices). Park list stays `Spotlight.app,WidgetRenderer` only — parking a
+MachServices daemon accepts the lookup then hangs clients forever (observed: SB stuck at 2 threads,
+no ring paint).
+
+| metric | before (parked home) | after (reboot2, park from t=0) |
+| --- | --- | --- |
+| launchd_sim | ~103% | **~0%** (5 s jiffies) |
+| securityd | ~83% | **absent / idle** (no lookup storm) |
+| whole-sim idle (3–5 s) | ~190% | **~1.3%** (SpringBoard only) |
+| whole-sim PSS | ~3.9 GB | **~3.7 GB** |
+| cgroup `memory.current` | ~3.95 GB | **~4.25 GB** (diagnosticd live ~182 MB) |
+| frame | bright≈0.21 | **bright≈0.21**, icons+dock (full home) |
+
+Screenshot: `13-stage3-idle-cpu-fix-home.png`. Scratch: `/home/bobby/scratch/x86code/idle-cpu/`.
+
+**Cold-boot note:** this same reboot2 (park+strip from t=0, plus the two new MIN jobs) landed full
+home — previously park-from-t=0 was flake-prone toward status-bar-only. Still treat as improved,
+not proven across N boots.
+
+**SpringBoard smaps (unchanged by idle fix):** anon_host ~686 MB (largest VMA **448 MB** rw-p,
+plus 64/48 MB siblings; ~1175 anon VMAs), host_heap ~138 MB, JIT code cache 256 MB VMA (~155 MB
+PSS rwxp). Page-map `block_ranges` re-land still next.
+
 ### Still open (stage 3 remainder / stage 4 prep)
-1. Shrink SB `anon_host` (~685 MB) / `host_heap` (~140 MB): free dynarmic IR after emit, compact
+1. Shrink SB `anon_host` (~686 MB) / `host_heap` (~138 MB): free dynarmic IR after emit, compact
    block map (re-land page-map with unit tests), return freed guest heap via `madvise`.
-2. Idle CPU: `launchd_sim` ~1 core and `securityd` ~0.8 core at idle home after park — find
-   polling / spinning thunk loops; park already removed Spotlight's ~100% core.
-3. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
-4. Harden cold boot with park+strip from t=0 (avoid status-bar-only / BKS flake).
-5. Persistent on-disk translation cache; trim the early shared boot spin.
-6. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
-7. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.
+2. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
+3. Prove cold boot with park+strip across repeated boots (reboot2 succeeded once).
+4. Persistent on-disk translation cache; trim the early shared boot spin.
+5. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
+6. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.
