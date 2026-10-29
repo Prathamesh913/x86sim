@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <objc/runtime.h>
+#include <xpc/xpc.h>
 
 #define MSG(ret, ...) ((ret(*)(__VA_ARGS__))objc_msgSend)
 
@@ -235,33 +236,82 @@ static NSDictionary* push(NSString* bid, NSDictionary* payload) {
 	return r;
 }
 
+// x86Code: simctl location, as CoreSimulatorBridge does it: CLSimulationManager (CoreLocation SPI) talks to locationd's
+// com.apple.locationd.simulation service. q: {clear} | {lat, lon} | {points: [[lat, lon]...], speed, distance,
+// interval} (simctl location start: interpolated between waypoints) | {scenario: name} (simctl location run) | {list}.
+static NSArray* scenarioURLs(id m) {
+	id a = MSG(id, id, SEL)(m, sel_getUid("availableScenarios"));
+	return [a isKindOfClass:NSArray.class] ? a : @[];
+}
+
+static NSString* scenarioName(id m, id u) {
+	NSString* n = [m respondsToSelector:sel_getUid("localizedNameForScenario:")] ? MSG(id, id, SEL, id)(m, sel_getUid("localizedNameForScenario:"), u) : nil;
+	if (![n isKindOfClass:NSString.class] || !n.length) n = [[([u isKindOfClass:NSURL.class] ? [u path] : [u description]) lastPathComponent] stringByDeletingPathExtension];
+	return n;
+}
+
 static NSDictionary* location(NSDictionary* q) {
 	dlopen("/System/Library/Frameworks/CoreLocation.framework/CoreLocation", RTLD_NOW);
 	static id m;
 	if (!m) m = [NSClassFromString(@"CLSimulationManager") new];
 	if (!m) return @{ @"ok": @NO, @"error": @"no CLSimulationManager" };
+	if ([q[@"list"] boolValue]) {
+		NSMutableArray* names = [NSMutableArray new];
+		for (id u in scenarioURLs(m)) [names addObject:scenarioName(m, u)];
+		return @{ @"ok": @YES, @"scenarios": names };
+	}
 	MSG(void, id, SEL)(m, sel_getUid("stopLocationSimulation"));
 	MSG(void, id, SEL)(m, sel_getUid("clearSimulatedLocations"));
-	if (![q[@"clear"] boolValue]) {
-		id loc = MSG(id, id, SEL, double, double)([NSClassFromString(@"CLLocation") alloc], sel_getUid("initWithLatitude:longitude:"),
-			[q[@"lat"] doubleValue], [q[@"lon"] doubleValue]);
-		MSG(void, id, SEL, id)(m, sel_getUid("appendSimulatedLocation:"), loc);
-		// as CoreSimulatorBridge: one location, delivered every second and repeated (locationd's simulation
-		// controller only sends while it has a next location to send)
+	if ([q[@"clear"] boolValue]) return @{ @"ok": @YES };
+	id (^loc)(double, double) = ^id(double lat, double lon) {
+		return MSG(id, id, SEL, double, double)([NSClassFromString(@"CLLocation") alloc], sel_getUid("initWithLatitude:longitude:"), lat, lon);
+	};
+	if (q[@"scenario"]) {
+		id found = nil;
+		for (id u in scenarioURLs(m))
+			if ([scenarioName(m, u) caseInsensitiveCompare:q[@"scenario"]] == NSOrderedSame) found = u;
+		if (!found) return @{ @"ok": @NO, @"error": [NSString stringWithFormat:@"no scenario named %@ (location list)", q[@"scenario"]] };
+		MSG(void, id, SEL, id)(m, sel_getUid("selectScenario:"), found);
+		MSG(void, id, SEL)(m, sel_getUid("startLocationSimulation"));
+		return @{ @"ok": @YES, @"scenario": scenarioName(m, found) };
+	}
+	NSArray* pts = q[@"points"] ?: @[ @[ q[@"lat"] ?: @0, q[@"lon"] ?: @0 ] ];
+	for (NSArray* p in pts) MSG(void, id, SEL, id)(m, sel_getUid("appendSimulatedLocation:"), loc([p[0] doubleValue], [p[1] doubleValue]));
+	if (pts.count == 1) {
+		// one location: delivered every second and repeated (locationd's simulation controller only sends while it has
+		// a next location to send)
 		MSG(void, id, SEL, double)(m, sel_getUid("setLocationInterval:"), 1.0);
 		MSG(void, id, SEL, unsigned long)(m, sel_getUid("setLocationRepeatBehavior:"), 1);
-		MSG(void, id, SEL)(m, sel_getUid("startLocationSimulation"));
+	} else {
+		// waypoints (simctl location start): moved along at <speed> m/s (default 20), an update every <distance> m or
+		// every <interval> s (default 1 s); stops at the last waypoint
+		MSG(void, id, SEL, unsigned long)(m, sel_getUid("setLocationRepeatBehavior:"), 0);
+		MSG(void, id, SEL, double)(m, sel_getUid("setLocationSpeed:"), q[@"speed"] ? [q[@"speed"] doubleValue] : 20.0);
+		if (q[@"distance"]) MSG(void, id, SEL, double)(m, sel_getUid("setLocationDistance:"), [q[@"distance"] doubleValue]);
+		else MSG(void, id, SEL, double)(m, sel_getUid("setLocationInterval:"), q[@"interval"] ? [q[@"interval"] doubleValue] : 1.0);
 	}
-	// x86Code: the manager's ivars (its NSXPCConnection) for diagnosis
-	NSMutableString* iv = [NSMutableString new];
-	unsigned n = 0;
-	Ivar* ivs = class_copyIvarList(object_getClass(m), &n);
-	for (unsigned i = 0; i < n; i++) {
-		const char* t = ivar_getTypeEncoding(ivs[i]);
-		if (t && t[0] == '@') [iv appendFormat:@"%s=%@; ", ivar_getName(ivs[i]), object_getIvar(m, ivs[i])];
-	}
-	free(ivs);
-	return @{ @"ok": @YES, @"manager": iv };
+	MSG(void, id, SEL)(m, sel_getUid("startLocationSimulation"));
+	return @{ @"ok": @YES, @"points": @(pts.count) };
+}
+
+static NSDictionary* xpcPing(NSString* name) {
+	// (marked unavailable in the iOS SDK; present in libxpc)
+	xpc_connection_t (*create)(const char*, dispatch_queue_t, uint64_t) = dlsym(RTLD_DEFAULT, "xpc_connection_create_mach_service");
+	xpc_connection_t c = create(name.UTF8String, NULL, 0);
+	xpc_connection_set_event_handler(c, ^(xpc_object_t e) { (void)e; });
+	xpc_connection_resume(c);
+	xpc_object_t m = xpc_dictionary_create(NULL, NULL, 0);
+	xpc_dictionary_set_string(m, "x86code", "ping");
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	__block NSString* r = @"no reply in 5 s";
+	xpc_connection_send_message_with_reply(c, m, dispatch_get_global_queue(0, 0), ^(xpc_object_t rep) {
+		char* d = xpc_copy_description(rep);
+		r = @(d); free(d);
+		dispatch_semaphore_signal(done);
+	});
+	dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+	xpc_connection_cancel(c);
+	return @{ @"ok": @YES, @"reply": r };
 }
 
 static NSDictionary* addMedia(NSArray* paths) {
@@ -298,6 +348,7 @@ static void request(NSString* rest) {
 	else if ([c isEqual:@"listapps"]) r = listApps();
 	else if ([c isEqual:@"push"]) r = push(q[@"bundle"], q[@"payload"]);
 	else if ([c isEqual:@"location"]) r = location(q);
+	else if ([c isEqual:@"xpcping"]) r = xpcPing(q[@"service"]);
 	else if ([c isEqual:@"addmedia"]) r = addMedia(q[@"paths"]);
 	else r = @{ @"ok": @NO, @"error": [NSString stringWithFormat:@"unknown cmd %@", c] };
 	answer(rid, r);

@@ -2,7 +2,7 @@
 # x86Code developer-workflow test (simctl parity): with the DevTools test app (tests/apps/DevTools) checks
 # x86sim listapps, get_app_container, launch --console with arguments and SIMCTL_CHILD_ environment, terminate,
 # push, log stream --app, addmedia, io screenshot / recordVideo, pidof and debug (LLDB breakpoint + backtrace).
-# x86sim location set is run and reported, not counted (locationd doesn't receive it yet: FINDINGS 3.16).
+# x86sim location set / start (a route between waypoints) / list / clear, delivered to CLLocationManager in the app.
 #   tests/devtools.sh [out dir]     (default $X86SIM_SCRATCH/devtools-<time>); needs a running boot (x86sim boot)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}; . "$X86SIM_ROOT/cli/lib/config.sh"
 X=$X86SIM_ROOT; S="$X/cli/x86sim"; B="$X/tests/apps/build"; ID=com.x86code.devtools
@@ -35,12 +35,25 @@ timeout 40 "$S" launch --console --console-secs 12 $ID > "$O/push.out" 2>&1 &
 sleep 4
 printf '{"Simulator Target Bundle":"%s","aps":{"alert":{"title":"x86sim test","body":"push %s"}}}\n' $ID $$ > "$O/push.json"
 "$S" push "$O/push.json" > "$O/push.txt" 2>&1
-"$S" location set 37.3349,-122.0090 > "$O/location.txt" 2>&1
 wait
 step "push (delivered to the app)" "$(ok grep -q "notification x86sim test / push $$" "$O/push.out")"
-grep -q 'devtools: location 37.33' "$O/push.out" && echo "location set                                 delivered" ||
-	echo "location set                                 not delivered (known gap)"
 "$S" screenshot "$O/push.png" 3 > /dev/null
+
+# location: set (one point, repeated every second), start (route between two waypoints ~550 m apart at 100 m/s,
+# an update per second: positions strictly between them), list (the runtime's scenarios), clear
+timeout 60 "$S" launch --console --console-secs 30 $ID > "$O/location.out" 2>&1 &
+sleep 4
+"$S" location set 37.3349,-122.0090 > "$O/location.txt" 2>&1
+sleep 5
+"$S" location start --speed=100 --interval=1 37.3300,-122.0300 37.3350,-122.0300 >> "$O/location.txt" 2>&1
+sleep 9
+"$S" location list > "$O/location-list.txt" 2>&1
+"$S" location clear >> "$O/location.txt" 2>&1
+wait
+step "location set (delivered to the app)" "$(ok grep -q 'devtools: location 37.3349,-122.0090' "$O/location.out")"
+n=$(grep -oE 'devtools: location 37\.33[0-9]+,-122\.0300' "$O/location.out" | sort -u | awk -F'[ ,]' '$3 > 37.3300 && $3 < 37.3350' | wc -l)
+step "location start (route: $n points between)" "$([ "$n" -ge 3 ] && echo PASS || echo FAIL)"
+step "location list (scenarios)" "$(ok grep -q '^City Run$' "$O/location-list.txt")"
 
 # terminate
 "$S" terminate $ID > "$O/terminate.txt" 2>&1; step "terminate" "$([ $? = 0 ] && echo PASS || echo FAIL)"

@@ -13,7 +13,7 @@ answer is the log line "result <id> <json>" in <data>/var/log/x86code-openurl.lo
   get_app_container <bundle id> [app|data|groups|<group id>]
   listapps [--json]
   push <bundle id> <payload.json|->     (or a payload with "Simulator Target Bundle" and no bundle id)
-  location set <lat>,<lon> | location clear
+  location set <lat>,<lon> | clear | list | run <scenario> | start|run [--speed=] [--distance=|--interval=] <lat>,<lon>...
   addmedia <file>...                    (images and videos into the Photos library)
   log stream [--app <bundle id>] [--process NAME] [--match TEXT]
   io screenshot [out.png] | io recordVideo [--codec h264|hevc] [--secs N] [--fps N] <out.mp4>
@@ -287,14 +287,49 @@ def cmd_push(a):
     print("Notification sent to '%s'" % bid)
 
 
+LOCATION_USAGE = ("usage: x86sim location set <lat>,<lon> | clear | list | run <scenario> |\n"
+                  "       location start|run [--speed=<m/s>] [--distance=<m>|--interval=<s>] <lat>,<lon> <lat>,<lon>... ('-': stdin)")
+
+
+def latlon(s):
+    try:
+        lat, lon = (float(x) for x in s.strip().split(","))
+    except ValueError:
+        die("x86sim location: not a <lat>,<lon> pair: %r" % s, 2)
+    return [lat, lon]
+
+
 def cmd_location(a):
-    if a[:1] == ["clear"]:
+    """As simctl location: set / clear / list / run <scenario> / start (waypoints, interpolated by locationd)."""
+    act, rest = (a[0], a[1:]) if a else ("", [])
+    if act == "clear" and not rest:
         check(request("location", clear=True), "location")
-    elif a[:1] == ["set"] and len(a) == 2:
-        lat, lon = (float(x) for x in a[1].split(","))
+    elif act == "set" and len(rest) == 1:
+        lat, lon = latlon(rest[0])
         check(request("location", lat=lat, lon=lon), "location")
+    elif act == "list" and not rest:
+        for n in check(request("location", list=True), "location").get("scenarios", []):
+            print(n)
+    elif act == "run" and len(rest) == 1 and "," not in rest[0] and rest[0] != "-":
+        r = check(request("location", scenario=rest[0]), "location")
+        print("Running scenario '%s'" % r.get("scenario"))
+    elif act in ("start", "run") and rest:
+        opts, pts = {}, []
+        for x in rest:
+            if x.startswith("--") and "=" in x:
+                k, v = x[2:].split("=", 1)
+                if k not in ("speed", "distance", "interval"):
+                    die(LOCATION_USAGE, 2)
+                opts[k] = float(v)
+            elif x == "-":
+                pts += [latlon(l) for l in sys.stdin if l.strip()]
+            else:
+                pts.append(latlon(x))
+        if len(pts) < 2:
+            die("x86sim location %s: at least two waypoints" % act, 2)
+        check(request("location", points=pts, **opts), "location")
     else:
-        die("usage: x86sim location set <lat>,<lon> | location clear", 2)
+        die(LOCATION_USAGE, 2)
 
 
 def cmd_addmedia(a):

@@ -53,8 +53,10 @@ Apps (as xcrun simctl install/uninstall/launch)
   listapps [--json]    installed apps (LaunchServices), with type, name and bundle path
   push [BUNDLEID] PAYLOAD.json|-
                        simulated remote notification (as simctl push; "Simulator Target Bundle" in the payload)
-  location set LAT,LON | location clear
-                       simulated device location (CLSimulationManager, as simctl location)
+  location set LAT,LON | clear | list | run SCENARIO
+  location start|run [--speed=M/S] [--distance=M|--interval=S] LAT,LON LAT,LON...
+                       simulated device location (CLSimulationManager -> locationd, as simctl location): one point,
+                       a scenario (City Run, Freeway Drive, ...) or a route between waypoints (default 20 m/s, 1 s)
   addmedia FILE...     add photos/videos to the Photos library (as simctl addmedia)
   log stream [--app BUNDLEID] [--process NAME] [--match TEXT]
                        os_log of an app (relaunched; libsimshim formats os_log into a file) or of a process
