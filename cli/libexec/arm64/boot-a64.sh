@@ -8,8 +8,8 @@
 #
 # Memory: Stage 2's 6G default was based on cgroup memory.current that missed every guest (darlingserver was
 # started by a darling shell *outside* the scope — the TZ link — so guests inherited that foreign cgroup). Real
-# SHARED=0 sum RSS at home is ~9 GB. Default here is 10G so the cap actually applies without OOMing a known-good
-# boot; drop back toward 6–8G once the shared translation cache lands. Override with X86SIM_MEM_MAX.
+# SHARED=0 sum VmRSS at home is ~11.1 GB (noshared.sample t=372s). Default here is 12G so MemoryMax does not
+# OOM a known-good boot; drop back toward 6–8G once the shared translation cache lands. Override with X86SIM_MEM_MAX.
 # Usage: SECS=120 cli/libexec/arm64/boot-a64.sh [extra jobs...]   (A64_JOBS=min|std: the job list)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 export X86SIM_ARCH=arm64
@@ -20,7 +20,7 @@ export X86SIM_STATE=${A64_STATE:-$X86SIM_ROOT/var/run-a64}
 export DPREFIX=${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}
 export X86SIM_DPREFIX=$DPREFIX
 export X86CODE_METAL=${X86CODE_METAL-0}         # software rendering until metalhostd is arm64
-export X86SIM_MEM_MAX=${X86SIM_MEM_MAX-10G}
+export X86SIM_MEM_MAX=${X86SIM_MEM_MAX-12G}
 X=$X86SIM_ROOT; cd "$X"
 D=$X86SIM_DEVICE; ST=$X86SIM_STATE; SECS=${SECS:-90}
 mkdir -p "$D" "$ST"
@@ -30,11 +30,12 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
 	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd"
-# x86Code: lean UI set for the 6 GB budget (every arm64 process costs 150-450 MB under the JIT): no chronod (widgets;
-# it spawns a widget extension process each) and no FileProvider. A64_JOBS=full adds them.
-UI="com.apple.backboardd com.apple.SpringBoard com.apple.PosterBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
+# x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No PosterBoard: it spawns a flock of
+# poster extensions (~450 MB each, 10+ processes, +5 GB) that push SHARED=0 past 13 GB before home. No chronod
+# (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
+UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd"
-FULLUI="com.apple.chronod com.apple.FileProvider"
+FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
 case "${A64_JOBS:-std}" in
 	min) JOBS="$MIN" ;;
 	full) JOBS="$MIN $UI $FULLUI" ;;
