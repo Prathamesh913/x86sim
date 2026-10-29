@@ -1,0 +1,36 @@
+{
+  "title": "iOS 27 Simulator on x86-64 Linux",
+  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
+  "now": "Stage 3: one shared translation cache per process (memory and boot time), then the crash fixes and Metal on the GPU.",
+  "metrics": [
+    ["Boot to home screen", "~7 min", "goal: under 1 min"],
+    ["Memory (whole simulator)", "5.4-5.9 GB", "goal: under 1 GB"],
+    ["CPU code vs M1 Mac", "2-3x slower", "compute, ObjC dispatch, Swift generics"],
+    ["Allocation-heavy code vs M1", "3-7x slower", "was 10-16x before native malloc"],
+    ["Rendering", "software", "Metal → Vulkan coming in stage 3"],
+    ["Device", "iPhone 17 (1206x2622)", "iOS 27.0 (24A434)"]
+  ],
+  "stages": [
+    {"name": "0. Proof of concept", "status": "done",
+     "detail": "Small arm64 iOS-simulator programs run on x86-64 Linux under dynarmic. 2.45x slower than native x86 overall; calls into native x86 code cost nothing."},
+    {"name": "1. Inside Darling", "status": "done",
+     "detail": "Darling's loader hands arm64 programs to the JIT. Apple's own dyld_sim maps the iOS 27 shared cache; libobjc and libswiftCore run translated. System calls go through native x86 libsystem stubs generated from the cache."},
+    {"name": "2. Boot to the home screen", "status": "done",
+     "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."},
+    {"name": "3. Fast and lean", "status": "in progress",
+     "detail": "Shared code cache per process, faster boot (possibly a translation cache on disk), crash fixes, Metal on the GPU via the existing Vulkan translator, time zone."},
+    {"name": "4. Near native", "status": "later",
+     "detail": "Translate the fixed iOS 27 shared cache to x86 ahead of time, once per iOS version (like Rosetta 2), with the JIT as fallback."}
+  ],
+  "issues": [
+    "Memory near the 6 GB cap: every thread has its own translator and code cache",
+    "Some daemons left out to fit (widgets, Files, iCloud accounts): widgets show blank",
+    "Intermittent crashes in backboardd and SpringBoard",
+    "Black wallpaper and UTC clock (no Metal, no time zone yet)"
+  ],
+  "milestones": [
+    ["03-home-screen.png", "Home screen: SpringBoard on iOS 27, every process translated arm64"],
+    ["02-springboard-spinner.png", "backboardd and SpringBoard up: boot spinner"],
+    ["01-boot-logo.png", "First pixels: iOS 27 boot logo from translated arm64 code"]
+  ]
+}

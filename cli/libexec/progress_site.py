@@ -4,7 +4,7 @@ Builds a static site in $X86SIM_SITE (default ~/scratch/x86code/site) (only what
 the live screen (refreshed every few seconds), recent milestone screenshots and the
 app compatibility notes. Serve the directory with any static server (see cli/libexec/progress_tunnel.sh).
     cli/libexec/progress_site.py [--loop]"""
-import html, os, re, shutil, struct, sys, time
+import html, json, os, re, shutil, struct, subprocess, sys, time
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fbring
@@ -16,22 +16,28 @@ SITE = x86config.get("X86SIM_SITE")
 SCREENS = x86config.get("X86SIM_SCREENS")
 FB = os.path.join(x86config.data(), "framebuffer.bgra")
 
-# x86Code: the arm64 effort (iOS 27 on x86_64 through the dynarmic JIT) started over; its screenshots live in
-# docs/screens/arm64 (X86SIM_SCREENS_A64). Add milestones here as they land.
+# x86Code: the arm64 effort (iOS 27 on x86_64 through the dynarmic JIT). Its status (summary, current work, metrics,
+# stages, issues, milestones) lives in docs/progress.json so agents update data, not this file; screenshots in
+# docs/screens/arm64 (X86SIM_SCREENS_A64).
 SCREENS = os.environ.get("X86SIM_SCREENS_A64", os.path.join(X, "docs/screens/arm64"))
-MILESTONES = [  # (file, caption)
-    ("01-boot-logo.png", "First pixels: iOS 27 boot logo from translated arm64 code"),
-    ("03-home-screen.png", "Home screen: SpringBoard on iOS 27 (arm64, every process under the JIT), software rendering"),
-    ("02-springboard-spinner.png", "backboardd's window server and SpringBoard up: boot spinner (software rendering, 6 GB budget)"),
-]
-STAGES = [  # (stage, status) from docs/notebook/ARM64-PLAN.md
-    ("0. Proof of concept: arm64 programs under the dynarmic JIT on x86_64", "done"),
-    ("1. Inside Darling: Apple's dyld_sim + the iOS 27 shared cache, ObjC and Swift", "done"),
-    ("2. Boot: launchd_sim → backboardd → SpringBoard home screen", "home screen reached (software rendering); stability and memory next"),
-    ("3. Fast: native hot paths, persistent translation cache", "next"),
-    ("4. Near native: ahead-of-time x86 translation of the shared cache", "later"),
-]
+STATUS = os.path.join(X, "docs/progress.json")
 
+
+def status():
+    try:
+        return json.load(open(STATUS))
+    except (OSError, ValueError):
+        return {}
+
+
+def recent_commits(n=12):
+    """The latest commits of the top repo (subjects only), newest first."""
+    try:
+        out = subprocess.run(["git", "-C", X, "log", "-%d" % n, "--format=%ar\t%s"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [l.split("\t", 1) for l in out.splitlines() if "\t" in l]
 
 def live_frame():
     try:
@@ -72,33 +78,61 @@ def compat_section():
 def build():
     os.makedirs(os.path.join(SITE, "s"), exist_ok=True)
     seq = live_frame()
-    cards = "".join('<figure><img src="%s" loading="lazy"><figcaption>%s</figcaption></figure>' % (thumb(f), html.escape(c))
-                    for f, c in MILESTONES if os.path.exists(os.path.join(SCREENS, f)))
-    stages = "".join("<tr><td>%s</td><td>%s</td></tr>" % (html.escape(a), html.escape(b)) for a, b in STAGES)
-    recent = "".join('<figure><img src="%s" loading="lazy"><figcaption>%s</figcaption></figure>' % (thumb(f), html.escape(os.path.splitext(f)[0]))
-                     for f in reversed(latest_screens()))
-    page = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>iOS Simulator on Linux — progress</title>
-<style>body{font:15px system-ui,sans-serif;background:#111;color:#ddd;margin:2em auto;max-width:1100px;padding:0 1em}
-h1{font-weight:600}h2{margin-top:2em;border-bottom:1px solid #333}a{color:#7ab}
-.grid{display:flex;flex-wrap:wrap;gap:14px}figure{margin:0;width:200px}figure img{width:200px;border-radius:14px;border:1px solid #333}
-figcaption{font-size:12px;color:#aaa;margin-top:4px}#live{width:393px;border-radius:24px;border:1px solid #444}
-td{padding:4px 14px 4px 0;border-bottom:1px solid #222}pre{white-space:pre-wrap;background:#1b1b1b;padding:1em;border-radius:8px;font-size:12px}</style></head><body>
-<h1>Apple's iOS 27 Simulator runtime on x86-64 Linux</h1>
-<p>The arm64-only iOS 27 runtime, unmodified, translated to x86-64 by an embedded JIT (dynarmic) inside Darling — no Mac at runtime. Updated %s.</p>
-<h2>Stages</h2><table>%s</table>
-<h2>Live video</h2><video id="v" controls autoplay muted playsinline style="width:393px;border-radius:24px;border:1px solid #444"></video><p id="seq">last saved frame %s (stream: H.264, 60 fps, ~1-2 s behind)</p>
-<h2>Milestones</h2><div class="grid">%s</div>
-<h2>Latest screenshots</h2><div class="grid">%s</div>
+    st = status()
+    e = html.escape
+    badge = {"done": "done", "in progress": "now", "later": "later", "next": "next"}
+    stages = "".join('<details%s><summary><span class="b %s">%s</span> %s</summary><p>%s</p></details>'
+                     % (" open" if x.get("status") == "in progress" else "", badge.get(x.get("status"), "later"),
+                        e(x.get("status", "")), e(x.get("name", "")), e(x.get("detail", "")))
+                     for x in st.get("stages", []))
+    metrics = "".join('<div class="m"><div class="k">%s</div><div class="v">%s</div><div class="n">%s</div></div>'
+                      % (e(k), e(v), e(n)) for k, v, n in st.get("metrics", []))
+    issues = "".join("<li>%s</li>" % e(i) for i in st.get("issues", []))
+    cards = "".join('<figure><img src="%s" loading="lazy" alt=""><figcaption>%s</figcaption></figure>' % (thumb(f), e(c))
+                    for f, c in st.get("milestones", []) if os.path.exists(os.path.join(SCREENS, f)))
+    commits = "".join('<li><span class="t">%s</span> %s</li>' % (e(t), e(m[:160])) for t, m in recent_commits())
+    page = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c"><title>%(title)s</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:16px/1.45 -apple-system,system-ui,sans-serif;background:#0b0b0c;color:#e6e6e6;
+padding:16px max(16px,env(safe-area-inset-right)) 32px max(16px,env(safe-area-inset-left))}
+main{max-width:720px;margin:0 auto}h1{font-size:24px;line-height:1.2;margin:8px 0}h2{font-size:18px;margin:28px 0 10px}
+p{margin:6px 0}.sub{color:#aaa;font-size:14px}.now{background:#13261b;border:1px solid #1f5135;border-radius:12px;padding:12px;margin:14px 0}
+.now b{color:#6fdc9a}video{width:100%%;max-width:420px;display:block;margin:0 auto;aspect-ratio:1206/2622;max-height:78vh;
+background:#000;border-radius:28px;border:1px solid #333}.cap{text-align:center;color:#888;font-size:12px}
+.ms{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.ms figure{margin:0}
+.ms img{width:100%%;border-radius:14px;border:1px solid #333}figcaption{font-size:12px;color:#aaa;margin-top:4px}
+.mt{display:grid;grid-template-columns:1fr 1fr;gap:10px}.m{background:#151517;border:1px solid #26262a;border-radius:12px;padding:10px}
+.k{font-size:12px;color:#999}.v{font-size:18px;font-weight:600}.n{font-size:12px;color:#888}
+details{background:#151517;border:1px solid #26262a;border-radius:12px;margin:8px 0;padding:10px 12px}
+summary{cursor:pointer;font-weight:600}details p{color:#bbb;font-size:14px}
+.b{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;margin-right:6px;vertical-align:1px}
+.done{background:#1f5135;color:#9ff0c0}.now .b,.b.now{background:#5a4510;color:#ffd77a}.next,.later{background:#2a2a30;color:#bbb}
+ul{padding-left:20px}li{margin:4px 0}.log li{font-size:13px;color:#bbb;list-style:none;margin-left:-20px;border-bottom:1px solid #1d1d20;padding:6px 0}
+.t{color:#777;font-size:12px;display:block}footer{color:#666;font-size:12px;margin-top:28px}
+@media(min-width:760px){.mt{grid-template-columns:repeat(3,1fr)}h1{font-size:30px}}
+</style></head><body><main>
+<h1>%(title)s</h1><p class="sub">%(summary)s</p>
+<div class="now"><b>Working on now:</b> %(now)s</div>
+<h2>Live</h2><video id="v" controls autoplay muted playsinline></video>
+<p class="cap">Live H.264 stream (~1-2 s behind). Test boots come and go, so the screen may hold the last frame. Last frame %(seq)s.</p>
+<h2>Where it stands</h2><div class="mt">%(metrics)s</div>
+<h2>Stages</h2>%(stages)s
+<h2>Known issues</h2><ul>%(issues)s</ul>
+<h2>Milestones</h2><div class="ms">%(cards)s</div>
+<h2>Latest commits</h2><ul class="log">%(commits)s</ul>
+<footer>Updated %(time)s · private project</footer></main>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script><script>
 var v=document.getElementById('v'),u='live/stream.m3u8';
 if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=u}else if(window.Hls&&Hls.isSupported()){var h=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:6,maxLiveSyncPlaybackRate:1.2,backBufferLength:4});h.loadSource(u);h.attachMedia(v);h.on(Hls.Events.ERROR,function(e,d){if(d.fatal){setTimeout(function(){h.loadSource(u)},2000)}})}
-</script>
-</body></html>""" % (time.strftime("%Y-%m-%d %H:%M"), stages, seq if seq is not None else "—", cards, recent)
+</script></body></html>""" % {"title": e(st.get("title", "iOS Simulator on Linux")), "summary": e(st.get("summary", "")),
+                              "now": e(st.get("now", "")), "seq": seq if seq is not None else "—", "metrics": metrics,
+                              "stages": stages, "issues": issues, "cards": cards, "commits": commits,
+                              "time": time.strftime("%Y-%m-%d %H:%M")}
     with open(os.path.join(SITE, "index.tmp.html"), "w") as f:
         f.write(page)
     os.replace(os.path.join(SITE, "index.tmp.html"), os.path.join(SITE, "index.html"))
-
 
 if __name__ == "__main__":
     build()
