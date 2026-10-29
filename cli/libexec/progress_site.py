@@ -21,12 +21,13 @@ FB = os.path.join(x86config.data(), "framebuffer.bgra")
 SCREENS = os.environ.get("X86SIM_SCREENS_A64", os.path.join(X, "docs/screens/arm64"))
 MILESTONES = [  # (file, caption)
     ("01-boot-logo.png", "First pixels: iOS 27 boot logo from translated arm64 code"),
+    ("03-home-screen.png", "Home screen: SpringBoard on iOS 27 (arm64, every process under the JIT), software rendering"),
     ("02-springboard-spinner.png", "backboardd's window server and SpringBoard up: boot spinner (software rendering, 6 GB budget)"),
 ]
 STAGES = [  # (stage, status) from docs/notebook/ARM64-PLAN.md
     ("0. Proof of concept: arm64 programs under the dynarmic JIT on x86_64", "done"),
     ("1. Inside Darling: Apple's dyld_sim + the iOS 27 shared cache, ObjC and Swift", "done"),
-    ("2. Boot: launchd_sim → backboardd → SpringBoard home screen", "in progress: SpringBoard up, boot spinner"),
+    ("2. Boot: launchd_sim → backboardd → SpringBoard home screen", "home screen reached (software rendering); stability and memory next"),
     ("3. Fast: native hot paths, persistent translation cache", "next"),
     ("4. Near native: ahead-of-time x86 translation of the shared cache", "later"),
 ]
