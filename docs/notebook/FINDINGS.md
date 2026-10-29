@@ -2956,3 +2956,83 @@ update through Python), 0 at idle.
   itself ~1.4 s of CPU, mostly dyld without a shared cache).
 - RPC transport (per-wakeup cost of ~20 darlingserver round trips): shared-memory rings + futex (willi darlingserver #19).
 - Directory vnode sources in simulator processes (see above).
+
+### 3.21 Perf round 4: cold launch, darlingserver round trips, parallax, simview, directory watches (2026-10-28)
+
+One targeted measurement before and one after each change, on a settled stack (whole-stack idle < 2%).
+
+| | before | after |
+|---|---|---|
+| `x86sim app` request -> openurl acts (tmp/x86code-openurl renamed in, 3-4 tries) | 3,000-4,100 ms (first one after a boot ~100-450 ms) | 3 ms |
+| Settings cold launch: request -> process exists / perf.py first frame | 2,056 ms / 4,028 ms | 359 ms / 1,475 ms |
+| Safari cold launch: perf.py first frame | 2.4 s (3.20) | 531 ms (settled 2.3 s) |
+| darlingserver RPC: mach_port_allocate + mod_refs (rpcbench, 40,000 RPCs) | 8.7 us per RPC | 5.4 us |
+| darlingserver RPC: mach_msg send+receive to self | 10.5 us | 6.7 us |
+| darlingserver at idle | 0.7%, 1,400 wakeups/s (2 OS threads) | 0.6%, 730 wakeups/s (1 OS thread) |
+| simview at 60 frames/s (synthetic 1179x2556 ring, 6 s) | 46% of a core (kwin 10%) | 10% (kwin 8%) |
+
+**Cold launch.** A timeline of one launch (request, openurl's log, /proc for the process, frames) showed nothing in the
+stack ran for ~2 s after the request: openurl's inotify wake never fired after the first request, so it found requests
+with its 5 s fallback poll. Its dispatch read source on the inotify descriptor delivered one event and then nothing
+(kevent registration seen with a kevent_id interposer: EV_ADD|EV_DISPATCH|EV_UDATA_SPECIFIC on a workloop, r=0; on the
+main queue it was the same), while the same pattern in a probe (tests below) re-armed fine. openurl now blocks in read()
+on the inotify descriptor in a thread of its own and stops the main run loop (CFRunLoopStop is thread-safe and not
+lost before the loop waits). The process itself: one cold Settings launch sampled with perf (999 Hz, whole system)
+spends 58% of its CPU in dyld_sim: `MachOFile::trieWalk` 40% + strcmp 11% (export-trie lookups for binds, re-export
+chains and weak-def coalescing across ~1,300 mapped images), `JustInTimeLoader::matchesPath` + `getDylibInstallName`
+~14% (each dependent compared against every loaded image's install name, O(n^2)), chained-fixup walking ~8%. That is
+dyld without a shared cache; the x86_64 shared cache (pending approval) is the fix. libobjc 11%, libswiftCore 10%.
+Kernel time is small (stime 250-380 ms of 2.2-5.6 s). Symbolizing: dyld_sim samples are file offsets in the fat file;
+subtract the mapping base taken from perf's MMAP2 record of that pid (the slice starts at file offset 0x4000).
+- jetsam.py killed Spotlight (suspended > 30 s) and SpringBoard relaunched it on the next home press, i.e. a full cold
+  launch (~1.5 s of CPU) next to the app being opened. Spotlight is never reclaimed now, and anything relaunched within
+  60 s of its kill is kept from then on (also covers MercuryPosterExtension).
+
+**darlingserver round trips.** Per RPC a client thread makes getpid + gettid + (60% of calls) two rt_sigprocmask +
+sendmsg + recvmsg; darlingserver's epoll thread made recvmmsg (x2, edge-triggered), an eventfd read, an epoll_ctl and a
+futex wake of its one worker, which ran the microthread and sent the reply: two server-side context switches per RPC.
+willi darlingserver #19 (-O2) does not apply here (the build is RelWithDebInfo). Now the epoll thread runs the
+microthreads itself (WorkQueue inline mode, `DSERVER_INLINE=0` brings the worker back; kernelSync at startup drains the
+queue instead of waiting), and the wakeup eventfd is read and re-armed only after it fired or its wanted state changed.
+-38% per RPC. Measured cheap client-side items and left them: mach_absolute_time is 57 ns, gettimeofday 107 ns (a real
+syscall; vDSO would save ~50 ns x ~900/s in SpringBoard), getpid/gettid ~60 ns each of an 5.4 us RPC. A shared-memory
+request ring + futex would remove the socket syscalls but still needs a cross-process wakeup each way; the next
+measurable lever is fewer RPCs per operation (CFRunLoop's port-set insert/extract per iteration, mach_port_deallocate).
+
+**SpringBoard's parallax at idle (30 Hz).** In this runtime's UIKitCore, `+[_UIMotionEffectEngine _eventProviderClass]`
+returns `_UIMotionEffectSimulatorMotionEventProvider` unconditionally; that provider's init only makes an
+NSOperationQueue and start/stopGeneratingEvents only flip a flag: it never touches CoreMotion and never produces an
+event. `_UIMotionEffectsAreSupported` is always YES; `_motionEffectsEnabled` is NO only with Reduce Motion
+(`_AXSReduceMotionEnabled`) or an internal-build user default. Slow updates (`_toggleSlowUpdates`) are entered from
+event velocities, which never come. So no CoreMotion/sensor stand-in can idle it; only Reduce Motion (changes the UI)
+or patching UIKit would. The "CoreMotion timer" is not the same thing: per-thread context switches of SpringBoard at
+idle are main thread ~600/s, every other thread 9-19/s.
+
+**simview.** perf of the viewer at 60 fps: 83% of its samples in the kernel, 88% of those under the NVIDIA driver's
+ioctl (GTK's GPU renderers upload the full 12 MB texture per frame), the rest Python's two 12 MB copies (mmap slice +
+GLib.Bytes). GSK_RENDERER=vulkan 50%, gl 40%, cairo 12-13% (scales into the window's shm buffer on the CPU; the
+compositor's cost unchanged). simview defaults to cairo (an existing GSK_RENDERER wins). Measured with a synthetic ring
+(/dev/shm, futex-woken at 60 Hz) and a second viewer instance, so the stack's own frames don't vary.
+
+**Directory watches (EVFILT_VNODE on a directory).** Not reproduced as a registration failure: a probe run as a launchd
+job (main queue with CFRunLoopRunInMode loops like openurl, with and without FrontBoardServices/MobileCoreServices
+dlopen'ed first, global queue) gets every READ (inotify) and directory VNODE (NOTE_WRITE) event, also 40 and 90 s
+later. What fails is openurl's own source after its first event (above); that process does XPC/FBS work on the main
+thread between events. Next: the same kevent_id interposer plus a log of libkqueue's knote enable/disable for that
+ident (the re-arm comes back through WQOPS_THREAD_WORKLOOP_RETURN -> wl_returned -> sys_kevent_id, which an
+interposer can't see), and kqueue_closed_fd only deletes READ/WRITE/SOCK knotes with an uninitialised udata
+(EV_UDATA_SPECIFIC knotes keep their dup'd descriptor).
+
+Tools (scratch, not kept): a timeline of one launch (request, openurl log, /proc, frames), rpcbench (sim binary:
+port allocate/destroy, mach_msg to self, time calls), a 60 Hz synthetic ring for viewers, kqprobe/kqprobe3 (dispatch
+READ/VNODE sources), libkqdiag (kevent_qos/kevent_id interposer, X86CODE_INSERT).
+
+Also seen: `x86sim boot` printed "home screen up" from the previous boot's ring (same seq) while launchd_sim was still
+starting; it waits for a frame newer than the boot, but the ring in /dev/shm survives a shutdown.
+
+### Open (after round 4)
+- Cold launch CPU: dyld without a shared cache (58% of the app's CPU); the x86_64 shared cache build awaits approval.
+- Dispatch read/vnode sources that stop after their first event in some processes (openurl; above).
+- RPC count per operation (CFRunLoop port-set moves, port deallocations); shared-memory transport.
+- SpringBoard's 30 Hz parallax tick (UIKit's simulator provider; Reduce Motion is the only switch).
+- `x86sim boot`'s home-screen check can see the previous boot's ring.

@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <objc/runtime.h>
 #include <xpc/xpc.h>
 
@@ -362,6 +363,23 @@ static long linux_syscall3(long n, long a, long b, long c) {
 	return r;
 }
 
+static volatile BOOL wake;
+
+// x86Code: waits for the request file to be renamed into place (see main)
+static void* watchThread(void* arg) {
+	long ifd = (long)arg;
+	char buf[4096];
+	for (;;) {
+		long r = linux_syscall3(0 /* read */, ifd, (long)buf, sizeof(buf));
+		if (r == -4 /* EINTR */)
+			continue;
+		if (r <= 0)
+			return NULL; // the 5 s fallback poll stays
+		wake = YES;
+		CFRunLoopStop(CFRunLoopGetMain());
+	}
+}
+
 int main(void) {
 	@autoreleasepool {
 		NSString* home = @(getenv("HOME") ?: "/private/var/tmp");
@@ -382,9 +400,9 @@ int main(void) {
 		// whose descriptor a dispatch read source waits on. (A DISPATCH_SOURCE_TYPE_VNODE on the directory never
 		// registered under Darling's libkqueue: FINDINGS 3.20.) The run loop still runs between requests (CoreLocation
 		// delivers on the main queue); a 5 s poll stays as a fallback, 0.3 s if the watch can't be set up.
-		__block BOOL wake = NO;
+
 		int dirfd = open([home stringByAppendingString:@"/tmp"].UTF8String, O_RDONLY);
-		long ifd = dirfd >= 0 ? linux_syscall3(294 /* inotify_init1 */, 04000 | 02000000 /* IN_NONBLOCK|IN_CLOEXEC */, 0, 0) : -1;
+		long ifd = dirfd >= 0 ? linux_syscall3(294 /* inotify_init1 */, 02000000 /* IN_CLOEXEC; blocking: watchThread reads it */, 0, 0) : -1;
 		if (ifd >= 0) {
 			char fdpath[64];
 			snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", dirfd);
@@ -392,14 +410,14 @@ int main(void) {
 				ifd = -1;
 		}
 		if (ifd >= 0) {
-			dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)ifd, 0, dispatch_get_main_queue());
-			dispatch_source_set_event_handler(src, ^{
-				char buf[4096];
-				while (linux_syscall3(0 /* read */, ifd, (long)buf, sizeof(buf)) > 0) {}
-				wake = YES;
-				CFRunLoopStop(CFRunLoopGetMain());
-			});
-			dispatch_resume(src);
+			// x86Code: a thread of its own blocks in read() on the inotify descriptor. A dispatch read source on it (on
+			// the main queue, later on a serial queue) delivered the first event only: libdispatch never got the next
+			// one, so every request after the first waited for the 5 s fallback (FINDINGS 3.21). CFRunLoopStop is
+			// thread-safe and isn't lost when the loop isn't waiting yet (its next run returns at once).
+			long fd_ = ifd;
+			pthread_t th;
+			pthread_create(&th, NULL, watchThread, (void*)fd_);
+			pthread_detach(th);
 			fprintf(logf_, "openurl: watching %s/tmp (inotify)\n", home.UTF8String); fflush(logf_);
 		}
 		for (;;) {
