@@ -143,6 +143,7 @@ void h_sigaction(GuestThread &t, u32 i);  // signals.cpp
 void h_platform_sigaction(GuestThread &t, u32 i);
 void deliver_signals(GuestThread &t);
 Handler special_handler(const std::string &name, int *nfixed, const char **native_name);
+bool special_needs_native(const std::string &name);
 bool is_guest_code_export(const std::string &name);  // setjmp family: emitted as arm64 code in the stub dylib
 size_t emit_guest_code(const std::string &name, uint32_t *out, u32 slow_thunk);  // arm64 code for those, returns instruction count
 

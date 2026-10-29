@@ -268,6 +268,14 @@ static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends h
     ((void (*)(int))g_thunks[i].native)((int)t.x(0));
 }
 
+// Special handlers that don't use g_thunks[i].native (everything else does)
+bool special_needs_native(const std::string &n) {
+    static const char *own[] = {"___libkernel_init", "_pthread_create_with_workgroup_np", "__simple_dprintf", "__simple_vdprintf",
+                                "__simple_sprintf", "__simple_vsprintf", "__simple_esprintf", "__simple_vesprintf",
+                                "____chkstk_darwin", "_thread_chkstk_darwin"};
+    for (const char *o : own) if (n == o) return false;
+    return true;
+}
 Handler special_handler(const std::string &n, int *nfixed, const char **native_name) {
     static const std::map<std::string, int> variadic = {
         {"_open", 2}, {"_open$NOCANCEL", 2}, {"_openat", 3}, {"_openat$NOCANCEL", 3}, {"_fcntl", 2}, {"_fcntl$NOCANCEL", 2},

@@ -25,10 +25,14 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
 	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd"
-UI="com.apple.backboardd com.apple.SpringBoard com.apple.PosterBoard com.apple.chronod com.apple.sleepd
-	com.apple.TextInput.kbd com.apple.FileCoordination com.apple.FileProvider com.apple.usernotificationsd"
+# x86Code: lean UI set for the 6 GB budget (every arm64 process costs 150-450 MB under the JIT): no chronod (widgets;
+# it spawns a widget extension process each) and no FileProvider. A64_JOBS=full adds them.
+UI="com.apple.backboardd com.apple.SpringBoard com.apple.PosterBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
+	com.apple.usernotificationsd"
+FULLUI="com.apple.chronod com.apple.FileProvider"
 case "${A64_JOBS:-std}" in
 	min) JOBS="$MIN" ;;
+	full) JOBS="$MIN $UI $FULLUI" ;;
 	*) JOBS="$MIN $UI" ;;
 esac
 X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1

@@ -219,6 +219,11 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
         if (native && !h && !native_is_code(native)) {
             data.push_back({name, native, false}); ndata++; continue;
         }
+        // special handlers that call the native function: without one they would call NULL
+        if (h && !native && h != h_noop && h != h_zero && special_needs_native(name)) {
+            if (getenv("X86CODE_A64_STATS")) logf("%s: special handler but no native function (missing)", name.c_str());
+            h = h_missing;
+        }
         if (!h) h = native ? h_generic : h_missing;
         if (!native && h != h_missing && (h == h_generic || h == h_generic_bool || h == h_variadic)) h = h_missing;
         if (h == h_missing) nmissing++;
