@@ -82,7 +82,25 @@ U
 }
 
 alive_pidfile() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
+
 boot_running() { alive_pidfile "$ST/boot.pid"; }
+
+# x86Code: a boot that reads more than X86SIM_IO_BUDGET (default 6G; 0 = off) from disk before the home screen is
+# stuck re-reading (a normal cold boot reads ~1-2 GB): stop it rather than grind the disk for minutes
+io_watchdog() {
+	local budget; budget=$(numfmt --from=iec "${X86SIM_IO_BUDGET:-6G}") || return
+	[ "$budget" = 0 ] && return
+	local cg n=0
+	while kill -0 "$1" 2>/dev/null; do
+		cg=/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$1/cgroup" 2>/dev/null)
+		n=$(awk '{for(i=2;i<=NF;i++) if($i ~ /^rbytes=/){sub("rbytes=","",$i); if($i>m) m=$i}} END{print m+0}' "$cg/io.stat" 2>/dev/null)
+		if [ "${n:-0}" -gt "$budget" ]; then
+			echo "x86sim: boot read $(numfmt --to=iec "$n") from disk without reaching the home screen (X86SIM_IO_BUDGET ${X86SIM_IO_BUDGET:-6G}); stopping it" >&2
+			boot_snapshot; cmd_shutdown >/dev/null 2>&1; return
+		fi
+		sleep 2
+	done
+}
 
 cmd_boot() {
 	local fg=0 wait=1 secs=$X86SIM_BOOT_SECS
@@ -103,15 +121,19 @@ cmd_boot() {
 	# the last boot's frames would pass for this one's (simfb makes a new ring)
 	rm -f /dev/shm/x86code-simfb.ring "$X86SIM_DEVICE/data/framebuffer.bgra"
 	if [ $fg = 1 ]; then
-		X86CODE_NODT=${X86CODE_NODT-all} SECS=$secs exec "$L/rundev.sh" com.apple.backboardd com.apple.SpringBoard "$@"
+		X86CODE_NODT=${X86CODE_NODT-all} SECS=$secs exec "$L/limited.sh" "$L/rundev.sh" com.apple.backboardd com.apple.SpringBoard "$@"
 	fi
-	X86CODE_NODT=${X86CODE_NODT-all} SECS=$secs setsid "$L/rundev.sh" com.apple.backboardd com.apple.SpringBoard "$@" > "$ST/boot.log" 2>&1 < /dev/null &
+	X86CODE_NODT=${X86CODE_NODT-all} SECS=$secs setsid "$L/limited.sh" "$L/rundev.sh" com.apple.backboardd com.apple.SpringBoard "$@" > "$ST/boot.log" 2>&1 < /dev/null &
 	echo $! > "$ST/boot.pid"
 	echo "x86sim: booting (pid $!, log $ST/boot.log, launchd summary at the end of the boot's lifetime)"
 	[ $wait = 1 ] || return 0
+	io_watchdog $! &
+	local wd=$!
 	if python3 "$L/framecheck.py" wait home "${X86SIM_BOOT_WAIT:-300}" > "$ST/boot-wait.json"; then
+		kill $wd 2>/dev/null
 		echo "x86sim: home screen up ($(cat "$ST/boot-wait.json"))"
 	else
+		kill $wd 2>/dev/null
 		echo "x86sim: no home screen after ${X86SIM_BOOT_WAIT:-300} s ($(cat "$ST/boot-wait.json")); see $ST/boot.log" >&2
 		boot_snapshot
 		return 1
