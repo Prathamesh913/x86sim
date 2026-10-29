@@ -1,7 +1,7 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: shared cache landed (tests OK); boot-to-home works with SHARED=0 (372s). Shared boot still black/crash-loop \u2014 investigating.",
+  "now": "Stage 3: cgroup containment fixed (guests under MemoryMax). Shared-cache boot still open.",
   "metrics": [
     [
       "Boot to home (SHARED=0, cache 8 MB)",
@@ -14,9 +14,9 @@
       "SB crash-loop then idle black; sum RSS ~6.2 GB"
     ],
     [
-      "Memory at home (SHARED=0 sum RSS)",
-      "~9.1 GB",
-      "stage 2 cgroup said 5.4\u20135.9 GB (guests escape cgroup)"
+      "Cgroup containment",
+      "IN=all OUT=0",
+      "TZ+launch inside limited.sh; memory.current tracks guests; default MEM_MAX=10G"
     ],
     [
       "threads.sim new-Jit RSS",
@@ -58,7 +58,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Shared code cache per process committed (dynarmic b5134744); tests verify RSS win. Full boot reaches home with SHARED=0 in 372s; shared-cache boot still fails (BKS/objc crashes, black frame). TZ linked; process names fixed. Metal and daemon restore still open."
+      "detail": "Shared code cache committed; cgroup containment fixed (guests counted by MemoryMax, default 10G). Full boot with SHARED=0 OK; shared-cache boot still fails. Metal/daemon restore open."
     },
     {
       "name": "4. Near native",
@@ -68,11 +68,15 @@
   ],
   "issues": [
     "Shared-cache boot does not reach home (crash loop + black frame); SHARED=0 does",
-    "Guest RSS sum ~9 GB at home (cgroup still does not contain guests)",
-    "BKS brk#0 and libobjc/dyld_sim thunk SIGSEGVs under load",
-    "PosterBoard/dyld_sim SIGSEGV; guest TLS destructor gap; no Metal yet"
+    "BKS brk#0 and libobjc/dyld_sim thunk SIGSEGVs under shared cache",
+    "PosterBoard/dyld_sim SIGSEGV; guest TLS destructor gap; no Metal yet",
+    "Real SHARED=0 RSS ~9 GB; MEM_MAX raised to 10G until shared cache lands"
   ],
   "milestones": [
+    [
+      "05-cgroup-contained",
+      "Stage 3: all arm64 guests + darlingserver inside x86sim scope (OUT=0); MemoryMax applies"
+    ],
     [
       "04-noshared-home.png",
       "Stage 3 control: home with SHARED=0 / CODECACHE_MB=8 in 372s"

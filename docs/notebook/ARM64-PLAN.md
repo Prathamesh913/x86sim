@@ -428,6 +428,13 @@ still misbehaves. Default boot remains `X86CODE_A64_SHARED=0` until that is fixe
 - darling `af50adbba` — mldr `PR_SET_NAME` (darlingserver memory.c/h left dirty, separate item)
 - top `ef0ac83` / `9481b78` — submodule pointer, framecheck import fix, Stage 3 docs
 
+### Cgroup containment (MemoryMax)
+Root cause: `boot-a64.sh` ran `darling shell ln … localtime` *before* `limited.sh`, so darlingserver was born in the caller's cgroup (T3 ACP) and every guest forked from it escaped `MemoryMax`. Only the `timeout`+`darling` launcher stayed in `x86sim-*.scope` (`memory.current` ~400 kB while sum guest VmRSS was ~9 GB).
+
+Fix: TZ link + simhost/launchd start both run inside `limited.sh` via `cli/libexec/arm64/boot-inner.sh`; a join loop moves darlingserver and `X86CODE_A64` guests into the scope's `cgroup.procs`. `limited.sh` sets `Delegate=yes`. Default `X86SIM_MEM_MAX` for arm64 is **10G** (was 6G based on the false cgroup reading; real SHARED=0 home needs ~9 GB). Drop back toward 6–8G once shared cache works.
+
+Verification (SECS=55, A64_JOBS=min, SHARED=0, MEM_MAX=10G): darlingserver IN; guests IN=31 OUT=0; `memory.current`≈904 MB / `memory.max`=10 GB.
+
 ### Still open (stage 3 remainder / stage 4 prep)
 1. Fix shared-cache SpringBoard boot (linking/invalidation races or thunk-boundary crashes under contention).
 2. Then re-measure shared boot-to-home + memory; restore chronod/FileProvider if it fits.
