@@ -1,32 +1,32 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: narrowed shared-cache mutex (IR unlocked); re-measuring boot-to-home after SpringBoard hang on prior shared boot.",
+  "now": "Stage 3: shared3 boot (narrow lock, no PROFILE); SpringBoard crash-looping ~30s (objc/BKS); measuring toward home.",
   "metrics": [
     [
       "Boot to home screen",
       "~7 min (stage 2)",
-      "shared2 boot in progress (narrow lock)"
+      "shared3 in progress; SB restarts ~30s"
     ],
     [
-      "Memory (whole simulator)",
+      "Memory (guest sum RSS)",
       "5.4-5.9 GB (stage 2)",
-      "prior shared hang sum RSS ~7.5 GB (cgroup leak)"
+      "shared3 ~6.5\u20137.2 GB during translate"
     ],
     [
       "threads.sim new-Jit RSS",
       "shared +0\u20138 kB/thread",
-      "noshared +18\u201321 MB each (reconfirmed)"
+      "noshared +18\u201321 MB each"
     ],
     [
-      "objcswift totals",
-      "shared ~3.0 s / noshared ~3.1 s",
-      "results identical after lock narrow"
+      "objcswift",
+      "shared ~3.0 s \u2248 noshared ~3.1 s",
+      "identical results"
     ],
     [
       "Rendering",
       "software",
-      "Metal \u2192 Vulkan coming in stage 3"
+      "frame seq advances; still black"
     ],
     [
       "Device",
@@ -62,11 +62,10 @@
     }
   ],
   "issues": [
-    "Prior shared-cache boot: SpringBoard CPU froze ~36s (frame black); narrowed GetBlock mutex",
-    "Guest processes escape the 6 GB cgroup (sum RSS can exceed cap)",
-    "Some daemons left out to fit (widgets, Files, iCloud accounts)",
-    "Intermittent crashes in backboardd and SpringBoard (BRK/SIGSEGV at stub)",
-    "Black wallpaper until Metal; clock TZ linked but unverified at home"
+    "SpringBoard crash loop ~30s: BKS brk#0 and/or libobjc SIGSEGV at thunk boundary",
+    "backboardd intermittent SIGSEGV (dyld_sim / thunk)",
+    "Guest RSS escapes 6 GB cgroup (sum often 6.5\u20137.5 GB)",
+    "Widgets/Files/iCloud daemons still left out; no Metal yet"
   ],
   "milestones": [
     [

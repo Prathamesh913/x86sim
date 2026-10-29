@@ -380,3 +380,39 @@ set*GlobalConstants*/supportsFP8), NearbyInteraction and UniversalHID are not do
 Shared translations across a process's threads (one code cache + block map per process, per-thread register state):
 it is both the memory problem (per-thread duplicate code/metadata) and a large part of the speed problem (every new
 thread re-translates libdispatch/objc/CF). Then arm64 builds of iosurfaced/metalhostd and the 27.0 Metal selectors.
+
+## Stage 3 results (in progress, 2026-10-29)
+
+### Shared per-process translation cache
+Committed and pushed (dynarmic `b5134744` on designgears/x86code, top `ef0ac83`):
+- One `SharedCode` (BlockOfCode + block map + fast-dispatch) per process; per-thread `A64JitState` for tpidr/exclusives.
+- Atomic 16-byte fast-dispatch updates; `X86CODE_A64_SHARED=0` restores per-thread caches.
+- Shared cache size floor: `X86CODE_A64_CODECACHE_MB` values below 64 become 256 MB (shared code is never freed).
+- **Lock narrowing:** `GetBlock` translates IR unlocked; re-checks the map under the recursive mutex before `Emit`;
+  `invalidate_gen` discards stale IR after a concurrent Invalidate. Earlier boots held the mutex across Translate and
+  could stall other threads' LookupBlock.
+
+**Sanity (tests/arm64, via `tests/arm64/run.sh`):**
+| test | shared | noshared (`SHARED=0`) |
+| --- | --- | --- |
+| threads.sim | pass; new Jit +0–8 kB | pass; new Jit +18–21 MB |
+| objcswift.sim | ~3.0 s, identical results | ~3.1 s, identical results |
+
+### Boot-to-home measurement
+Stage 2 baseline: ~7 min, 5.4–5.9 GB, `X86CODE_A64_CODECACHE_MB=8`, per-thread caches.
+
+Shared-cache boots so far:
+- Prior shared boot (PROFILE=1): SpringBoard often hit `brk #0` in BackBoardServices near
+  `_BKSRestartActionOptionsDescription` (pc `0x1c8e3e420`) ~22 s after spawn → launchd restart loop; one instance
+  survived then CPU-froze with frame stuck black (suspected mutex stall → fixed by lock narrowing).
+- `shared3` boot (no PROFILE, narrow lock): in progress; measuring boot-to-home and sum RSS.
+
+### Small fixes landed
+- Time zone: `boot-a64.sh` links `/private/etc/localtime` to the host zone (America/Denver here).
+- Process names: Darling `mldr` `PR_SET_NAME` (darling `af50adbba`); launchd logs show SpringBoard/backboardd.
+- `framecheck.py`: only runs CLI `main` when `__name__ == "__main__"` (importing it used to `sys.exit` and kill waiters).
+
+### Still open
+- Reliable shared-cache boot-to-home number; restore chronod/FileProvider / normal cache if memory allows.
+- Persistent on-disk translation cache; boot-time profile of the ~7 min.
+- Crashes: BKS `brk #0` assertion; backboardd SIGSEGV (dyld_sim / thunk paths); guest TLS destructors; Metal.
