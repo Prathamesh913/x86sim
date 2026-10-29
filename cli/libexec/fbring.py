@@ -34,7 +34,9 @@ class Ring:
         except OSError:
             self.mm = None
             return False
-        if self.mm is not None and st.st_ino == self.ino and len(self.mm) == st.st_size:
+        # (device, inode): a new ring after a reboot can get the old one's inode number on a new tmpfs instance; keyed by
+        # inode alone, the futex stayed on the deleted ring's page and every reader spun at 100% CPU
+        if self.mm is not None and (st.st_dev, st.st_ino) == self.ino and len(self.mm) == st.st_size:
             return True
         if st.st_size < HDR:
             return False
@@ -43,7 +45,7 @@ class Ring:
             self.mm = mmap.mmap(fd, st.st_size, mmap.MAP_SHARED, mmap.PROT_READ)
         finally:
             os.close(fd)
-        self.ino = st.st_ino
+        self.ino = (st.st_dev, st.st_ino)
         return True
 
     def seq(self):

@@ -220,7 +220,9 @@ EXPORT void SFBSwapchainSwapSetCallback(SFBSwapchainRef sc, void* context, dispa
 // tools that read it. The header also carries present statistics (see struct ring_hdr).
 #define RING_SLOTS 4
 #define RING_HDR 4096
-struct ring_slot { _Atomic uint64_t seq; uint64_t time_ns; uint32_t width, height, stride, pad; };
+// x86Code: age_us = publish time - the present's SwapSubmit time (us): a long frame interval with a small age was late
+// from CA (the app/render server), a large age was held by the GPU or the refresh pacing (tests/perf.py scroll)
+struct ring_slot { _Atomic uint64_t seq; uint64_t time_ns; uint32_t width, height, stride, age_us; };
 struct ring_hdr {
 	uint32_t magic, version, nslots, slot_bytes, width, height, stride, pad0;
 	_Atomic uint64_t seq; _Atomic uint32_t latest; uint32_t pad1;
@@ -312,7 +314,7 @@ static void file_from_ring(void) {   // on dump_q: the ring's latest slot (only 
 // present statistics (published in the ring header)
 static uint64_t st_submits, st_superseded, st_watchdog, st_ready, st_wait_ns, st_wait_max_ns;
 
-static void dump(SFBSwapchainRef sc, IOSurfaceRef s) {   // on dump_q
+static void dump(SFBSwapchainRef sc, IOSurfaceRef s, uint64_t submit_ns) {   // on dump_q
 	uint64_t t0 = now_ns();
 	IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL);
 	uint32_t w = (uint32_t)IOSurfaceGetWidth(s), h = (uint32_t)IOSurfaceGetHeight(s), stride = (uint32_t)IOSurfaceGetBytesPerRow(s);
@@ -325,6 +327,7 @@ static void dump(SFBSwapchainRef sc, IOSurfaceRef s) {   // on dump_q
 		atomic_thread_fence(memory_order_release);
 		memcpy((char*)ring + RING_HDR + slot * ring_slot_bytes, IOSurfaceGetBaseAddress(s), (size_t)stride * h);
 		rs->time_ns = wall_ns(); rs->width = w; rs->height = h; rs->stride = stride;
+		{ uint64_t age = submit_ns ? (now_ns() - submit_ns) / 1000 : 0; rs->age_us = age > 0xffffffffu ? 0xffffffffu : (uint32_t)age; }
 		ring->width = w; ring->height = h; ring->stride = stride;
 		atomic_store_explicit(&rs->seq, ++ring_frames, memory_order_release);
 		atomic_store_explicit(&ring->latest, slot, memory_order_release);
@@ -387,22 +390,24 @@ static bool gpu_done_upto(uint64_t target) {
 // slower than the refresh are published at once. SIMFB_HZ (default 60) sets the rate, 0 publishes immediately.
 static IOSurfaceRef vs_s;
 static SFBSwapchainRef vs_sc;
+static uint64_t vs_t0ns;
 static bool vs_armed;
 static uint64_t vs_last_ns, vs_period_ns;
 static void vsync_fire(void) {   // on dump_q
 	pthread_mutex_lock(&gpu_lock);
-	IOSurfaceRef s = vs_s; SFBSwapchainRef sc = vs_sc;
+	IOSurfaceRef s = vs_s; SFBSwapchainRef sc = vs_sc; uint64_t t0ns = vs_t0ns;
 	vs_s = NULL; vs_sc = NULL; vs_armed = false;
 	uint64_t now = now_ns();
 	// keep the slot grid while frames keep coming; start a new one after a pause
 	vs_last_ns = (now - vs_last_ns < 2 * vs_period_ns) ? vs_last_ns + vs_period_ns : now;
 	if (vs_last_ns > now) vs_last_ns = now;
 	pthread_mutex_unlock(&gpu_lock);
-	if (s) { dump(sc, s); CFRelease(s); CFRelease(sc); }
+	if (s) { dump(sc, s, t0ns); CFRelease(s); CFRelease(sc); }
 }
 static void present_fire_locked(size_t i) {   // gpu_lock held: copy waiting present i (and drop it from the queue)
 	SFBSwapchainRef sc = present[i].sc;
 	IOSurfaceRef s = present[i].s;
+	uint64_t t0ns = present[i].t0ns;
 	uint64_t w = now_ns() - present[i].t0ns;
 	st_wait_ns += w; if (w > st_wait_max_ns) st_wait_max_ns = w;
 	memmove(&present[i], &present[i + 1], (npresent - i - 1) * sizeof(present[0]));
@@ -413,9 +418,9 @@ static void present_fire_locked(size_t i) {   // gpu_lock held: copy waiting pre
 		double f = hz ? atof(hz) : 60;
 		vs_period_ns = f > 0 ? (uint64_t)(1e9 / f) : 1;
 	}
-	if (vs_period_ns <= 1) { dispatch_async(dump_q, ^{ dump(sc, s); CFRelease(s); CFRelease(sc); }); return; }
+	if (vs_period_ns <= 1) { dispatch_async(dump_q, ^{ dump(sc, s, t0ns); CFRelease(s); CFRelease(sc); }); return; }
 	if (vs_s) { CFRelease(vs_s); CFRelease(vs_sc); st_superseded++; }
-	vs_s = s; vs_sc = sc;
+	vs_s = s; vs_sc = sc; vs_t0ns = t0ns;
 	if (!vs_armed) {
 		vs_armed = true;
 		uint64_t now = now_ns(), next = vs_last_ns + vs_period_ns;

@@ -138,6 +138,7 @@ class Frames:
     def __init__(self):
         self.r = fbring.Ring()
         self.t = {}
+        self.age = {}   # seq -> submit -> publish (ms), simfb's slot age_us (0 from an older simfb)
 
     def poll(self):
         mm = self.r.mm if self.r._open() else None
@@ -145,9 +146,10 @@ class Frames:
             return
         n = struct.unpack_from("<I", mm, 8)[0]
         for i in range(n):
-            seq, t = struct.unpack_from("<QQ", mm, 64 + 32 * i)
-            if seq:
-                self.t.setdefault(seq, t)
+            seq, t, age = struct.unpack_from("<QQ12xI", mm, 64 + 32 * i)
+            if seq and seq not in self.t:
+                self.t[seq] = t
+                self.age[seq] = age / 1000
 
     def seq(self):
         return self.r.seq()
@@ -177,6 +179,26 @@ def frame_stats(times_ns, label):
         label, len(t), len(m) / span, pct(m, .5), pct(m, .95), pct(m, .99), max(m) if m else 0, hitches)
 
 
+def hitch_report(f, gestures, limit=25):
+    """Each frame interval > limit ms while moving: when it fell (ms after touch-down or touch-up) and whether CA
+    submitted late (the late frame's submit -> publish age is small) or the frame was held after submit (GPU, pacing)."""
+    items = sorted(f.t.items(), key=lambda kv: kv[1])
+    out = []
+    for (q0, a), (q1, b) in zip(items, items[1:]):
+        d = (b - a) / 1e6
+        if not limit < d < 100:
+            continue
+        age = f.age.get(q1, 0)
+        phase = ""
+        for down, up in gestures:
+            if down <= b and (up is None or b <= up):
+                phase = "drag+%.0f" % ((b - down) / 1e6)
+            elif up is not None and up < b < up + 1.2e9:
+                phase = "fling+%.0f" % ((b - up) / 1e6)
+        out.append("%.0f ms (%s, %s, age %.1f)" % (d, phase or "?", "CA late" if age < d - 16.7 else "held", age))
+    return "    >%d ms intervals: %s" % (limit, "; ".join(out) if out else "none")
+
+
 def idle(secs=10):
     f = Frames()
     with CPU() as c:
@@ -191,6 +213,7 @@ def scroll(secs=8):
     f = Frames()
     lat = []
     allt = []
+    gestures = []
     end = time.monotonic() + secs
     with CPU() as c:
         k = 0
@@ -198,6 +221,7 @@ def scroll(secs=8):
             up = k % 2 == 0
             y0, y1 = (1900, 700) if up else (700, 1900)
             x = 590
+            gestures.append([time.time_ns(), None])
             simtouch.touch(s, "down", x, y0)
             f.run(0.03)
             steps = 20
@@ -210,6 +234,7 @@ def scroll(secs=8):
                 sent.append(tw)
                 f.run(0.008)
             simtouch.touch(s, "up", x, y1)
+            gestures[-1][1] = time.time_ns()
             f.run(0.9)
             # latency: first frame published after the first move
             newer = sorted(t for q, t in f.t.items() if q > base)
@@ -221,6 +246,7 @@ def scroll(secs=8):
     s.close()
     print("scroll %.0f s, %d gestures:" % (secs, k))
     print(frame_stats(f.t.values(), "frames"))
+    print(hitch_report(f, gestures))
     if lat:
         print("    input->frame latency ms (first move -> first new frame published): p50 %.1f max %.1f (%s)" % (
             pct(lat, .5), max(lat), " ".join("%.0f" % x for x in lat)))
