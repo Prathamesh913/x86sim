@@ -431,6 +431,45 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     if (const char *e = getenv("X86CODE_A64_EXE")) exe = e;
     else if (argc > 1) { exe = argv[1]; argv++; argc--; }
     else { fprintf(stderr, "usage: arm64host <arm64 iOS-simulator executable> [args...]\n"); return 2; }
+    // X86CODE_A64_SLIM_PARK=substr[,substr]: park matching executables before dyld/JIT so SpringBoard's
+    // RunningBoard assertions stay satisfied (process alive) without translating Spotlight/WidgetRenderer
+    // (~0.5–1.5 GB PSS each). Replaces the kill-every-5s slim-reaper thrash.
+    // Park list: env X86CODE_A64_SLIM_PARK, or file (launchd does not pass env to jobs).
+    // File default: /home/bobby/scratch/x86code/a64-slim-park (written by boot-a64.sh).
+    {
+        std::string park;
+        if (const char *e = getenv("X86CODE_A64_SLIM_PARK")) park = e;
+        if (park.empty()) {
+            if (FILE *f = fopen("/home/bobby/scratch/x86code/a64-slim-park", "r")) {
+                char buf[512];
+                if (fgets(buf, sizeof buf, f)) {
+                    park = buf;
+                    while (!park.empty() && (park.back() == '\n' || park.back() == '\r' || park.back() == ' '))
+                        park.pop_back();
+                }
+                fclose(f);
+            }
+        }
+        if (!park.empty()) {
+            const char *plist = park.c_str();
+            std::string list = std::string(",") + park + ",";
+            const char *base = strrchr(exe.c_str(), '/');
+            std::string leaf = base ? base + 1 : exe;
+            bool hit = list.find("," + leaf + ",") != std::string::npos;
+            if (!hit) {
+                for (size_t i = 0, j; !hit && plist[i]; i = j + 1) {
+                    j = i; while (plist[j] && plist[j] != ',') j++;
+                    std::string tok(plist + i, plist + j);
+                    if (!tok.empty() && exe.find(tok) != std::string::npos) hit = true;
+                    if (!plist[j]) break;
+                }
+            }
+            if (hit) {
+                fprintf(stderr, "arm64host: slim-park %s\n", exe.c_str());
+                for (;;) pause();
+            }
+        }
+    }
     // mldr hands over the Linux path; the guest (CFBundleGetMainBundle, _NSGetExecutablePath) needs the Darwin one
     if (!exe.empty() && exe[0] == '/' && exe.compare(0, 20, "/Volumes/SystemRoot/")) {
         int fd = d_open(exe.c_str(), O_RDONLY);

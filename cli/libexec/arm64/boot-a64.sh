@@ -35,7 +35,8 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
 # A64_JOBS=slim drops sleepd + usernotificationsd (~400-450 MB RSS each under the JIT); home + one app
 # does not need them. Default std keeps them for cold-boot stability (BKS XPC). A64_SLIM=1 (default)
-# still reaps Spotlight / WidgetRenderer / pkd after home.
+# parks Spotlight / WidgetRenderer before dyld (X86CODE_A64_SLIM_PARK) so SpringBoard's
+# RunningBoard assertions stay satisfied without paying JIT memory — replaces slim-reaper.sh.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination"
@@ -47,10 +48,60 @@ case "${A64_JOBS:-std}" in
 	*) JOBS="$MIN $UI" ;;
 esac
 X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
+# Strip home-screen / Today widgets so SpringBoard does not demand WidgetRenderer (even with park).
+# A64_KEEP_WIDGETS=1 leaves IconState alone (full profile / wallpaper experiments).
+if [ "${A64_KEEP_WIDGETS:-0}" != 1 ]; then
+	python3 - "$D/data/Library/SpringBoard" <<'PY'
+import os, sys, plistlib
+d = sys.argv[1]
+os.makedirs(d, exist_ok=True)
+
+def strip(obj):
+	if isinstance(obj, list):
+		out = []
+		for x in obj:
+			if isinstance(x, dict) and (x.get("elementType") == "widget" or "widgetIdentifier" in x):
+				continue
+			# drop emptied widget stacks / custom placeholders
+			if isinstance(x, dict) and x.get("iconType") == "custom" and not x.get("elements") and "widgetIdentifier" not in x and x.get("elementType") != "folder":
+				# keep if it still has meaningful keys beyond stack chrome
+				keys = set(x) - {"allowsExternalSuggestions","allowsSuggestions","displayIdentifier","elements","gridSize","iconType","uniqueIdentifier"}
+				if not keys:
+					continue
+			sx = strip(x)
+			if isinstance(sx, dict) and sx.get("elements") == [] and sx.get("iconType") == "custom":
+				continue
+			out.append(sx)
+		return out
+	if isinstance(obj, dict):
+		return {k: strip(v) for k, v in obj.items()}
+	return obj
+
+for name in ("IconState.plist", "DesiredIconState.plist"):
+	path = os.path.join(d, name)
+	if not os.path.exists(path):
+		continue
+	with open(path, "rb") as f:
+		data = plistlib.load(f)
+	with open(path, "wb") as f:
+		plistlib.dump(strip(data), f)
+	print(f"  stripped widgets from {name}", flush=True)
+PY
+fi
 UDID=$(sed -n 's/^SIMULATOR_UDID=//p' "$D/sim.env")
 L=$DPREFIX/private/var/tmp/com.apple.CoreSimulator.SimDevice.$UDID/launchd.log
 rm -f "$L" "$L".1 "$L".2
 R="/Volumes/SystemRoot$X86SIM_RUNTIME"
+# Default slim park list: path substrings matched in arm64host before dyld. A64_SLIM=0 clears it.
+if [ "${A64_SLIM:-1}" = 1 ] && [ "${A64_JOBS:-std}" != full ]; then
+	grep -q '^X86CODE_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null || \
+		echo 'X86CODE_A64_SLIM_PARK=Spotlight.app,WidgetRenderer' >>"$D/sim.env"
+	# File fallback: launchd does not pass sim.env into job environ; arm64host reads this path.
+	mkdir -p /home/bobby/scratch/x86code
+	echo 'Spotlight.app,WidgetRenderer' > /home/bobby/scratch/x86code/a64-slim-park
+else
+	rm -f /home/bobby/scratch/x86code/a64-slim-park
+fi
 ENVS=$(sed 's/^/"/; s/$/"/' "$D/sim.env" | tr '\n' ' ')
 ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86CODE_A64_TRACE=1)
 # stop only this prefix's container: its setuid launchers (timeout can't signal them) are found by their command
@@ -137,51 +188,39 @@ if [ -n "$SCOPE" ]; then
 	done
 	echo "guests IN=$in ($((in_rss/1024)) MB) OUT=$out ($((out_rss/1024)) MB)"
 fi
-# A64_SLIM=1 (default): reclaim Spotlight / WidgetRenderer / pkd once at end of boot window.
-# They are launched on demand by SpringBoard and cost ~0.5–1 GB RSS each under the JIT; not
-# needed for a static home screen + one app. A64_KEEP boots also start slim-reaper.sh to
-# re-kill them if SpringBoard respawns them.
+# A64_SLIM=1 (default): report parked helpers (X86CODE_A64_SLIM_PARK). The old slim-reaper.sh
+# kill loop is gone — SpringBoard holds RunningBoard assertions and relaunches within ~1 s,
+# which burned a core in xpcproxy_sim and never saved memory.
 if [ "${A64_SLIM:-1}" = 1 ]; then
-	echo "== slim reclaim"
-	before_rss=0
-	for p in /proc/[0-9]*; do
-		[ -r "$p/environ" ] || continue
-		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
-		r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); before_rss=$((before_rss + ${r:-0}))
-	done
-	killed=""
+	echo "== slim park status"
+	parked=""
 	for p in /proc/[0-9]*; do
 		pid=${p#/proc/}
 		[ -r "$p/comm" ] || continue
-		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
 		c=$(cat "$p/comm" 2>/dev/null) || continue
 		case "$c" in
 			Spotlight|WidgetRenderer_*|pkd)
-				r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null)
-				echo "  kill $c pid=$pid rss_mb=$((${r:-0}/1024))"
-				kill -KILL "$pid" 2>/dev/null || true
-				killed="$killed $c"
+				# launchd does not put SLIM_PARK in job environ; detect via pause + tiny RSS
+				w=$(cat "$p/wchan" 2>/dev/null || true)
+				r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); r=${r:-0}
+				case "$w" in
+					*pause*)
+						echo "  $c pid=$pid rss_mb=$((r/1024)) (parked)"
+						parked="$parked $c"
+						;;
+					*)
+						[ "$r" -lt 51200 ] && echo "  $c pid=$pid rss_mb=$((r/1024)) wchan=$w"
+						;;
+				esac
 				;;
 		esac
 	done
-	sleep 1
-	after_rss=0
-	for p in /proc/[0-9]*; do
-		[ -r "$p/environ" ] || continue
-		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
-		r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); after_rss=$((after_rss + ${r:-0}))
-	done
-	echo "  sum guest VmRSS $((before_rss/1024)) -> $((after_rss/1024)) MB (killed:$killed)"
-	if [ "${A64_KEEP:-0}" = 1 ]; then
-		mkdir -p "$ST"
-		# stop a previous reaper for this state dir
-		if [ -f "$ST/slim-reaper.pid" ]; then
-			old=$(cat "$ST/slim-reaper.pid" 2>/dev/null || true)
-			[ -n "$old" ] && [ -d "/proc/$old" ] && kill "$old" 2>/dev/null || true
-		fi
-		A64_DPREFIX="$DPREFIX" A64_STATE="$ST" setsid "$X/cli/libexec/arm64/slim-reaper.sh" >>"$ST/slim-reaper.log" 2>&1 &
-		echo $! >"$ST/slim-reaper.pid"
-		echo "  slim-reaper pid=$(cat "$ST/slim-reaper.pid")"
+	echo "  parked:$parked"
+	# Ensure no leftover reaper from an older boot
+	if [ -f "$ST/slim-reaper.pid" ]; then
+		old=$(cat "$ST/slim-reaper.pid" 2>/dev/null || true)
+		[ -n "$old" ] && [ -d "/proc/$old" ] && kill "$old" 2>/dev/null || true
+		rm -f "$ST/slim-reaper.pid"
 	fi
 fi
 # A64_KEEP=1: leave the device running (the container outlives the launcher's timeout); else stop this prefix
