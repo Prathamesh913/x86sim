@@ -8,4 +8,4 @@ R=/Volumes/SystemRoot${A64_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.0-24A434-arm64/
 export DPREFIX="${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}"
 bin=$(realpath "$1"); shift
 exec timeout "${TIMEOUT:-120}" "$X86SIM_DARLING" shell env DYLD_ROOT_PATH="$R" SIMULATOR_ROOT="$R" IPHONE_SIMULATOR_ROOT="$R" \
-	${X86CODE_A64_STATS:+X86CODE_A64_STATS=1} ${X86CODE_A64_TRACE:+X86CODE_A64_TRACE=1} "/Volumes/SystemRoot$bin" "$@" < /dev/null
+	${X86CODE_A64_STATS:+X86CODE_A64_STATS=1} ${X86CODE_A64_TRACE:+X86CODE_A64_TRACE=1} ${X86CODE_A64_STEP:+X86CODE_A64_STEP=1} "/Volumes/SystemRoot$bin" "$@" < /dev/null

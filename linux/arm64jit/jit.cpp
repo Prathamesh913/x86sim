@@ -28,6 +28,8 @@ GuestThread &GuestThread::self() {
     return *t_self;
 }
 
+GuestThread *GuestThread::current() { return t_self; }
+
 GuestThread::GuestThread() {
     // Darwin's TSD base is the gs base on x86_64 (slot 0 = pthread_self). Guest tpidrro_el0 reads see it.
     unsigned long gs = 0;
@@ -73,7 +75,9 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
     bool *outer_done = done;
     done = &finished;
     depth++;
-    while (!finished) jit->Run();
+    static const bool step = getenv("X86CODE_A64_STEP");  // debugging: one instruction per run, exact fault PCs
+    if (step) while (!finished) jit->Step();
+    else while (!finished) jit->Run();
     depth--;
     done = outer_done;
     NRet r{jit->GetRegister(0), jit->GetRegister(1), jit->GetVector(0)[0], jit->GetVector(1)[0]};
@@ -99,7 +103,17 @@ void GuestThread::CallSVC(uint32_t swi) {
 }
 
 void GuestThread::InterpreterFallback(u64 pc, size_t) {
-    die("unimplemented instruction %08x at %#lx", rd<uint32_t>(pc), (unsigned long)pc);
+    logf("unimplemented instruction %08x at %#lx lr %#lx sp %#lx x0 %#lx x16 %#lx x17 %#lx", rd<uint32_t>(pc), (unsigned long)pc,
+         (unsigned long)x(30), (unsigned long)sp(), (unsigned long)x(0), (unsigned long)x(16), (unsigned long)x(17));
+    if (FILE *m = fopen("/proc/self/maps", "r")) {
+        char line[512];
+        while (fgets(line, sizeof line, m)) {
+            unsigned long lo, hi;
+            if (sscanf(line, "%lx-%lx", &lo, &hi) == 2 && pc >= lo && pc < hi) logf("  in %s", line);
+        }
+        fclose(m);
+    }
+    abort();
 }
 
 void GuestThread::ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) {

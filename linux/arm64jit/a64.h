@@ -47,7 +47,8 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
 
     GuestThread();
     ~GuestThread() override;
-    static GuestThread &self();  // the calling native thread's GuestThread (created on first use)
+    static GuestThread &self();
+    static GuestThread *current();  // null if this thread has none  // the calling native thread's GuestThread (created on first use)
 
     // Runs guest code at pc with integer args x0..x7 and fp args d0..d7 until it returns to the exit stub.
     // Nested calls (from a native callee of guest code) save and restore the full guest state.

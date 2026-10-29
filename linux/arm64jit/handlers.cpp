@@ -4,8 +4,10 @@
 // native libraries were initialized by the host program's own libSystem).
 #include "a64.h"
 #include <cstdio>
+#include <atomic>
 #include <map>
 #include <unistd.h>
+#include <sys/mman.h>
 
 namespace a64 {
 
@@ -76,6 +78,110 @@ static void h_simple_vsprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x
 static void h_simple_esprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x(0), guest_format((const char *)t.x(2), (const u64 *)t.sp()))); }
 static void h_simple_vesprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x(0), guest_format((const char *)t.x(2), (const u64 *)t.x(3)))); }
 
+
+// ---- VM: guest pages are 16K, and libmalloc asks for aligned regions (mask); Darling's maps are 4K-aligned and
+// ignore the mask. An "anywhere" request reserves size + alignment, then maps fixed+overwrite at the aligned address.
+// Also: >8-argument functions pass their 9th+ int arguments packed by natural size on the Apple arm64 stack.
+constexpr int kAnywhere = 1, kOverwrite = 0x4000;
+// Guest memory also has to stay below 64 GB (iOS's user address space; xzone malloc's segment table covers no more):
+// requests are placed first-fit from a cursor in [12 GB, 63 GB), above the shared cache, below the commpage.
+static std::atomic<u64> g_low_cursor{0x300000000ull};
+constexpr u64 kLowEnd = 0xFC0000000ull;
+static u64 reserve_low(u64 len) {
+    for (int wrapped = 0; wrapped < 2; wrapped++) {
+        for (;;) {
+            u64 at = g_low_cursor.load();
+            if (at + len > kLowEnd) break;
+            void *p = mmap((void *)at, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+            if (p == (void *)at) { u64 want = at; g_low_cursor.compare_exchange_strong(want, at + len); return at; }
+            if (p != MAP_FAILED) munmap(p, len);
+            u64 want = at; g_low_cursor.compare_exchange_strong(want, at + 0x100000);  // taken: step 1 MB
+        }
+        g_low_cursor = 0x300000000ull;
+    }
+    return 0;
+}
+static u64 reserve_aligned(u64 size, u64 mask) {
+    u64 align = (mask | 0x3fff) + 1;
+    u64 r = reserve_low(size + align);
+    if (!r) return 0;
+    u64 a = (r + align - 1) & ~(align - 1);
+    if (a > r) munmap((void *)r, a - r);
+    u64 end = r + size + align, aend = a + ((size + 0x3fff) & ~0x3fffull);
+    if (end > aend) munmap((void *)aend, end - aend);
+    return a;
+}
+// kern_return_t f(task, addr *, size, mask, flags, ...rest) with rest as 64-bit native args
+static void vm_map_like(GuestThread &t, u32 i, u64 *ints, int addr_arg, int size_arg, int mask_arg, int flags_arg) {
+    u64 *addrp = (u64 *)ints[addr_arg];
+    u64 fps[8] = {}; NRet r;
+    if ((ints[flags_arg] & kAnywhere) && addrp) {
+        u64 a = reserve_aligned(ints[size_arg], mask_arg >= 0 ? ints[mask_arg] : 0);
+        if (a) {
+            u64 saved = *addrp; *addrp = a;
+            u64 f = ints[flags_arg]; ints[flags_arg] = (f & ~(u64)kAnywhere) | kOverwrite;
+            a64_ncall(g_thunks[i].native, ints, fps, &r);
+            if ((int)r.rax == 0) { t.set_x(0, 0); return; }
+            munmap((void *)a, (ints[size_arg] + 0x3fff) & ~0x3fffull);
+            *addrp = saved; ints[flags_arg] = f;
+        }
+    }
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    t.set_x(0, (u32)r.rax);
+}
+static void load_regs(GuestThread &t, u64 *ints) { for (int k = 0; k < 16; k++) ints[k] = k < 8 ? t.x(k) : 0; }
+// (mach_)vm_map(task, addr*, size, mask, flags, object, offset, copy | int cur, int max, uint inherit)
+static void h_vm_map(GuestThread &t, u32 i) {
+    u64 ints[16]; load_regs(t, ints);
+    u64 sp = t.sp();
+    ints[8] = GuestThread::rd<int32_t>(sp); ints[9] = GuestThread::rd<int32_t>(sp + 4); ints[10] = GuestThread::rd<uint32_t>(sp + 8);
+    vm_map_like(t, i, ints, 1, 2, 3, 4);
+}
+// (mach_)vm_remap[_new](task, addr*, size, mask, flags, src_task, src_addr, copy | cur*, max*, uint inherit)
+static void h_vm_remap(GuestThread &t, u32 i) {
+    u64 ints[16]; load_regs(t, ints);
+    u64 sp = t.sp();
+    ints[8] = GuestThread::rd<u64>(sp); ints[9] = GuestThread::rd<u64>(sp + 8); ints[10] = GuestThread::rd<uint32_t>(sp + 16);
+    vm_map_like(t, i, ints, 1, 2, 3, 4);
+}
+// (mach_)vm_allocate(task, addr*, size, flags)
+static void h_vm_allocate(GuestThread &t, u32 i) {
+    u64 ints[16]; load_regs(t, ints);
+    vm_map_like(t, i, ints, 1, 2, -1, 3);
+}
+// mmap(addr, len, prot, flags, fd, off): non-fixed maps 16K-aligned
+static void h_mmap(GuestThread &t, u32 i) {
+    u64 ints[16]; load_regs(t, ints);
+    u64 fps[8] = {}; NRet r;
+    constexpr u64 kFixed = 0x10;
+    if (!(ints[3] & kFixed) && ints[1]) {
+        if (u64 a = reserve_aligned(ints[1], 0)) {
+            u64 save0 = ints[0], save3 = ints[3];
+            ints[0] = a; ints[3] |= kFixed;
+            a64_ncall(g_thunks[i].native, ints, fps, &r);
+            if (r.rax == a) { t.set_x(0, a); return; }
+            munmap((void *)a, (ints[1] + 0x3fff) & ~0x3fffull);
+            ints[0] = save0; ints[3] = save3;
+        }
+    }
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    t.set_x(0, r.rax);
+}
+// mach_msg_overwrite(msg, option, send_size, rcv_size, rcv_name, timeout, notify, rcv_msg | uint rcv_limit)
+static void h_msg_overwrite(GuestThread &t, u32 i) {
+    u64 ints[16]; load_regs(t, ints);
+    ints[8] = GuestThread::rd<uint32_t>(t.sp());
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    t.set_x(0, (u32)r.rax);
+}
+
+void print_stats();
+static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends here
+    print_stats();
+    ((void (*)(int))g_thunks[i].native)((int)t.x(0));
+}
+
 Handler special_handler(const std::string &n, int *nfixed, const char **native_name) {
     static const std::map<std::string, int> variadic = {
         {"_open", 2}, {"_open$NOCANCEL", 2}, {"_openat", 3}, {"_openat$NOCANCEL", 3}, {"_fcntl", 2}, {"_fcntl$NOCANCEL", 2},
@@ -111,6 +217,10 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_pthread_workqueue_setup", h_workqueue_setup}, {"_pthread_introspection_hook_install", h_introspection_hook},
         {"_mach_msg_server", h_callbacks<0>}, {"_mach_msg_server_once", h_callbacks<0>},
         {"_mach_msg_server_importance", h_callbacks<0>}, {"___sigaction", h_sigaction},
+        {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
+        {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
+        {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite},
+        {"__exit", h_exit},
         {"__simple_dprintf", h_simple_dprintf}, {"__simple_vdprintf", h_simple_vdprintf},
         {"__simple_sprintf", h_simple_sprintf}, {"__simple_vsprintf", h_simple_vsprintf},
         {"__simple_esprintf", h_simple_esprintf}, {"__simple_vesprintf", h_simple_vesprintf},

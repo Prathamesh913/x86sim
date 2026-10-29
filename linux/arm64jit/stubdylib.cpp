@@ -192,10 +192,12 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     constexpr u64 kPage = 0x4000, kCodeStart = 0x1000;
     std::vector<uint32_t> code;
     std::vector<Entry> entries;
+    struct Data { std::string name; const void *src; bool ours; };
+    std::vector<Data> data;
     int nfunc = 0, ndata = 0, nmissing = 0;
     for (const auto &name : exports) {
         if (auto it = guest_data().find(name); it != guest_data().end()) {
-            entries.push_back({name, EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE, (u64)it->second}); ndata++; continue;
+            data.push_back({name, it->second, true}); ndata++; continue;
         }
         u64 at = kCodeStart + code.size() * 4;
         if (is_guest_code_export(name)) {
@@ -207,7 +209,7 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
         Handler h = special_handler(name, &nfixed, &native_name);
         const void *native = dsym(native_name ? native_name : name.c_str() + 1);
         if (native && !h && !native_is_code(native)) {
-            entries.push_back({name, EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE, (u64)native}); ndata++; continue;
+            data.push_back({name, native, false}); ndata++; continue;
         }
         if (!h) h = native ? h_generic : h_missing;
         if (!native && h != h_missing && (h == h_generic || h == h_generic_bool || h == h_variadic)) h = h_missing;
@@ -217,13 +219,34 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
         emit_stub(&code[code.size() - 2], idx);
         entries.push_back({name, 0, at}); nfunc++;
     }
-    std::vector<uint8_t> trie = write_trie(entries);
+    // Data exports are copies in our __DATA (dyld adds the image base even to absolute exports of a dylib that
+    // overrides cache clients' binds). A Darling variable's size is the gap to the next exported data symbol (<= 4K);
+    // values are snapshotted now (constants such as mach_task_self_, NDR_record; vm_page_size is our own 16K).
     u64 text_size = (kCodeStart + code.size() * 4 + kPage - 1) & ~(kPage - 1);
-    u64 le_off = text_size;
+    std::vector<const uint8_t *> starts;
+    for (auto &d : data) starts.push_back((const uint8_t *)d.src);
+    std::sort(starts.begin(), starts.end());
+    std::vector<uint8_t> dseg;
+    for (auto &d : data) {
+        size_t size = 4096;
+        auto nx = std::upper_bound(starts.begin(), starts.end(), (const uint8_t *)d.src);
+        if (nx != starts.end() && (size_t)(*nx - (const uint8_t *)d.src) < size) size = *nx - (const uint8_t *)d.src;
+        if (d.ours) size = d.name == "____kernelVersionString" ? strlen((const char *)d.src) + 1 : 8;
+        while (dseg.size() % 16) dseg.push_back(0);
+        entries.push_back({d.name, 0, text_size + dseg.size()});
+        // Tables of per-library state start empty in the guest (its own libc/libdispatch fill them through the
+        // native _os_alloc_once); copying Darling's would hand the guest the host libraries' state.
+        if (d.name == "__os_alloc_once_table" || d.name == "_port_obj_table") dseg.insert(dseg.end(), size, 0);
+        else dseg.insert(dseg.end(), (const uint8_t *)d.src, (const uint8_t *)d.src + size);
+    }
+    u64 data_size = (dseg.size() + kPage - 1) & ~(kPage - 1);
+    if (!data_size) data_size = kPage;
+    std::vector<uint8_t> trie = write_trie(entries);
+    u64 le_off = text_size + data_size;
     u64 str_off = le_off + trie.size();
     u64 le_size = trie.size() + 8;
 
-    std::vector<uint8_t> f(text_size + le_size, 0);
+    std::vector<uint8_t> f(le_off + le_size, 0);
     auto *mh = (mach_header_64 *)f.data();
     mh->magic = MH_MAGIC_64; mh->cputype = CPU_TYPE_ARM64; mh->cpusubtype = 0; mh->filetype = MH_DYLIB;
     mh->flags = MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL | MH_NO_REEXPORTED_DYLIBS;
@@ -236,6 +259,8 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     text.sect.flags = S_REGULAR | S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS;
     add(&text, sizeof text);
     segment_command_64 le{LC_SEGMENT_64, sizeof le, "__LINKEDIT", le_off, (le_size + kPage - 1) & ~(kPage - 1), le_off, le_size, VM_PROT_READ, VM_PROT_READ, 0, 0};
+    segment_command_64 dsg{LC_SEGMENT_64, sizeof dsg, "__DATA", text_size, data_size, text_size, data_size, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, 0, 0};
+    add(&dsg, sizeof dsg);
     add(&le, sizeof le);
     std::vector<uint8_t> id(sizeof(dylib_command) + ((install.size() + 8) & ~7ull), 0);
     auto *dc = (dylib_command *)id.data();
@@ -257,6 +282,7 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     add(&bv, sizeof bv);
     if (sizeof *mh + mh->sizeofcmds > kCodeStart) die("stub dylib header overflow");
     memcpy(f.data() + kCodeStart, code.data(), code.size() * 4);
+    if (!dseg.empty()) memcpy(f.data() + text_size, dseg.data(), dseg.size());
     memcpy(f.data() + le_off, trie.data(), trie.size());
     f[str_off] = ' ';
 

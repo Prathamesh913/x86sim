@@ -13,6 +13,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <signal.h>
+#include <ucontext.h>
 
 namespace a64 {
 
@@ -28,6 +30,8 @@ struct Mapped { u64 mh = 0, slide = 0, entry = 0; };
 
 static Mapped map_macho(const std::string &path, bool want_unixthread) {
     int fd = d_open(path.c_str(), O_RDONLY);
+    if (fd < 0 && path[0] == '/' && path.compare(0, 20, "/Volumes/SystemRoot/"))  // a Linux path from mldr
+        fd = d_open(("/Volumes/SystemRoot" + path).c_str(), O_RDONLY);
     if (fd < 0) die("cannot open %s (errno %d)", path.c_str(), *g_darwin->error());
     struct stat st; fstat(fd, &st);
     auto *file = (const uint8_t *)mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -185,7 +189,29 @@ static u64 build_syscall_helpers() {
     return (u64)vt;
 }
 
-static void print_stats() {
+// Faults that dynarmic's fastmem handler doesn't recover: report the guest state (last block entry) before Darling's
+// handler reports the host side.
+static struct sigaction g_old_segv, g_old_bus;
+static void on_fault(int sig, siginfo_t *si, void *uc) {
+    auto *ctx = (ucontext_t *)uc;
+    char buf[256];
+    int n = snprintf(buf, sizeof buf, "arm64host: signal %d addr %p rip %#llx\n", sig, si->si_addr, (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP]);
+    if (write(2, buf, n) < 0) {}
+    if (GuestThread *t = GuestThread::current())
+        logf("guest pc %#lx lr %#lx sp %#lx x0 %#lx x1 %#lx x8 %#lx", (unsigned long)t->jit->GetPC(), (unsigned long)t->x(30),
+             (unsigned long)t->sp(), (unsigned long)t->x(0), (unsigned long)t->x(1), (unsigned long)t->x(8));
+    struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;
+    if (old->sa_flags & SA_SIGINFO) old->sa_sigaction(sig, si, uc);
+    else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) old->sa_handler(sig);
+    else { signal(sig, SIG_DFL); raise(sig); }
+}
+static void install_fault_report() {
+    struct sigaction sa{};
+    sa.sa_sigaction = on_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, &g_old_segv); sigaction(SIGBUS, &sa, &g_old_bus);
+}
+
+void print_stats() {
     if (getenv("X86CODE_A64_STATS")) logf("exit after %.1f ms", ms_since(g_t0));
 }
 
@@ -260,10 +286,9 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     memcpy(kargs, ka.data(), ka.size() * 8);
     u64 gargv = (u64)&kargs[2], genvp = (u64)&kargs[env_at], gapple = (u64)&kargs[apple_at];
 
-    static auto *datexit = (int (*)(void (*)()))dsym("atexit");
-    if (datexit) datexit(print_stats);
 
     GuestThread &t = GuestThread::self();
+    install_fault_report();
     double t_setup = ms_since(g_t0);
     u64 glue = 0;
     u64 args[9] = {(u64)argc, gargv, genvp, gapple, main_exe.mh, dyld.mh, dyld.slide, helpers, (u64)&glue};
