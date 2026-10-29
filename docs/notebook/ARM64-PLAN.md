@@ -492,8 +492,42 @@ Screenshot: `docs/screens/arm64/06-shared-home.png`. Bisect knobs: `FASTDISPATCH
 VmRSS ≈9.4 GB (PSS/cgroup ≈4.6 GB); 6–8G would OOM the sum-RSS guests. PosterBoard / chronod /
 FileProvider still deferred (+several GB).
 
+### Slim reclaim + cold-boot stabilizers (2026-10-29 evening)
+After SHARED=1 home, Stage 3 focused on memory attribution and process inventory.
+
+**smaps attribution (baseline at home, before reaper):** SpringBoard PSS ≈1.28 GB dominated by
+`anon_host` (~585 MB), `dyld_TEXT` (~184 MB), `jit_code` (~158 MB), `host_heap` (~140 MB).
+Spotlight alone was +630 MB PSS / ~1.0 GB RSS; WidgetRenderer similar. sleepd and
+usernotificationsd ~400–450 MB RSS each under the JIT.
+
+**Fixes landed:**
+- `mksimdevice.py`: `com.apple.sleepd` in EAGER (slim-by-default was stripping RunAtLoad; under
+  on-demand-only `launchd_sim` sleepd never started and cold boots hit BKS/XPC asserts). Optional
+  `X86CODE_DELAY_SB=1` drops SpringBoard RunAtLoad.
+- `boot-a64.sh`: `A64_JOBS=slim` (UI without sleepd/usernotificationsd); default `A64_SLIM=1`
+  kills Spotlight / WidgetRenderer / pkd once after boot; `A64_KEEP` starts `slim-reaper.sh`
+  (5 s interval — they grow to 400–600 MB RSS in ~15 s).
+- `framecheck.py`: leading `.ring` path so monitors read `/dev/shm/x86code-a64-simfb.ring`
+  (default fbring path is the x86 ring; that made a64 boots look stuck on a stale frame).
+- `host.cpp`: SIGABRT breadcrumb → `/home/bobby/scratch/x86code/abrt-PID-TID.txt` (RIP + maps +
+  guest TLS present/absent). Helps when per-pid logs truncate.
+- `icstress.sim`: built and **pass** (`hits 48000 iallus 240`); binary kept in
+  `scratch/x86code/arm64/bins/` (source already in tree).
+
+**After slim (std jobs + reaper, live boot-abrt):** PSS ≈3.7 GB / cgroup ≈4.4 GB / sum VmRSS ≈7.4 GB.
+Top: SB 1.39 / BB 0.38 / iconservices 0.29 / sleepd 0.19 / usernotificationsd 0.18. Screenshot:
+`docs/screens/arm64/07-stage3-home.png` (bright≈0.21, dark≈0.74, home_exit=0). simview on
+`SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring` DISPLAY=:0.
+
+`A64_JOBS=slim` would drop sleepd+usernotificationsd (~800 MB RSS more); not the default yet
+(cold-boot BKS stability). Goal remains ~1 GB real for one app — SB alone is still ~1.4 GB PSS
+(`anon_host` dominant; code-cache / guest heap work next).
+
 ### Still open (stage 3 remainder / stage 4 prep)
 1. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
-2. Persistent on-disk translation cache; trim the early shared boot spin (first ~40 s still high lookups).
-3. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
-4. Build `icstress.sim` on the Mac and land it next to sharestress.
+2. Stop Spotlight/WidgetRenderer respawn (unload/deny) instead of reaper thrash; try `A64_JOBS=slim`
+   as default once cold-boot without sleepd is proven.
+3. Shrink SB `anon_host` / JIT code cache toward the ~1 GB whole-sim goal.
+4. Persistent on-disk translation cache; trim the early shared boot spin (first ~40 s still high lookups).
+5. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
+6. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.

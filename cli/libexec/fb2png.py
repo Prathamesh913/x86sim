@@ -9,12 +9,19 @@ import x86config  # noqa: E402
 import fbring
 
 src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(x86config.data(), "framebuffer.bgra")
-dst = sys.argv[2] if len(sys.argv) > 2 else "/tmp/frame.png"
+dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.environ.get("X86SIM_SCRATCH", "/home/bobby/scratch/x86code"), "frame.png")
 div = int(sys.argv[3]) if len(sys.argv) > 3 else 1
-# x86Code: framebuffer.bgra is only rewritten every 2 s now; the ring has every frame
-f = fbring.latest_frame() if src == "ring" or os.path.basename(src) == "framebuffer.bgra" else None
+# x86Code: framebuffer.bgra is only rewritten every 2 s now; the ring has every frame.
+# Arm64 boots: pass /dev/shm/x86code-a64-simfb.ring (or set SIMFB_RING_LINUX and use "ring").
+if src.endswith(".ring"):
+    f = fbring.Ring(src).latest()
+elif src == "ring" or os.path.basename(src) == "framebuffer.bgra":
+    f = fbring.latest_frame()
+else:
+    f = None
 if f:
-    w, h, stride, seq, px = f
+    # Ring.latest → (w,h,stride,seq,t,px); latest_frame → (w,h,stride,seq,px)
+    w, h, stride, seq, px = (f[0], f[1], f[2], f[3], f[5]) if len(f) == 6 else (*f[:4], f[4])
 else:
     data = open(src, "rb").read()
     w, h, stride, seq = struct.unpack("<4I", data[:16])

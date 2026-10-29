@@ -1,17 +1,37 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: SHARED=1 home in 186s (ClearCache + BlockLinking). Sim at home. MEM_MAX stays 12G (sum RSS ~9.4 GB).",
+  "now": "Stage 3: SHARED=1 home + slim reclaim. Monitors must use a64 ring. PSS\u22483.7\u20134.5 GB; goal ~1 GB still open.",
   "metrics": [
+    [
+      "Boot to home (SHARED=1 + slim reclaim)",
+      "home OK",
+      "seq advancing; bright\u22480.21; 07-stage3-home.png; framecheck needs /dev/shm/x86code-a64-simfb.ring"
+    ],
+    [
+      "PSS after slim (std jobs + reaper)",
+      "~3.7 GB",
+      "SB 1.39 / BB 0.38 / iconservices 0.29 / sleepd 0.19 / usernotif 0.18; cgroup\u22484.4 GB; WR/Spotlight reaped"
+    ],
+    [
+      "smaps attribution (SB dominant)",
+      "anon_host",
+      "SB: anon_host PSS\u2248585 MB, jit_code\u2248158, dyld_TEXT\u2248184, host_heap\u2248140; Spotlight was +630 MB PSS before reaper"
+    ],
+    [
+      "icstress.sim",
+      "pass",
+      "hits 48000 iallus 240; binary in scratch arm64/bins (source tests/arm64/icstress.c)"
+    ],
     [
       "Boot to home (SHARED=1 + LINK)",
       "186 s",
-      "sum VmRSS 8.4→9.4 GB; PSS≈4.6 GB = memory.current; OUT=0; 06-shared-home.png"
+      "sum VmRSS 8.4\u21929.4 GB; PSS\u22484.6 GB = memory.current; OUT=0; 06-shared-home.png"
     ],
     [
       "Boot to home (SHARED=0, contained)",
-      "181–199 s",
-      "sum VmRSS ~8.4–8.6 GB; OUT=0; 05-noshared-home-contained.png"
+      "181\u2013199 s",
+      "sum VmRSS ~8.4\u20138.6 GB; OUT=0; 05-noshared-home-contained.png"
     ],
     [
       "Cgroup containment",
@@ -20,18 +40,18 @@
     ],
     [
       "threads.sim new-Jit RSS",
-      "shared +0–8 kB",
-      "noshared +18–21 MB"
+      "shared +0\u20138 kB",
+      "noshared +18\u201321 MB"
     ],
     [
       "objcswift",
-      "shared ≈ noshared ~3 s",
+      "shared \u2248 noshared ~3 s",
       "identical results"
     ],
     [
       "Rendering",
       "software home (black wallpaper)",
-      "bright≈0.19–0.21"
+      "bright\u22480.19\u20130.21"
     ],
     [
       "Device",
@@ -53,12 +73,12 @@
     {
       "name": "2. Boot to the home screen",
       "status": "done",
-      "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+      "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
     },
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Shared per-process cache boots to home (ClearCache + BlockLinking). Memory still ~9 GB sum RSS. PosterBoard/daemons/Metal next."
+      "detail": "SHARED=1 home (ClearCache+BlockLinking). Slim reclaim + A64_JOBS=slim. PSS\u22483.7 GB after reaper (SB still ~1.4 GB). PosterBoard/Metal/1GB goal open."
     },
     {
       "name": "4. Near native",
@@ -67,11 +87,17 @@
     }
   ],
   "issues": [
+    "Goal ~1 GB real for one app; still ~3.7\u20134.5 GB PSS (SB alone ~1.4 GB; anon_host dominant)",
+    "Spotlight/WidgetRenderer respawn thrash \u2014 slim-reaper kills every 5s; need unload/deny to stop spawn",
     "PosterBoard extensions RSS bomb; chronod/FileProvider still deferred",
-    "Early shared boot still spins hard before linking pays off (~40 s)",
-    "Guest TLS destructor gap; no Metal yet; icstress.sim needs Mac build"
+    "X86CODE_A64_PROFILE/MEMLOG correlated with early launchd_sim SIGABRT",
+    "Guest TLS destructor gap; no Metal yet on arm64 path"
   ],
   "milestones": [
+    [
+      "07-stage3-home.png",
+      "Stage 3: SHARED=1 home + slim reclaim (PSS\u22483.7 GB, a64 ring monitors, icstress pass)"
+    ],
     [
       "06-shared-home.png",
       "Stage 3: SHARED=1 + BlockLinking home in 186s (sum RSS 8.4 GB, PSS 4.6 GB, no BKS)"
