@@ -77,3 +77,11 @@ required parts.
 - The workloop interposer (`host/simshim/diag/workloop_shim.c`) predates kernel workloops in Darling; it is kept for
   reference and not used.
 - simfb's fixed 40 ms delay before copying a frame was replaced by waiting for GPU completion.
+
+## Backlog (not started or unfinished)
+
+- Audio: host/simaudio (in-process HAL stand-in) + cli/libexec/simaudio.py (PipeWire), opt-in with
+  `X86CODE_AUDIO=1`; AVAudioEngine fails at the output unit's initialize (FINDINGS 3.18). A faithful version would
+  answer coreaudiod's MIG protocol on `com.apple.audio.audiohald`.
+- Clipboard sync (`x86sim pbcopy/pbpaste`, Linux clipboard <-> pasted), rotation (`x86sim rotate`), software
+  keyboard toggle, Swift expressions in LLDB (swift.org toolchain's lldb): not started.

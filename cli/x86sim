@@ -145,6 +145,8 @@ cmd_shutdown() {
 	pkill -x mtlvk 2>/dev/null
 	if alive_pidfile "$ST/mdns.pid"; then kill "$(cat "$ST/mdns.pid")"; fi
 	rm -f "$ST/mdns.pid"
+	if alive_pidfile "$ST/simaudio.pid"; then kill "$(cat "$ST/simaudio.pid")"; fi
+	rm -f "$ST/simaudio.pid"
 	echo "x86sim: stopped"
 }
 
@@ -154,6 +156,7 @@ cmd_status() {
 	echo "launchd_sim processes: $n"
 	pgrep -x mtlvk > /dev/null && echo "mtlvk: running" || echo "mtlvk: stopped"
 	alive_pidfile "$ST/mdns.pid" && echo "mdnsresponder: running" || echo "mdnsresponder: stopped"
+	alive_pidfile "$ST/simaudio.pid" && echo "audio: running ($ST/simaudio.log)" || echo "audio: stopped"
 	alive_pidfile "$ST/view.pid" && echo "viewer: running (pid $(cat "$ST/view.pid"))" || echo "viewer: not started by x86sim"
 	"$L/progress_tunnel.sh" status
 	python3 "$L/framecheck.py" home 2>/dev/null | sed 's/^/frame: /'

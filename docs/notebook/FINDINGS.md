@@ -2733,3 +2733,31 @@ Darling changes in this spike (darlingserver): `task_info` on TASK_NULL.
 Other changes: rundev (nanoregistryd), host/openurl (location set/start/scenarios, xpcping), cli/libexec/simctl.py
 (location commands, --console-pty), host/fseventsd (history), tests/devtools.sh (location, console-pty, LLDB
 expressions), tests/fsevhist.sh + tests/probes/fsevhist, tests/soak.sh, DevTools (stdout tty line), screens 101-103.
+
+## Spike 3.18 — Audio (in progress), then performance (2026-10-28)
+
+### How the simulator's audio reaches a Mac
+The simulator's CoreAudio is only a HAL client. `HALC_ProxySystem::HALC_ProxySystem` calls
+`bootstrap_look_up2(bootstrap_port, "com.apple.audio.audiohald", ..., 8)`; launchd_sim forwards the name to the
+Mac's bootstrap, so every device, IOProc and IO cycle belongs to the Mac's coreaudiod (MIG protocol, private).
+`AudioHardwareStartServer` in the simulator's CoreAudio is an empty function (push rbp; pop rbp; ret). AudioToolbox
+reaches the HAL only through 18 public functions (AudioObject*, AudioDevice* IOProc/start/stop/time, aggregate
+devices; its bind table), and `SIMULATOR_AUDIO_SETTINGS_PATH` is only for volume/mute
+("CoreSimulator failed to supply SIMULATOR_AUDIO_SETTINGS_PATH; volume and mute will not work").
+
+### Stand-in (work in progress)
+- host/simaudio/libsimaudio.dylib (inserted into every process, flat namespace + weak references so processes
+  without CoreAudio are untouched) interposes the public HAL API and presents an output device (stereo float32,
+  48/44.1 kHz) and an input device (mono), with an IO thread that runs the IOProcs on a clock and streams PCM over
+  `$X86CODE_AUDIO_SOCKET` to cli/libexec/simaudio.py, which plays with `pw-cat --playback` (one PipeWire stream per
+  simulator stream, volume X86SIM_AUDIO_VOLUME=0.5) and records with `pw-cat --record`. rundev starts it.
+- tests/apps/AudioDemo (440 Hz tone through AVAudioEngine, microphone level; `-tone S`, `-mic S`).
+- State: AVAudioSession activates and reports our device (48000 Hz, 2 ch, route "Speaker"), but
+  `AVAudioEngine.start` fails in `PerformCommand(*outputNode, kAUInitialize)` with -10851
+  (kAudioUnitErr_InvalidPropertyValue) before any IOProc is created. The only property still unanswered is `acom`
+  (device, global). Next: log AURemoteIO's HAL calls in order (X86CODE_AUDIO_LOG=1 logs unknown properties only) and
+  find which answer it rejects (likely the stream/format or channel-layout answers, or a property it reads through
+  AudioObjectGetPropertyDataSize first).
+- Opt-in for now: `X86CODE_AUDIO=1 x86sim boot`.
+- Paused at the user's request (performance first). Clipboard sync, rotation/software keyboard and Swift LLDB
+  expressions were not started: backlog.

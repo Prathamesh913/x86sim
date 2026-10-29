@@ -36,6 +36,7 @@ for app in $(cat apps.txt); do
 		MetalDemo) c=6A1B9A; l=M ;;
 		SpriteDemo) c=F57C00; l=P ;;
 		DevTools) c=2E7D32; l=D ;;
+		AudioDemo) c=C2185B; l=A ;;
 		*) c=444444; l=A ;;
 	esac
 	./mkicon "$b/AppIcon60x60@2x.png" 120 $l $c
@@ -72,7 +73,8 @@ echo "$APPS" | tr ' ' '\n' > "$W/apps.txt"
 # the sources: tests/apps/<Name> (Swift + Info.plist) and the icon helper; nothing else is sent
 tar cf - -C "$W" remote.sh apps.txt -C "$X/tests/apps" icon-gen.swift $APPS |
 	mac "rm -rf /tmp/x86apps && mkdir -p /tmp/x86apps && cd /tmp/x86apps && tar xf - && sh ./remote.sh" > "$W/out.tar"
-rm -rf "$X/tests/apps/build"
 mkdir -p "$X/tests/apps/build"
+# x86Code: only the apps built now are replaced (building one app keeps the others)
+for n in $APPS; do rm -rf "$X/tests/apps/build/$n.app"; done
 tar xf "$W/out.tar" -C "$X/tests/apps/build"
 ls -ld "$X"/tests/apps/build/*.app

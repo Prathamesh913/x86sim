@@ -76,6 +76,13 @@ if [ "${X86CODE_MDNS:-1}" != 0 ]; then
 	setsid python3 $X/linux/mdnsd/mdnsresponder.py $ST/mDNSResponder > $ST/mdnsresponder.log 2>&1 &
 	echo $! > $ST/mdns.pid
 fi
+# x86Code: the host side of the simulator's audio (the Mac's coreaudiod): host/simaudio/libsimaudio.dylib in each
+# simulator process streams PCM to cli/libexec/simaudio.py, which plays it on PipeWire (pw-cat). opt-in (X86CODE_AUDIO=1) until playback works (FINDINGS 3.18).
+if [ "${X86CODE_AUDIO:-0}" != 0 ]; then
+	[ -f $ST/simaudio.pid ] && kill $(cat $ST/simaudio.pid) 2>/dev/null
+	setsid python3 $X/cli/libexec/simaudio.py $ST/simaudio.sock > $ST/simaudio.log 2>&1 &
+	echo $! > $ST/simaudio.pid
+fi
 X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py $D com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.apple.notifyd com.apple.configd_sim \
 	com.apple.runningboardd com.apple.lsd com.apple.containermanagerd com.apple.containermanagerd.system \
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd com.apple.mobile.installd \

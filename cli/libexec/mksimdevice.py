@@ -24,6 +24,9 @@ PROJECT = x86config.ROOT
 RUNTIME = x86config.get("X86SIM_RUNTIME")
 PREFIX = x86config.get("X86SIM_PREFIX")
 MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
+# x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by rundev.sh)
+AUDIO_SOCKET = os.environ.get("X86CODE_AUDIO_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "simaudio.sock")
+AUDIO = os.environ.get("X86CODE_AUDIO", "0") != "0"  # opt-in until playback works (FINDINGS 3.18)
 DARLING_VIEW = "/Volumes/SystemRoot"  # Linux / as seen inside Darling
 
 
@@ -209,7 +212,9 @@ def main():
     child_defaults = {
         # X86CODE_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
         # simshim: stand-ins for host services (host/simshim/compat/simshim.c)
-        "DYLD_INSERT_LIBRARIES": ":".join([kqueue_sim, darling(PROJECT + "/host/simshim/compat/libsimshim.dylib")] + [darling(os.path.abspath(p))
+        # simaudio: the audio devices (host/simaudio, X86CODE_AUDIO=0 leaves it out)
+        "DYLD_INSERT_LIBRARIES": ":".join([kqueue_sim, darling(PROJECT + "/host/simshim/compat/libsimshim.dylib")] +
+                                          ([darling(PROJECT + "/host/simaudio/libsimaudio.dylib")] if AUDIO else []) + [darling(os.path.abspath(p))
                                           for p in os.environ.get("X86CODE_INSERT", "").split(":") if p]),
         "CFFIXED_USER_HOME": home,
         "HOME": home,
@@ -260,6 +265,8 @@ def main():
         **({} if iosurface else {"IOSURFACE_REMOTE_EMULATED": "1"}),
         # X86CODE_SHIMLOG=1: simshim logs what it intercepts
         **({"X86CODE_SHIMLOG": "1"} if os.environ.get("X86CODE_SHIMLOG") else {}),
+        **({"X86CODE_AUDIO_SOCKET": darling(AUDIO_SOCKET)} if AUDIO else {}),
+        **({"X86CODE_AUDIO_LOG": "1"} if os.environ.get("X86CODE_AUDIO_LOG") else {}),
         "SIMULATOR_FRAMEBUFFER_FRAMEWORK": DARLING_VIEW + PROJECT + "/host/simfb/SimFramebuffer.framework/SimFramebuffer",
         # x86Code: our SimulatorHID stand-in (host/simhid): backboardd's virtual touchscreen/buttons/keyboard,
         # fed through <data>/simhid.sock by cli/libexec/simview.py / cli/libexec/simtouch.py. X86CODE_HID=0 leaves it out.
