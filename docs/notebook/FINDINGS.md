@@ -2839,6 +2839,19 @@ scroll: frame interval p50 16.7 ms, p90 18.6 ms, peak 61 fps (CA submitted 78/s,
   `dtape_share_region`, `memoryRegionInfo` parsing /proc maps, getuid/getpid per call).
 - vchroot path resolution lstat()s every component of every path (installd: ~21,000 lstat/s during its post-boot
   scan); a cache of resolved directories would cut that.
-- SpringBoard's main thread wakes ~600 times a second at idle (a 30 Hz mk_timer plus a second timer, ~5 RPCs per
-  run-loop iteration); identifying the timer needs a debugger session that detaches cleanly.
+- SpringBoard's main thread wakes ~600 times a second at idle (also on a freshly restarted SpringBoard). LLDB on
+  `mk_timer_arm`: the main thread's timer is re-armed from QuartzCore `display_timer_callback` (CA's software display
+  timer, i.e. some CADisplayLink / CA display-link client stays unpaused at idle); a CoreMotion thread runs its own
+  CFRunLoop timer too. Which link it is is still open (a one-shot objc_msgSend breakpoint after the callback only
+  caught voucher releases; next: break inside CA::Display::DisplayLinkItem dispatch and read the target).
+  `x86sim debug` on SpringBoard: attach with the Darling pid (NSpid's second field) and `--exe`; lldb's detach
+  failed ("Sending disconnect packet failed") and SpringBoard stayed suspended after debugserver was killed (the
+  open darlingserver task-resume issue): kill SpringBoard and launchd_sim restarts it.
+- perf round 2 (after the darlingserver changes: overlap lookups, PROCMAP_QUERY, quiet logs, willi #15/#20/#21; xnu
+  vchroot openat2 fast path) measured, two runs each under memory pressure (34 GB swap): idle whole stack 1.7-4.9%
+  (noisy: 1.7, 3.1, 3.6, 4.9), darlingserver 1.0-1.2% / ~1,600 wakeups/s, SpringBoard 0.4% / 600 wakeups/s;
+  Settings scroll p50 16.7, p95 18.3-29.9, p99 52-66, max 71-85 ms, >25 ms: 13-20 per 8 s; touch -> frame p50
+  10.9-15.3 ms; darlingserver 31-40% while scrolling (was 61-76%); cold launch Settings 972 ms first frame,
+  Safari 358 ms. simfb now records each slot's submit -> publish age and `perf.py scroll` labels each >25 ms gap: all
+  were "CA late" (age 4-25 ms), i.e. the app/backboardd rendered late, not GPU or pacing.
 - The NVIDIA driver's own threads poll every 10 ms in mtlvk and simview (~100 wakeups/s each); not ours.
