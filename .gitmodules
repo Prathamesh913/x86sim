@@ -6,3 +6,6 @@
 	path = external/metal2vulkan
 	url = git@github.com:designgears/metal2vulkan.git
 	branch = x86code
+[submodule "external/dynarmic"]
+	path = external/dynarmic
+	url = https://github.com/azahar-emu/dynarmic
