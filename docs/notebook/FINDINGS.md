@@ -2855,3 +2855,17 @@ scroll: frame interval p50 16.7 ms, p90 18.6 ms, peak 61 fps (CA submitted 78/s,
   Safari 358 ms. simfb now records each slot's submit -> publish age and `perf.py scroll` labels each >25 ms gap: all
   were "CA late" (age 4-25 ms), i.e. the app/backboardd rendered late, not GPU or pacing.
 - The NVIDIA driver's own threads poll every 10 ms in mtlvk and simview (~100 wakeups/s each); not ours.
+
+### 3.19 Boot disk storm: THP defrag evicting the page cache (2026-10-28)
+
+A boot read 12-48 GB from disk (~185 MB/s uncapped) and, capped at 40 MB/s, never reached the home screen. bpftrace on
+`filemap:mm_filemap_add_to_page_cache` for the stack's cgroup showed the same runtime dylibs read again and again
+(libswiftCore, 17 MB, read 23 MB in 45 s): the page cache was evicted under them with 17 GB free. kswapd was stealing
+~18-21k pages/s system-wide: CachyOS sets THP `defrag=defer+madvise` (/usr/lib/tmpfiles.d/thp.conf), so every failed
+huge-page fault wakes kswapd, and with no free order-9 blocks (and compaction failing) each wakeup evicted file pages.
+Other apps (T3 Code, browsers) were re-reading too.
+
+Fix: `defrag=madvise` (/etc/tmpfiles.d/thp.conf overrides the distro file; runtime: echo madvise >
+/sys/kernel/mm/transparent_hugepage/defrag). The capped boot then read 1.38 GB, 223 refaults (was 675k), kswapd idle.
+Guards kept: `x86sim boot` runs the stack in a systemd scope capped at 40 MB/s with low IO/CPU weight
+(cli/libexec/limited.sh) and stops a boot that reads over 6 GB before the home screen (X86SIM_IO_MAX, X86SIM_IO_BUDGET).

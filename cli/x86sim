@@ -93,7 +93,9 @@ io_watchdog() {
 	local cg n=0
 	while kill -0 "$1" 2>/dev/null; do
 		cg=/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$1/cgroup" 2>/dev/null)
-		n=$(awk '{for(i=2;i<=NF;i++) if($i ~ /^rbytes=/){sub("rbytes=","",$i); if($i>m) m=$i}} END{print m+0}' "$cg/io.stat" 2>/dev/null)
+		# until systemd-run has moved the boot into its scope, the cgroup is the caller's (not the stack's IO)
+		case $cg in */x86sim-*.scope) ;; *) sleep 1; continue ;; esac
+		n=$(awk '$1 !~ /^25[12]:/ {for(i=2;i<=NF;i++) if($i ~ /^rbytes=/){sub("rbytes=","",$i); if($i>m) m=$i}} END{print m+0}' "$cg/io.stat" 2>/dev/null)
 		if [ "${n:-0}" -gt "$budget" ]; then
 			echo "x86sim: boot read $(numfmt --to=iec "$n") from disk without reaching the home screen (X86SIM_IO_BUDGET ${X86SIM_IO_BUDGET:-6G}); stopping it" >&2
 			boot_snapshot; cmd_shutdown >/dev/null 2>&1; return
