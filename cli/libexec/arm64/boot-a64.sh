@@ -95,7 +95,15 @@ grep -E "Successfully spawned|exited due|exited with" "$ST/launchd.log" | sed "s
 echo "== lsim.out (tail)"; tail -5 "$ST/lsim.out"
 # Report cgroup containment
 echo "== cgroup containment"
-SCOPE=$(systemctl --user list-units 'x86sim-*.scope' --no-legend 2>/dev/null | awk '/running/{print $1; exit}')
+# Prefer the running x86sim scope that already holds our guests (highest memory.current). A stale
+# scope left from a previous KEEP boot would otherwise win `list-units | head` and report false OUTs.
+SCOPE=""
+best=-1
+for s in $(systemctl --user list-units 'x86sim-*.scope' --no-legend 2>/dev/null | awk '/running/{print $1}'); do
+	cg=$(systemctl --user show "$s" -p ControlGroup --value 2>/dev/null)
+	cur=$(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo 0)
+	if [ "$cur" -gt "$best" ]; then best=$cur; SCOPE=$s; fi
+done
 if [ -n "$SCOPE" ]; then
 	CG=$(systemctl --user show "$SCOPE" -p ControlGroup --value 2>/dev/null)
 	echo "scope=$SCOPE memory.current=$(cat /sys/fs/cgroup$CG/memory.current 2>/dev/null) memory.max=$(cat /sys/fs/cgroup$CG/memory.max 2>/dev/null)"

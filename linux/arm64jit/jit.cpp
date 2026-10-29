@@ -123,6 +123,22 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         c.callbacks = &fwd;
         c.shared_translations = true;
         c.tpidr_el0 = nullptr; c.tpidrro_el0 = nullptr;
+        // Shared code must not be cross-modified while other threads execute it (x86 IMC rules).
+        // BlockLinking's atomic 8-byte heads still rewrite instruction bytes underfoot; keep linking
+        // off unless X86CODE_A64_LINK=1. Fastmem fault "recompile" Invalidates/Unpatches from the
+        // SIGSEGV handler — even with shared_mutex held that still patches live code; redirect the
+        // fault via FakeCall only (recompile_on_*_failure = false). FastDispatch stays (16-byte
+        // atomic data); RSB stays (per-thread state, imm64 codeptr updates are same length).
+        if (!(getenv("X86CODE_A64_LINK") && atoi(getenv("X86CODE_A64_LINK")) == 1)) {
+            c.optimizations &= ~Dynarmic::OptimizationFlag::BlockLinking;
+        }
+        // X86CODE_A64_SAFE=1: also drop FastDispatch + RSB (narrows shared races further for experiments).
+        if (getenv("X86CODE_A64_SAFE") && atoi(getenv("X86CODE_A64_SAFE")) == 1) {
+            c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
+            c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
+        }
+        c.recompile_on_fastmem_failure = false;
+        c.recompile_on_exclusive_fastmem_failure = false;
         // Per process (reserved; only emitted pages are resident). Stage 2's per-thread 8 MB is too small here.
         int mb = getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256;
         if (mb > 0 && mb < 64) mb = 256;
