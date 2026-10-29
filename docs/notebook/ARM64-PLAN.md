@@ -523,11 +523,63 @@ Top: SB 1.39 / BB 0.38 / iconservices 0.29 / sleepd 0.19 / usernotificationsd 0.
 (cold-boot BKS stability). Goal remains ~1 GB real for one app — SB alone is still ~1.4 GB PSS
 (`anon_host` dominant; code-cache / guest heap work next).
 
+### Slim park replaces reaper (2026-10-29 night)
+
+**Who spawns Spotlight / WidgetRenderer:** SpringBoard via RunningBoard as
+`UIKitApplication:…` ("launch job demand"), not LaunchDaemon `RunAtLoad`. Widgets in
+`IconState` / `DesiredIconState` pull WidgetRenderer; Spotlight is the home-screen search host.
+Killing them every 5 s (`slim-reaper.sh`) made RunningBoard relaunch within ~1 s and burned a
+core in `xpcproxy_sim` while never keeping memory down.
+
+**Clean stop (default slim profile):**
+1. **IconState widget strip** in `boot-a64.sh` (unless `A64_KEEP_WIDGETS=1` or `A64_JOBS=full`) —
+   drops widget / emptied custom stacks so SpringBoard demands fewer WR launches.
+2. **slim-park** in `linux/arm64jit/host.cpp`: before dyld/JIT, match `X86CODE_A64_SLIM_PARK`
+   (or file `/home/bobby/scratch/x86code/a64-slim-park`) path substrings and `pause()` forever.
+   Process stays alive → RunningBoard assertions satisfied; RSS stays ~12 MB. launchd does **not**
+   pass `sim.env` into job environ, so the file fallback is required.
+3. Boot end reports parked helpers via `wchan=*pause*` + tiny RSS (no more reaper start).
+   `A64_SLIM=0` / `A64_JOBS=full` clears the park file (full profile).
+
+**Cold-boot note:** park from t=0 with widget strip can leave a status-bar-only frame
+(`bright≈0.06`) on some boots (BKS). Reliable recipe used here: reach full home with park
+file absent (`A64_SLIM=0`), then write the park file and `SIGKILL` fat Spotlight/WR so they
+respawn parked. Subsequent boots with park+strip still need hardening.
+
+| metric | before park (fat helpers) | after park (live enable) |
+| --- | --- | --- |
+| whole-sim PSS | 6096 MB | **3889 MB** |
+| cgroup `memory.current` | 6148 MB | **3954 MB** |
+| sum guest VmRSS | 11167 MB | **7964 MB** |
+| Spotlight | 2024 MB PSS | absent |
+| WidgetRenderer | 388 MB PSS | **~12 MB parked** (`ia32_sys_pause`) |
+| SpringBoard PSS | 1248 → 1387 MB | (SB itself unchanged) |
+| idle (3 s) | ~286% core (Spotlight+launchd+securityd) | **~190%** (launchd_sim ~103%, securityd ~83%) |
+| frame | bright≈0.21 | bright≈0.21 retained |
+
+Screenshots: `10-stage3-home-before-park.png`, `11-stage3-home-after-park.png`,
+`12-stage3-slim-park-home.png`.
+
+**SpringBoard smaps attribution (still open — park does not shrink SB):**
+
+| bucket (PSS MB) | before (home, fat) | after park |
+| --- | --- | --- |
+| anon_host | ~673–685 | ~685 |
+| host_heap | ~139–140 | ~140 |
+| other (incl. dyld / JIT / guest) | ~433–558 | ~558 |
+
+`anon_host` is dominated by large glibc `mmap` blobs + JIT metadata (largest single VMA ~448 MB).
+A page-map `block_ranges` replacement was built then **reverted** (launchd_sim SIGSEGV under the
+new map). Guest stacks stay **8 MB** (1 MB previously crashed SB). IR-free / compact maps /
+`madvise` of freed guest heap remain next.
+
 ### Still open (stage 3 remainder / stage 4 prep)
-1. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
-2. Stop Spotlight/WidgetRenderer respawn (unload/deny) instead of reaper thrash; try `A64_JOBS=slim`
-   as default once cold-boot without sleepd is proven.
-3. Shrink SB `anon_host` / JIT code cache toward the ~1 GB whole-sim goal.
-4. Persistent on-disk translation cache; trim the early shared boot spin (first ~40 s still high lookups).
-5. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
-6. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.
+1. Shrink SB `anon_host` (~685 MB) / `host_heap` (~140 MB): free dynarmic IR after emit, compact
+   block map (re-land page-map with unit tests), return freed guest heap via `madvise`.
+2. Idle CPU: `launchd_sim` ~1 core and `securityd` ~0.8 core at idle home after park — find
+   polling / spinning thunk loops; park already removed Spotlight's ~100% core.
+3. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
+4. Harden cold boot with park+strip from t=0 (avoid status-bar-only / BKS flake).
+5. Persistent on-disk translation cache; trim the early shared boot spin.
+6. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
+7. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.

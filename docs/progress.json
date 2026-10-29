@@ -1,7 +1,7 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: shrinking SpringBoard's memory, replacing the Spotlight/widget kill-loop with a real fix, cutting idle CPU; then wallpaper and Metal.",
+  "now": "Stage 3: slim-park stopped Spotlight/WidgetRenderer without the kill loop (PSS ≈3.9 GB). Next: shrink SpringBoard anon_host (~685 MB) and cut idle launchd_sim/securityd CPU.",
   "metrics": [
     [
       "Boot to home screen",
@@ -10,23 +10,28 @@
     ],
     [
       "Real memory (PSS, whole sim)",
-      "~3.7 GB",
-      "was ~4.6 GB; goal under 1 GB"
+      "~3.9 GB (parked)",
+      "was ~6.1 GB with fat helpers; goal under 1 GB"
     ],
     [
       "SpringBoard",
       "~1.4 GB PSS",
-      "largest: ~585 MB unattributed host memory"
+      "anon_host ~685 MB still open"
+    ],
+    [
+      "Spotlight / WidgetRenderer",
+      "parked (~12 MB) / absent",
+      "was kill-every-5s reaper; RunningBoard UIKitApplication"
+    ],
+    [
+      "Idle CPU (home, parked)",
+      "~1.9 cores",
+      "launchd_sim ~1.0 + securityd ~0.8"
     ],
     [
       "Translation cache",
       "shared per process",
       "new threads cost ~0 MB (was 18-21 MB)"
-    ],
-    [
-      "CPU code vs M1 Mac",
-      "2-3x slower",
-      "allocation-heavy 3-7x"
     ],
     [
       "Rendering",
@@ -58,7 +63,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Done: shared translation cache per process (boot 7 → 3 min), memory cap covers every process, thunk and cache-flush races fixed, time zone, process names. Now: memory, idle CPU, wallpaper, Metal."
+      "detail": "Done: shared cache (boot 7→3 min), slim-park for Spotlight/WR (PSS 6.1→3.9 GB, reaper gone). Open: SB anon_host ~685 MB, idle launchd_sim/securityd, PosterBoard, Metal."
     },
     {
       "name": "4. Near native",
@@ -67,13 +72,26 @@
     }
   ],
   "issues": [
-    "Memory: ~3.7 GB real vs the 1 GB goal (SpringBoard ~1.4 GB)",
-    "Spotlight and widget renderer keep respawning; a temporary script kills them every 5 s",
+    "Memory: ~3.9 GB real vs the 1 GB goal (SpringBoard anon_host ~685 MB + host_heap ~140 MB)",
+    "Idle: launchd_sim ~1 core and securityd ~0.8 core at parked home",
+    "Cold boot with park+strip can land status-bar-only; live-enable park after home is the reliable path",
     "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory",
     "No Metal yet: black wallpaper, software rendering",
     "Profiling/memory-log switches can crash launchd_sim early in boot"
   ],
   "milestones": [
+    [
+      "12-stage3-slim-park-home.png",
+      "Stage 3: slim-park home — PSS≈3.9 GB, WR parked 12 MB, reaper gone, bright≈0.21"
+    ],
+    [
+      "11-stage3-home-after-park.png",
+      "Stage 3: live park enable — PSS 6096→3889 MB, cgroup 6148→3954 MB"
+    ],
+    [
+      "10-stage3-home-before-park.png",
+      "Stage 3: full home before park (Spotlight 2.0 GB PSS)"
+    ],
     [
       "07-stage3-home.png",
       "Stage 3: SHARED=1 home + slim reclaim (PSS≈3.7 GB, a64 ring monitors, icstress pass)"
