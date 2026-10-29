@@ -399,20 +399,38 @@ Committed and pushed (dynarmic `b5134744` on designgears/x86code, top `ef0ac83`)
 | objcswift.sim | ~3.0 s, identical results | ~3.1 s, identical results |
 
 ### Boot-to-home measurement
-Stage 2 baseline: ~7 min, 5.4–5.9 GB, `X86CODE_A64_CODECACHE_MB=8`, per-thread caches.
+Stage 2 baseline: ~7 min, 5.4–5.9 GB (cgroup; guests actually escape it), `X86CODE_A64_CODECACHE_MB=8`, per-thread caches.
 
-Shared-cache boots so far:
-- Prior shared boot (PROFILE=1): SpringBoard often hit `brk #0` in BackBoardServices near
-  `_BKSRestartActionOptionsDescription` (pc `0x1c8e3e420`) ~22 s after spawn → launchd restart loop; one instance
-  survived then CPU-froze with frame stuck black (suspected mutex stall → fixed by lock narrowing).
-- `shared3` boot (no PROFILE, narrow lock): in progress; measuring boot-to-home and sum RSS.
+| mode | boot-to-home | sum guest RSS at home / end | notes |
+| --- | --- | --- | --- |
+| Stage 2 (per-thread, 8 MB) | ~7 min | 5.4–5.9 GB (cgroup) | software home, black wallpaper |
+| **SHARED=0, 8 MB** (control) | **372 s (~6.2 min)** | **~9.1 GB** (sum VmRSS) | home OK; docs/screens/arm64/04-noshared-home.png |
+| shared (256 MB floor, narrow lock) | **FAIL** (~9 min black) | ~6.2 GB while stuck | SB crash-loop ~30 s then one instance idle on black frames |
+
+Shared-cache boot failure modes seen:
+- SpringBoard `brk #0` in BackBoardServices near `_BKSRestartActionOptionsDescription` (pc `0x1c8e3e420`).
+- SpringBoard SIGSEGV at libobjc / thunk boundary (`guest pc` in cache, `in thunk -`).
+- backboardd / PosterBoard SIGSEGV in `dyld_sim+0x234f0` during binding (same family as stage 2 NULL-thunk notes).
+- After lock narrowing, one SB instance can survive 5+ min at ~670 MB RSS / low CPU with seq advancing but
+  `bright≈0` (identical black grids) — UI never paints.
+
+Conclusion: shared cache is correct for the microbenchmarks; the full SpringBoard multi-thread translate/link path
+still misbehaves. Default boot remains `X86CODE_A64_SHARED=0` until that is fixed. Live sim left at home on
+`SHARED=0` / `CODECACHE_MB=8`.
 
 ### Small fixes landed
-- Time zone: `boot-a64.sh` links `/private/etc/localtime` to the host zone (America/Denver here).
-- Process names: Darling `mldr` `PR_SET_NAME` (darling `af50adbba`); launchd logs show SpringBoard/backboardd.
+- Time zone: `boot-a64.sh` links `/private/etc/localtime` to the host zone (verified `America/Denver` in the prefix).
+- Process names: Darling `mldr` `PR_SET_NAME` (darling `af50adbba`); `/proc/.../comm` shows `SpringBoard`.
 - `framecheck.py`: only runs CLI `main` when `__name__ == "__main__"` (importing it used to `sys.exit` and kill waiters).
 
-### Still open
-- Reliable shared-cache boot-to-home number; restore chronod/FileProvider / normal cache if memory allows.
-- Persistent on-disk translation cache; boot-time profile of the ~7 min.
-- Crashes: BKS `brk #0` assertion; backboardd SIGSEGV (dyld_sim / thunk paths); guest TLS destructors; Metal.
+### Commits
+- dynarmic `73c75bf7` — shared translation cache; `b5134744` — narrow GetBlock mutex / invalidate_gen
+- darling `af50adbba` — mldr `PR_SET_NAME` (darlingserver memory.c/h left dirty, separate item)
+- top `ef0ac83` / `9481b78` — submodule pointer, framecheck import fix, Stage 3 docs
+
+### Still open (stage 3 remainder / stage 4 prep)
+1. Fix shared-cache SpringBoard boot (linking/invalidation races or thunk-boundary crashes under contention).
+2. Then re-measure shared boot-to-home + memory; restore chronod/FileProvider if it fits.
+3. Persistent on-disk translation cache; profile the ~6 min boot.
+4. Crash fixes: BKS assert, dyld_sim/thunk SIGSEGV, guest TLS destructors on every exit path.
+5. Metal → Vulkan (arm64 shims / 27.0 selector changes).

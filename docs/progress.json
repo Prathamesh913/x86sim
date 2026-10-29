@@ -1,32 +1,37 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: shared3 boot (narrow lock, no PROFILE); SpringBoard crash-looping ~30s (objc/BKS); measuring toward home.",
+  "now": "Stage 3: shared cache landed (tests OK); boot-to-home works with SHARED=0 (372s). Shared boot still black/crash-loop \u2014 investigating.",
   "metrics": [
     [
-      "Boot to home screen",
-      "~7 min (stage 2)",
-      "shared3 in progress; SB restarts ~30s"
+      "Boot to home (SHARED=0, cache 8 MB)",
+      "372 s",
+      "stage 2 was ~7 min; screenshot 04-noshared-home.png"
     ],
     [
-      "Memory (guest sum RSS)",
-      "5.4-5.9 GB (stage 2)",
-      "shared3 ~6.5\u20137.2 GB during translate"
+      "Boot to home (shared cache)",
+      "FAIL ~9 min black",
+      "SB crash-loop then idle black; sum RSS ~6.2 GB"
+    ],
+    [
+      "Memory at home (SHARED=0 sum RSS)",
+      "~9.1 GB",
+      "stage 2 cgroup said 5.4\u20135.9 GB (guests escape cgroup)"
     ],
     [
       "threads.sim new-Jit RSS",
-      "shared +0\u20138 kB/thread",
-      "noshared +18\u201321 MB each"
+      "shared +0\u20138 kB",
+      "noshared +18\u201321 MB"
     ],
     [
       "objcswift",
-      "shared ~3.0 s \u2248 noshared ~3.1 s",
+      "shared \u2248 noshared ~3 s",
       "identical results"
     ],
     [
       "Rendering",
-      "software",
-      "frame seq advances; still black"
+      "software home (black wallpaper)",
+      "bright\u22480.21 dark\u22480.74"
     ],
     [
       "Device",
@@ -53,7 +58,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Shared code cache per process, faster boot (possibly a translation cache on disk), crash fixes, Metal on the GPU via the existing Vulkan translator, time zone."
+      "detail": "Shared code cache per process committed (dynarmic b5134744); tests verify RSS win. Full boot reaches home with SHARED=0 in 372s; shared-cache boot still fails (BKS/objc crashes, black frame). TZ linked; process names fixed. Metal and daemon restore still open."
     },
     {
       "name": "4. Near native",
@@ -62,12 +67,16 @@
     }
   ],
   "issues": [
-    "SpringBoard crash loop ~30s: BKS brk#0 and/or libobjc SIGSEGV at thunk boundary",
-    "backboardd intermittent SIGSEGV (dyld_sim / thunk)",
-    "Guest RSS escapes 6 GB cgroup (sum often 6.5\u20137.5 GB)",
-    "Widgets/Files/iCloud daemons still left out; no Metal yet"
+    "Shared-cache boot does not reach home (crash loop + black frame); SHARED=0 does",
+    "Guest RSS sum ~9 GB at home (cgroup still does not contain guests)",
+    "BKS brk#0 and libobjc/dyld_sim thunk SIGSEGVs under load",
+    "PosterBoard/dyld_sim SIGSEGV; guest TLS destructor gap; no Metal yet"
   ],
   "milestones": [
+    [
+      "04-noshared-home.png",
+      "Stage 3 control: home with SHARED=0 / CODECACHE_MB=8 in 372s"
+    ],
     [
       "03-home-screen.png",
       "Home screen: SpringBoard on iOS 27, every process translated arm64"
