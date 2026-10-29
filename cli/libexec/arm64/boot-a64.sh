@@ -38,8 +38,24 @@ rm -f "$L" "$L".1 "$L".2
 R="/Volumes/SystemRoot$X86SIM_RUNTIME"
 ENVS=$(sed 's/^/"/; s/$/"/' "$D/sim.env" | tr '\n' ' ')
 ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86CODE_A64_TRACE=1)
-# restart only this prefix's container
-timeout 30 "$X86SIM_DARLING" shutdown 2>/dev/null
+# stop only this prefix's container: its setuid launchers (timeout can't signal them) are found by their command
+# line (this device's path, or tests/arm64/run.sh's a64home), so the x86_64 container's are never touched; then
+# darling shutdown and stale state files
+stop_prefix() {
+	local pids="" d p
+	for d in /proc/[0-9]*; do
+		p=${d#/proc/}
+		[ "$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -1)" = "$X86SIM_DARLING" ] || continue
+		tr '\0' '\n' < "$d/cmdline" 2>/dev/null | grep -q -e "$D/" -e "/a64home" && pids="$pids $p"
+	done
+	[ -n "$pids" ] && x86sim_sudo kill -9 $pids 2>/dev/null
+	timeout 30 "$X86SIM_DARLING" shutdown 2>/dev/null
+	local ip; ip=$(cat "$DPREFIX/.init.pid" 2>/dev/null)
+	if [ -z "$ip" ] || [ ! -d "/proc/$ip" ] || grep -q "^State:.*Z" "/proc/$ip/status" 2>/dev/null; then
+		rm -f "$DPREFIX/.init.pid" "$DPREFIX/.darlingserver.sock"
+	fi
+}
+stop_prefix
 sleep 1
 H="/Volumes/SystemRoot$X/host/simhost/simhost"
 (cli/libexec/limited.sh timeout $([ "${A64_KEEP:-0}" = 1 ] && echo 86400 || echo $((SECS + 5))) "$X86SIM_DARLING" shell sh -c \
@@ -52,4 +68,4 @@ echo "== spawns/exits"
 grep -E "Successfully spawned|exited due|exited with" "$ST/launchd.log" | sed "s/^[0-9-]* [0-9:.]* //; s/\[[0-9]*\]//g; s/ because.*//; s/, ran for.*//; s/<Notice>: //" | sort | uniq -c | cut -c1-140
 echo "== lsim.out (tail)"; tail -5 "$ST/lsim.out"
 # A64_KEEP=1: leave the device running (the container outlives the launcher's timeout); else stop this prefix
-[ "${A64_KEEP:-0}" = 1 ] || timeout 30 "$X86SIM_DARLING" shutdown 2>/dev/null
+[ "${A64_KEEP:-0}" = 1 ] || stop_prefix

@@ -270,7 +270,48 @@ static void on_abrt(int, siginfo_t *si, void *) {
     signal(SIGABRT, SIG_DFL);
     raise(SIGABRT);
 }
+// Darling's own (native) abort(): log the native frame-pointer chain (Mach-O frames symbolized with Darwin's
+// dladdr) and the guest state before it raises SIGABRT. Installed by overwriting abort's entry with a jump here.
+struct DlInfo { const char *fname; void *fbase; const char *sname; void *saddr; };
+static void native_frames(u64 fp, u64 first) {
+    auto sym = [](u64 a) {
+        DlInfo di{};
+        if (g_darwin->dladdr((void *)a, &di) && di.fname) {
+            const char *b = strrchr(di.fname, '/');
+            logf("  %#lx %s`%s+%#lx", (unsigned long)a, b ? b + 1 : di.fname, di.sname ? di.sname : "?", (unsigned long)(a - (u64)(di.saddr ? di.saddr : di.fbase)));
+        } else logf("  %#lx", (unsigned long)a);
+    };
+    if (first) sym(first);
+    for (int k = 0; k < 32 && fp > 0x10000 && !(fp & 7); k++) {
+        u64 ret = ((u64 *)fp)[1], next = ((u64 *)fp)[0];
+        sym(ret);
+        if (next <= fp) break;
+        fp = next;
+    }
+}
+[[noreturn]] static void native_abort_hook() {
+    logf("native abort() (tid %ld): native frames:", (long)syscall(SYS_gettid));
+    native_frames((u64)__builtin_frame_address(0), 0);
+    if (GuestThread *t = GuestThread::current()) {
+        logf("  in thunk %s, guest pc %#lx", t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-", (unsigned long)t->jit->GetPC());
+        guest_backtrace(*t);
+    }
+    signal(SIGABRT, SIG_DFL);
+    syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), SIGABRT);
+    _exit(134);
+}
+static void hook_native_abort() {
+    auto *f = (uint8_t *)dsym("abort");
+    if (!f) return;
+    u64 page = (u64)f & ~0xfffull;
+    if (mprotect((void *)page, 0x2000, PROT_READ | PROT_WRITE | PROT_EXEC)) return;
+    u64 h = (u64)&native_abort_hook;
+    f[0] = 0x48; f[1] = 0xB8; memcpy(f + 2, &h, 8);  // movabs rax, hook
+    f[10] = 0xFF; f[11] = 0xE0;                       // jmp rax
+    mprotect((void *)page, 0x2000, PROT_READ | PROT_EXEC);
+}
 static void install_fault_report() {
+    hook_native_abort();
     { struct sigaction sa{}; sa.sa_sigaction = on_abrt; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigaction(SIGABRT, &sa, nullptr); }
     struct sigaction sa{};
     sa.sa_sigaction = on_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
@@ -281,6 +322,11 @@ void print_stats() {
     peek();
     if (!getenv("X86CODE_A64_STATS")) return;
     logf("exit after %.1f ms", ms_since(g_t0));
+    if (FILE *f = fopen("/proc/self/status", "r")) {
+        char l[256];
+        while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssAnon", 7) || !strncmp(l, "Threads", 7)) logf("%s", strtok(l, "\n"));
+        fclose(f);
+    }
     extern u64 g_thunk_counts[0x10000];
     std::vector<std::pair<u64, u32>> v;
     for (u32 i = 0; i < g_thunks.size(); i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});

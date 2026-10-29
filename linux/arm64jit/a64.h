@@ -43,6 +43,8 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     std::unique_ptr<Dynarmic::A64::Jit> jit;
     u64 stack_base = 0, stack_size = 0;
     u64 tpidr = 0, tpidrro = 0;
+    static constexpr int kGuestTsdSlots = 768;
+    u64 *tsd = nullptr;  // the guest's TSD array (tpidrro_el0), see GuestThread()
     bool *done = nullptr;   // the innermost call()'s completion flag; the exit stub sets it
     int depth = 0;          // nesting of call() on this thread (native -> guest -> native -> guest ...)
     u64 svc_count = 0;

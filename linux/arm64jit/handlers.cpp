@@ -49,14 +49,6 @@ static void *thread_start(void *p) {
         if (g_trace) logf("thread_start: unwound from pthread_exit (tid %ld)", (long)syscall(SYS_gettid));
         GuestThread::self().reset_after_unwind();
         if (g_trace) logf("thread_start: new Jit, returning %#lx", (unsigned long)r);
-        // A detached thread that ended in pthread_exit (NSThread: +[NSThread exit]) aborted in Darling's thread
-        // termination afterwards (cause not found yet, ARM64-PLAN stage 2 gaps). Nobody joins it: park it instead.
-        // tl_joinable is bit 0 of byte 49 of Darling's x86_64 struct pthread_s.
-        static auto *self = (u64 (*)())dsym("pthread_self");
-        if (!(*(uint8_t *)(self() + 49) & 1)) {
-            static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
-            for (;;) dsleep(100000);
-        }
     }
     t_exit_jmp = outer;
     return (void *)r;
@@ -337,22 +329,9 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
 
 // ---- setjmp family as guest code -----------------------------------------------------------------------------------
 // jmp_buf (ours, private to these functions): x19-x28, x29, x30, sp, d8-d15. The signal mask is not saved.
-// pthread_getspecific/setspecific: guest code on the native TSD (guest tpidrro_el0 = Darling's x86_64 TSD base, see
-// jit.cpp). setspecific stores directly when libpthread's bookkeeping needs no update (key in [10, max_tsd_key]);
-// otherwise it takes the thunk. max_tsd_key is at TSD base - 148 in Darling's x86_64 struct pthread_s (tsd at +224).
-static bool tsd_layout_ok() {
-    static int ok = -1;
-    if (ok < 0) {
-        unsigned long gs = 0;
-        syscall(SYS_arch_prctl, ARCH_GET_GS, &gs);
-        static auto *self = (u64 (*)())dsym("pthread_self");
-        ok = gs && self && *(u64 *)gs == self() && self() == gs - 224;
-        if (!ok) logf("TSD layout unexpected: pthread_getspecific/setspecific stay thunks");
-    }
-    return ok;
-}
+// pthread_getspecific/setspecific/_pthread_setspecific_static: guest code on the guest's TSD array (jit.cpp).
 bool is_guest_code_export(const std::string &n) {
-    if (n == "_pthread_getspecific" || n == "_pthread_setspecific") return tsd_layout_ok();
+    if (n == "_pthread_getspecific" || n == "_pthread_setspecific" || n == "__pthread_setspecific_static") return true;
     return n == "_setjmp" || n == "__setjmp" || n == "_sigsetjmp" || n == "_longjmp" || n == "__longjmp" || n == "_siglongjmp";
 }
 size_t emit_guest_code(const std::string &n, uint32_t *o, u32 slow) {
@@ -361,21 +340,16 @@ size_t emit_guest_code(const std::string &n, uint32_t *o, u32 slow) {
         memcpy(o, c, sizeof c);
         return 3;
     }
-    if (n == "_pthread_setspecific") {
+    if (n == "_pthread_setspecific" || n == "__pthread_setspecific_static") {  // the guest's own TSD array
         static const uint32_t c[] = {
             0xD53BD068,  // mrs x8, tpidrro_el0
-            0x7856C109,  // ldurh w9, [x8, #-148]   (max_tsd_key)
-            0xEB09001F,  // cmp x0, x9
-            0x540000C8,  // b.hi slow (+6 insns)
-            0xF100281F,  // cmp x0, #10
-            0x54000083,  // b.lo slow (+4)
             0xF8207901,  // str x1, [x8, x0, lsl #3]
             0x52800000,  // mov w0, #0
             0xD65F03C0,  // ret
         };
+        (void)slow;
         memcpy(o, c, sizeof c);
-        emit_stub(o + 9, slow);  // slow: svc #slow; ret
-        return 11;
+        return 4;
     }
     static const uint32_t setjmp_code[] = {
         0xA9005013,  // stp x19, x20, [x0]

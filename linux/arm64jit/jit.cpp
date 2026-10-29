@@ -33,10 +33,15 @@ GuestThread &GuestThread::self() {
 GuestThread *GuestThread::current() { return t_self; }
 
 GuestThread::GuestThread() {
-    // Darwin's TSD base is the gs base on x86_64 (slot 0 = pthread_self). Guest tpidrro_el0 reads see it.
+    // The guest has its own TSD (tpidrro_el0): slots 0-9 (pthread_self, errno, mach thread self, ...) are copied from
+    // Darling's native TSD (the gs base on x86_64); keys 10+ are the guest's alone. Sharing the native array let
+    // Darling's own libobjc/libdispatch destructors free guest values at thread exit (SIGABRT in every daemon).
+    // Guest TSD destructors are not run at thread exit (leak).
     unsigned long gs = 0;
     syscall(SYS_arch_prctl, ARCH_GET_GS, &gs);
-    tpidrro = gs;
+    tsd = (u64 *)calloc(kGuestTsdSlots, 8);
+    if (gs) memcpy(tsd, (void *)gs, 10 * 8);
+    tpidrro = (u64)tsd;
     Dynarmic::A64::UserConfig &c = cfg;
     c.callbacks = this;
     c.processor_id = g_next_cpu++ % 64;
@@ -51,7 +56,11 @@ GuestThread::GuestThread() {
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
     c.code_cache_size = 64u << 20;
+    static const bool rss_debug = getenv("X86CODE_A64_RSS") != nullptr;
+    auto rss = [] { long v = 0; if (FILE *f = fopen("/proc/self/statm", "r")) { long a, b, c2; if (fscanf(f, "%ld %ld %ld", &a, &b, &c2) == 3) v = (b - c2) * 4; fclose(f); } return v; };
+    long before = rss_debug ? rss() : 0;
     jit = std::make_unique<Dynarmic::A64::Jit>(c);
+    if (rss_debug) logf("new Jit: anon RSS +%ld kB", rss() - before);
     stack_size = 8u << 20;
     stack_base = (u64)mmap(nullptr, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (stack_base == (u64)MAP_FAILED) die("cannot allocate a guest stack");

@@ -204,7 +204,6 @@ void h_unknown(GuestThread &t, u32 i) {
 // malloc_type_*: the type id is dropped.
 void ht_malloc(GuestThread &t, u32 i) { h_malloc(t, i); }
 void ht_calloc(GuestThread &t, u32 i) { h_calloc(t, i); }
-void ht_free(GuestThread &t, u32 i) { h_free(t, i); }
 void ht_realloc(GuestThread &t, u32 i) { h_realloc(t, i); }
 void ht_valloc(GuestThread &t, u32 i) { h_valloc(t, i); }
 void ht_aligned_alloc(GuestThread &t, u32 i) { h_aligned_alloc(t, i); }
