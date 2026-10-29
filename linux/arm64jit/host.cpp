@@ -16,8 +16,11 @@
 #include <unistd.h>
 #include <signal.h>
 #include <ucontext.h>
+#include <execinfo.h>
+#include <dlfcn.h>
 
 namespace a64 {
+bool g_step = getenv("X86CODE_A64_STEP") != nullptr;  // one instruction per Run (exact fault PCs)
 
 const DarwinApi *g_darwin;
 void *dsym(const char *name) { return g_darwin->dlsym((void *)-2 /* RTLD_DEFAULT */, name); }
@@ -232,9 +235,10 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
     }
     char buf[256];
-    int n = snprintf(buf, sizeof buf, "arm64host: signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
+    int n = snprintf(buf, sizeof buf, "signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
                      (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP], (unsigned long long)ctx->uc_mcontext.gregs[REG_ERR]);
-    if (write(2, buf, n) < 0) {}
+    if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = 0;
+    logf("%s", buf);
     if (getenv("X86CODE_A64_FAULTBYTES")) {  // debug: the faulting host instruction's first bytes
         auto *ip = (const uint8_t *)ctx->uc_mcontext.gregs[REG_RIP];
         logf("rip bytes %02x %02x %02x %02x %02x %02x", ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
@@ -242,13 +246,31 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     if (GuestThread *t = GuestThread::current())
         logf("guest pc %#lx lr %#lx sp %#lx x0 %#lx x1 %#lx x8 %#lx", (unsigned long)t->jit->GetPC(), (unsigned long)t->x(30),
              (unsigned long)t->sp(), (unsigned long)t->x(0), (unsigned long)t->x(1), (unsigned long)t->x(8));
+    if (GuestThread *t = GuestThread::current(); t && si->si_code != SEGV_ACCERR) { logf("  pc in %s, in thunk %s", where(t->jit->GetPC()).c_str(), t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-"); guest_backtrace(*t); }
     peek();
     struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;
     if (old->sa_flags & SA_SIGINFO) old->sa_sigaction(sig, si, uc);
     else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) old->sa_handler(sig);
     else { signal(sig, SIG_DFL); raise(sig); }
 }
+// SIGABRT from native code (Darling's libsystem, dynarmic asserts): native and guest backtraces, then the default.
+static void on_abrt(int, siginfo_t *si, void *) {
+    void *bt[32]; int n = backtrace(bt, 32);
+    logf("SIGABRT (code %d pid %d): native backtrace:", si->si_code, si->si_pid);
+    for (int i = 0; i < n; i++) {
+        Dl_info di{};
+        if (dladdr(bt[i], &di) && di.dli_fname) logf("  %p %s+%#lx %s", bt[i], di.dli_fname, (unsigned long)((char *)bt[i] - (char *)di.dli_fbase), di.dli_sname ? di.dli_sname : "");
+        else logf("  %p", bt[i]);
+    }
+    if (GuestThread *t = GuestThread::current()) {
+        logf("guest pc %#lx, in thunk %s", (unsigned long)t->jit->GetPC(), t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-");
+        guest_backtrace(*t);
+    }
+    signal(SIGABRT, SIG_DFL);
+    raise(SIGABRT);
+}
 static void install_fault_report() {
+    { struct sigaction sa{}; sa.sa_sigaction = on_abrt; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigaction(SIGABRT, &sa, nullptr); }
     struct sigaction sa{};
     sa.sa_sigaction = on_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigaction(SIGSEGV, &sa, &g_old_segv); sigaction(SIGBUS, &sa, &g_old_bus);
@@ -273,6 +295,17 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     clock_gettime(CLOCK_MONOTONIC, &g_t0);
     g_darwin = api;
     g_trace = getenv("X86CODE_A64_TRACE") != nullptr;
+    // X86CODE_A64_TRACE_PROC=name[,name]: trace only these executables (set for a whole boot)
+    if (const char *tp = getenv("X86CODE_A64_TRACE_PROC"); tp && getenv("X86CODE_A64_EXE")) {
+        const char *e = getenv("X86CODE_A64_EXE"), *b = strrchr(e, '/');
+        std::string base = b ? b + 1 : e, list = std::string(",") + tp + ",";
+        g_trace = list.find("," + base + ",") != std::string::npos;
+    }
+    if (const char *sp = getenv("X86CODE_A64_STEP_PROC"); sp && getenv("X86CODE_A64_EXE")) {
+        const char *e = getenv("X86CODE_A64_EXE"), *b = strrchr(e, '/');
+        std::string base = b ? b + 1 : e, list = std::string(",") + sp + ",";
+        g_step = list.find("," + base + ",") != std::string::npos;
+    }
     d_open = (int (*)(const char *, int, ...))dsym("open");
     boundary_init();
 
@@ -281,6 +314,12 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     if (const char *e = getenv("X86CODE_A64_EXE")) exe = e;
     else if (argc > 1) { exe = argv[1]; argv++; argc--; }
     else { fprintf(stderr, "usage: arm64host <arm64 iOS-simulator executable> [args...]\n"); return 2; }
+    // mldr hands over the Linux path; the guest (CFBundleGetMainBundle, _NSGetExecutablePath) needs the Darwin one
+    if (!exe.empty() && exe[0] == '/' && exe.compare(0, 20, "/Volumes/SystemRoot/")) {
+        int fd = d_open(exe.c_str(), O_RDONLY);
+        if (fd >= 0) close(fd);
+        else exe = "/Volumes/SystemRoot" + exe;
+    }
 
     // Guest environment: mldr renamed DYLD_* to X86CODE_A64_DYLD_* so Darling's dyld ignores them.
     std::vector<char *> genv;

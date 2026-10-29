@@ -15,7 +15,6 @@ export X86SIM_STATE=${A64_STATE:-$X86SIM_ROOT/var/run-a64}
 export DPREFIX=${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}
 export X86SIM_DPREFIX=$DPREFIX
 export X86CODE_METAL=${X86CODE_METAL-0}         # software rendering until metalhostd is arm64
-export X86CODE_SIMFB_RING=${X86CODE_SIMFB_RING:-/dev/shm/x86code-a64-simfb.ring}
 export X86SIM_MEM_MAX=${X86SIM_MEM_MAX-6G}
 X=$X86SIM_ROOT; cd "$X"
 D=$X86SIM_DEVICE; ST=$X86SIM_STATE; SECS=${SECS:-90}

@@ -46,10 +46,13 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     bool *done = nullptr;   // the innermost call()'s completion flag; the exit stub sets it
     int depth = 0;          // nesting of call() on this thread (native -> guest -> native -> guest ...)
     u64 svc_count = 0;
+    int32_t in_thunk = -1;  // thunk running on this thread (crash reports)
     std::atomic<uint32_t> sig_pending{0};  // async signals recorded by the native handler (signals.cpp)
     uint8_t sig_info[32][104];            // their Darwin siginfo
 
     GuestThread();
+    void reset_after_unwind();  // after a longjmp out of call() (pthread_exit)
+    Dynarmic::A64::UserConfig cfg;
     ~GuestThread() override;
     static GuestThread &self();
     static GuestThread *current();  // null if this thread has none  // the calling native thread's GuestThread (created on first use)
@@ -66,8 +69,11 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     u64 sp() { return jit->GetSP(); }
     u64 stack_slot(int i) { return *(u64 *)(sp() + 8 * i); }
 
-    template <typename T> static T rd(u64 a) { T v; __builtin_memcpy(&v, (void *)a, sizeof v); return v; }
-    template <typename T> static void wr(u64 a, T v) { __builtin_memcpy((void *)a, &v, sizeof v); }
+    // Top-byte-ignore: Darwin arm64 code dereferences pointers with tag bits in the top byte (Swift's _StringObject
+    // discriminator). Fastmem sends addresses above 47 bits to these slow-path callbacks, which drop the top byte.
+    static constexpr u64 kTbi = 0x00ffffffffffffffull;
+    template <typename T> static T rd(u64 a) { T v; __builtin_memcpy(&v, (void *)(a & kTbi), sizeof v); return v; }
+    template <typename T> static void wr(u64 a, T v) { __builtin_memcpy((void *)(a & kTbi), &v, sizeof v); }
     std::optional<uint32_t> MemoryReadCode(u64 a) override { return rd<uint32_t>(a); }
     uint8_t MemoryRead8(u64 a) override { return rd<uint8_t>(a); }
     uint16_t MemoryRead16(u64 a) override { return rd<uint16_t>(a); }
@@ -79,10 +85,10 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     void MemoryWrite32(u64 a, uint32_t v) override { wr(a, v); }
     void MemoryWrite64(u64 a, u64 v) override { wr(a, v); }
     void MemoryWrite128(u64 a, Dynarmic::A64::Vector v) override { wr(a, v); }
-    bool MemoryWriteExclusive8(u64 a, uint8_t v, uint8_t e) override { return __atomic_compare_exchange_n((uint8_t *)a, &e, v, false, 5, 5); }
-    bool MemoryWriteExclusive16(u64 a, uint16_t v, uint16_t e) override { return __atomic_compare_exchange_n((uint16_t *)a, &e, v, false, 5, 5); }
-    bool MemoryWriteExclusive32(u64 a, uint32_t v, uint32_t e) override { return __atomic_compare_exchange_n((uint32_t *)a, &e, v, false, 5, 5); }
-    bool MemoryWriteExclusive64(u64 a, u64 v, u64 e) override { return __atomic_compare_exchange_n((u64 *)a, &e, v, false, 5, 5); }
+    bool MemoryWriteExclusive8(u64 a, uint8_t v, uint8_t e) override { return __atomic_compare_exchange_n((uint8_t *)(a & kTbi), &e, v, false, 5, 5); }
+    bool MemoryWriteExclusive16(u64 a, uint16_t v, uint16_t e) override { return __atomic_compare_exchange_n((uint16_t *)(a & kTbi), &e, v, false, 5, 5); }
+    bool MemoryWriteExclusive32(u64 a, uint32_t v, uint32_t e) override { return __atomic_compare_exchange_n((uint32_t *)(a & kTbi), &e, v, false, 5, 5); }
+    bool MemoryWriteExclusive64(u64 a, u64 v, u64 e) override { return __atomic_compare_exchange_n((u64 *)(a & kTbi), &e, v, false, 5, 5); }
     bool MemoryWriteExclusive128(u64 a, Dynarmic::A64::Vector v, Dynarmic::A64::Vector e) override;
     void InterpreterFallback(u64 pc, size_t n) override;
     void CallSVC(uint32_t swi) override;
@@ -102,6 +108,9 @@ struct Thunk {
 };
 extern std::vector<Thunk> g_thunks;
 constexpr u32 kExitSvc = 0xffff;
+// "svc #0xfffe": a Linux syscall for our own arm64 shims (host/simfb's futex wake): x8 = x86_64 syscall number,
+// x0-x5 arguments, result (or -errno) in x0. The runtime's code never uses svc immediates this high.
+constexpr u32 kLinuxSvc = 0xfffe;
 extern u64 g_exit_stub;  // "svc #0xffff": LR of every native->guest call
 
 u32 add_thunk(const std::string &name, Handler fn, const void *native = nullptr, int nfixed = 0);
@@ -148,6 +157,8 @@ void *gh_memalign(size_t align, size_t size); size_t gh_size(const void *); size
 int stub_fd_for_path(const char *path);  // open() redirect: a dup of the stub dylib's fd, or -1
 
 // misc
+void guest_backtrace(GuestThread &t);
+std::string where(u64 guest_addr);  // file+offset (non-cache) or "cache"  // frame-pointer chain to the log (jit.cpp)
 [[noreturn]] void die(const char *fmt, ...);
 void logf(const char *fmt, ...);
 extern bool g_trace;

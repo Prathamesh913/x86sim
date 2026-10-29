@@ -4,6 +4,7 @@
 // current SP and restores the full guest state afterwards.
 #include "a64.h"
 #include <atomic>
+#include <sched.h>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 
 namespace a64 {
+extern bool g_step;
 
 static Dynarmic::ExclusiveMonitor *monitor() {
     static auto *m = new Dynarmic::ExclusiveMonitor(64);
@@ -35,7 +37,7 @@ GuestThread::GuestThread() {
     unsigned long gs = 0;
     syscall(SYS_arch_prctl, ARCH_GET_GS, &gs);
     tpidrro = gs;
-    Dynarmic::A64::UserConfig c;
+    Dynarmic::A64::UserConfig &c = cfg;
     c.callbacks = this;
     c.processor_id = g_next_cpu++ % 64;
     c.global_monitor = monitor();
@@ -53,6 +55,14 @@ GuestThread::GuestThread() {
     stack_size = 8u << 20;
     stack_base = (u64)mmap(nullptr, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (stack_base == (u64)MAP_FAILED) die("cannot allocate a guest stack");
+}
+// After a longjmp out of call() (pthread_exit) the Jit still counts as executing: its state is abandoned (leaked,
+// destroying it could assert) and the thread gets a fresh one for whatever guest code still runs on it (TSD
+// destructors at thread exit).
+void GuestThread::reset_after_unwind() {
+    depth = 0; done = nullptr; in_thunk = -1;
+    (void)jit.release();
+    jit = std::make_unique<Dynarmic::A64::Jit>(cfg);
 }
 GuestThread::~GuestThread() { munmap((void *)stack_base, stack_size); }
 
@@ -75,8 +85,7 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
     bool *outer_done = done;
     done = &finished;
     depth++;
-    static const bool step = getenv("X86CODE_A64_STEP");  // debugging: one instruction per run, exact fault PCs
-    if (step) while (!finished) jit->Step();
+    if (g_step && depth == 1) while (!finished) jit->Step();
     else while (!finished) { jit->Run(); if (sig_pending.load(std::memory_order_relaxed)) deliver_signals(*this); }
     depth--;
     done = outer_done;
@@ -90,7 +99,7 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
 
 bool GuestThread::MemoryWriteExclusive128(u64 a, Dynarmic::A64::Vector v, Dynarmic::A64::Vector e) {
     unsigned __int128 ev = ((unsigned __int128)e[1] << 64) | e[0], nv = ((unsigned __int128)v[1] << 64) | v[0];
-    return __atomic_compare_exchange_n((unsigned __int128 *)a, &ev, nv, false, 5, 5);
+    return __atomic_compare_exchange_n((unsigned __int128 *)(a & kTbi), &ev, nv, false, 5, 5);
 }
 
 bool g_count_thunks = getenv("X86CODE_A64_STATS") != nullptr;
@@ -98,11 +107,24 @@ u64 g_thunk_counts[0x10000];
 
 void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
+    if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
+        set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));
+        return;
+    }
     svc_count++;
     if (swi >= g_thunks.size()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
     if (g_count_thunks) __atomic_fetch_add(&g_thunk_counts[swi], 1, __ATOMIC_RELAXED);
-    if (g_trace) logf("-> %s(%#lx, %#lx, %#lx)", g_thunks[swi].name.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
+    if (g_trace) {
+        const std::string &nm = g_thunks[swi].name;
+        bool path = nm.find("open") != std::string::npos || nm.find("stat") != std::string::npos ||
+                    nm.find("access") != std::string::npos || nm.find("getattr") != std::string::npos ||
+                    nm.find("readlink") != std::string::npos || nm.find("realpath") != std::string::npos;
+        if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
+        else logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
+    }
+    int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
     g_thunks[swi].fn(*this, swi);
+    in_thunk = outer_thunk;
     if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
 }
 
@@ -120,24 +142,49 @@ void GuestThread::InterpreterFallback(u64 pc, size_t) {
     abort();
 }
 
+// "file+offset" of a guest address outside the shared cache (from /proc/self/maps), for crash reports.
+std::string where(u64 a) {
+    if (a >= 0x1c0000000ull && a < 0x2c0000000ull) return "cache";
+    std::string r;
+    if (FILE *m = fopen("/proc/self/maps", "r")) {
+        char line[768];
+        while (fgets(line, sizeof line, m)) {
+            unsigned long lo, hi, off; char path[600] = "";
+            if (sscanf(line, "%lx-%lx %*s %lx %*s %*s %599[^\n]", &lo, &hi, &off, path) >= 3 && a >= lo && a < hi) {
+                char b[700]; snprintf(b, sizeof b, "%s+%#lx", path[0] ? path : "anon", a - lo + off); r = b; break;
+            }
+        }
+        fclose(m);
+    }
+    return r;
+}
+
+void guest_backtrace(GuestThread &t) {
+    u64 fp = t.x(29);
+    logf("  lr %#lx %s", (unsigned long)t.x(30), where(t.x(30)).c_str());
+    for (int k = 0; k < 24 && fp > 0x10000 && !(fp & 7); k++) {
+        u64 ret = GuestThread::rd<u64>(fp + 8);
+        logf("  #%d %#lx %s", k, (unsigned long)ret, where(ret).c_str());
+        u64 next = GuestThread::rd<u64>(fp);
+        if (next <= fp) break;
+        fp = next;
+    }
+}
+
 void GuestThread::ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) {
+    using E = Dynarmic::A64::Exception;
+    // hints (spin loops: YIELD, WFE in os_unfair_lock/dispatch): continue at the next instruction
+    if (e == E::Yield || e == E::WaitForEvent || e == E::WaitForInterrupt) { sched_yield(); return; }
+    if (e == E::SendEvent || e == E::SendEventLocal) return;
     uint32_t insn = rd<uint32_t>(pc);
     // brk #0xf... (Swift/clang traps), udf: report like a crash with the guest registers.
-    logf("guest exception %d at pc %#lx (insn %08x) lr %#lx sp %#lx", (int)e, (unsigned long)pc, insn, (unsigned long)x(30),
-         (unsigned long)sp());
+    logf("guest exception %d at pc %#lx %s (insn %08x) lr %#lx sp %#lx", (int)e, (unsigned long)pc, where(pc).c_str(), insn,
+         (unsigned long)x(30), (unsigned long)sp());
     for (int i = 0; i < 31; i += 4)
         logf("  x%-2d %016lx x%-2d %016lx x%-2d %016lx x%-2d %016lx", i, (unsigned long)x(i), i + 1,
              (unsigned long)(i + 1 < 31 ? x(i + 1) : 0), i + 2, (unsigned long)(i + 2 < 31 ? x(i + 2) : 0), i + 3,
              (unsigned long)(i + 3 < 31 ? x(i + 3) : 0));
-    // frame-pointer backtrace
-    u64 fp = x(29);
-    for (int k = 0; k < 24 && fp && !(fp & 7); k++) {
-        u64 ret = rd<u64>(fp + 8);
-        logf("  #%d %#lx", k, (unsigned long)ret);
-        u64 next = rd<u64>(fp);
-        if (next <= fp) break;
-        fp = next;
-    }
+    guest_backtrace(*this);
     abort();
 }
 
@@ -163,21 +210,28 @@ void logf(const char *fmt, ...) {
     buf[n++] = '\n';
     if (write(2, "arm64host: ", 11) < 0 || write(2, buf, n) < 0) {}
     // X86CODE_A64_LOG=<Darwin dir>: also append to <dir>/<exe>.<pid>.log (simulator jobs' stderr is often gone)
-    static int fd = -2;
-    if (fd == -2) {
-        fd = -1;
+    // (opened for every line: daemons close all fds at start, a kept fd would end up in another file)
+    static std::string path;
+    static bool init;
+    if (!init) {
+        init = true;
         if (const char *dir = getenv("X86CODE_A64_LOG")) {
-            static auto *dopen = (int (*)(const char *, int, ...))dsym("open");
             static auto *dmkdir = (int (*)(const char *, int))dsym("mkdir");
             const char *exe = getenv("X86CODE_A64_EXE");
             const char *b = exe ? strrchr(exe, '/') : nullptr;
-            char path[512];
+            char p[512];
             if (dmkdir) dmkdir(dir, 0777);
-            snprintf(path, sizeof path, "%s/%s.%d.log", dir, b ? b + 1 : "guest", (int)getpid());
-            if (dopen) fd = dopen(path, 0x209 /* O_WRONLY|O_APPEND|O_CREAT */, 0644);
+            snprintf(p, sizeof p, "%s/%s.%d.log", dir, b ? b + 1 : "guest", (int)getpid());
+            path = p;
         }
     }
-    if (fd >= 0) { static auto *dwrite = (long (*)(int, const void *, size_t))dsym("write"); if (dwrite) dwrite(fd, buf, n); }
+    if (!path.empty()) {
+        static auto *dopen = (int (*)(const char *, int, ...))dsym("open");
+        static auto *dwrite = (long (*)(int, const void *, size_t))dsym("write");
+        static auto *dclose = (int (*)(int))dsym("close");
+        int fd = dopen ? dopen(path.c_str(), 0x1000209 /* O_WRONLY|O_APPEND|O_CREAT|O_CLOEXEC */, 0644) : -1;
+        if (fd >= 0) { dwrite(fd, buf, n); dclose(fd); }
+    }
 }
 
 // Native -> guest entry (from a64_tramp_entry). Frame: ints[8], fps[8], result[4].

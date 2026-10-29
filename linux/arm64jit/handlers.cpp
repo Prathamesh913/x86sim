@@ -8,6 +8,7 @@
 #include <map>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <csetjmp>
 #include <sys/syscall.h>
 #include <asm/prctl.h>
 
@@ -27,9 +28,38 @@ template <int... Fn> static void h_callbacks(GuestThread &t, u32 i) {
     t.set_x(0, r.rax);
 }
 
+// Threads the guest creates start in thread_start(): pthread_exit on them unwinds back here (longjmp) and the thread
+// returns from its start routine instead. Darling's own pthread_exit killed the whole process (SIGABRT) when called
+// from a thread running guest code (backboardd, ARM64-PLAN stage 2).
+struct StartArg { u64 fn, arg; };
+// __builtin_setjmp/longjmp: glibc's fortified longjmp (__longjmp_chk) aborted on Darling's thread stacks
+using ExitJmp = void *[5];
+static thread_local ExitJmp *t_exit_jmp;
+static thread_local u64 t_exit_value;
+static void *thread_start(void *p) {
+    StartArg a = *(StartArg *)p;
+    delete (StartArg *)p;
+    ExitJmp jb;
+    ExitJmp *outer = t_exit_jmp;
+    t_exit_jmp = &jb;
+    u64 r;
+    if (__builtin_setjmp(jb) == 0) r = GuestThread::self().call(a.fn, {a.arg});
+    else {
+        r = t_exit_value;
+        GuestThread::self().reset_after_unwind();
+    }
+    t_exit_jmp = outer;
+    return (void *)r;
+}
+static void *start_arg(u64 fn, u64 arg) { return new StartArg{fn, arg}; }
+// pthread_create(thread, attr, start, arg) and the variants with the same arguments
+static void h_pthread_create(GuestThread &t, u32 i) {
+    auto *fn = (int (*)(u64, u64, void *(*)(void *), void *))g_thunks[i].native;
+    t.set_x(0, (u32)fn(t.x(0), t.x(1), thread_start, start_arg(t.x(2), t.x(3))));
+}
 static void h_pthread_create_with_workgroup(GuestThread &t, u32) {  // (thread, workgroup, attr, start, arg)
-    static auto *fn = (int (*)(u64, u64, const void *, u64))dsym("pthread_create");
-    t.set_x(0, (u32)fn(t.x(0), t.x(2), guest_callable(t.x(3)), t.x(4)));
+    static auto *fn = (int (*)(u64, u64, void *(*)(void *), void *))dsym("pthread_create");
+    t.set_x(0, (u32)fn(t.x(0), t.x(2), thread_start, start_arg(t.x(3), t.x(4))));
 }
 
 static void h_introspection_hook(GuestThread &t, u32 i) {
@@ -201,9 +231,19 @@ static void h_abort_with(GuestThread &t, u32 i) {
 static void h_pthread_exit(GuestThread &t, u32 i) {
     static auto *is_main = (int (*)())dsym("pthread_main_np");
     if (is_main && is_main()) {
+        logf("pthread_exit on the main thread (linux tid %ld, pid %d): parking it", (long)syscall(SYS_gettid), (int)getpid());
         static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
         for (;;) dsleep(100000);
     }
+    if (t_exit_jmp) { t_exit_value = t.x(0); __builtin_longjmp(*t_exit_jmp, 1); }
+    logf("pthread_exit on a thread not started by us (tid %ld): Darling's pthread_exit", (long)syscall(SYS_gettid));
+    guest_backtrace(t);
+    h_generic(t, i);
+}
+
+// pthread_kill/__pthread_kill/kill with SIGABRT (libc's abort): log the guest backtrace first
+static void h_kill_like(GuestThread &t, u32 i) {
+    if (t.x(1) == 6) { logf("%s(SIGABRT): guest backtrace", g_thunks[i].name.c_str()); guest_backtrace(t); }
     h_generic(t, i);
 }
 
@@ -238,8 +278,8 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"___libkernel_init_after_boot_tasks", h_zero}, {"___libplatform_init", h_zero}, {"___pthread_init", h_zero},
         {"___pthread_late_init", h_zero}, {"_mach_init", h_zero}, {"__pthread_yield_to_enqueuer_4dispatch", h_zero},
         {"__pthread_mutex_enable_legacy_mode", h_zero}, {"_pthread_prefer_alternate_cluster_self", h_zero},
-        {"_pthread_create", h_callbacks<2>}, {"_pthread_create_suspended_np", h_callbacks<2>},
-        {"_pthread_create_from_mach_thread", h_callbacks<2>}, {"_pthread_create_with_workgroup_np", h_pthread_create_with_workgroup},
+        {"_pthread_create", h_pthread_create}, {"_pthread_create_suspended_np", h_pthread_create},
+        {"_pthread_create_from_mach_thread", h_pthread_create}, {"_pthread_create_with_workgroup_np", h_pthread_create_with_workgroup},
         {"_pthread_once", h_callbacks<1>}, {"_pthread_atfork", h_callbacks<0, 1, 2>},
         {"_pthread_key_create", h_callbacks<1>}, {"_pthread_key_init_np", h_callbacks<1>},
         {"__os_once", h_callbacks<2>}, {"__os_alloc_once", h_callbacks<2>},
@@ -251,7 +291,8 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
         {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
         {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite},
-        {"__exit", h_exit}, {"___exit", h_exit}, {"_abort_with_payload", h_abort_with}, {"_abort_with_reason", h_abort_with}, {"_pthread_exit", h_pthread_exit},
+        {"__exit", h_exit}, {"___exit", h_exit}, {"_abort_with_payload", h_abort_with}, {"_abort_with_reason", h_abort_with}, {"_pthread_exit", h_pthread_exit}, {"___pthread_kill", h_kill_like}, {"_pthread_kill", h_kill_like},
+        {"___kill", h_kill_like}, {"_kill", h_kill_like},
         {"___abort_with_payload", h_abort_with},
         {"_exception_raise_state", h_stack_args<8>}, {"_exception_raise_state_identity", h_stack_args<4, 8, 8>},
         {"_host_swap_exception_ports", h_stack_args<8, 8>}, {"_task_swap_exception_ports", h_stack_args<8, 8>},

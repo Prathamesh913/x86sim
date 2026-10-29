@@ -24,8 +24,10 @@
 
 #define EXPORT __attribute__((visibility("default")))
 
+#ifndef WIDTH  // x86Code: the arm64 build (iPhone 17, iOS 27) passes 1206 x 2622
 #define WIDTH 1179
 #define HEIGHT 2556
+#endif
 
 typedef struct __attribute__((packed)) {
 	uint32_t mode_id, width, height, unknown_0c, unknown_10, pixel_format, colorspace, refresh_centihz;
@@ -140,6 +142,8 @@ EXPORT uint32_t SFBDisplayGetID(SFBDisplayRef d) { return 1; }
 EXPORT uint32_t SFBDisplayGetType(SFBDisplayRef d) { return 0; }
 EXPORT CFStringRef SFBDisplayGetName(SFBDisplayRef d) { return display_name; }
 EXPORT CFStringRef SFBDisplayGetDisplayUID(SFBDisplayRef d) { return display_uid; }
+// x86Code: new in iOS 27's SimFramebuffer client interface
+EXPORT CFStringRef SFBDisplayGetDeviceName(SFBDisplayRef d) { return display_name; }
 EXPORT CFStringRef SFBDisplayGetMaskPath(SFBDisplayRef d) { return NULL; }
 EXPORT uint64_t SFBDisplayGetFlags(SFBDisplayRef d) { return 1; }
 EXPORT uint32_t SFBDisplayGetPowerState(SFBDisplayRef d) { return 1; }
@@ -246,10 +250,17 @@ static dispatch_source_t file_timer;
 // Linux syscalls directly, so this is Linux's futex(2) (shared, not FUTEX_PRIVATE: the page is a /dev/shm file
 // mapped by other processes).
 static void ring_wake(void* addr) {
+#if defined(__arm64__)
+	// x86Code: under libarm64jit, "svc #0xfffe" is a Linux syscall (x8 = x86_64 number)
+	register long x0 __asm__("x0") = (long)addr, x1 __asm__("x1") = 1, x2 __asm__("x2") = 0x7fffffffL;
+	register long x8 __asm__("x8") = 202;
+	__asm__ volatile("svc #0xfffe" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+#else
 	long r;
 	__asm__ volatile("syscall" : "=a"(r) : "a"(202L /* SYS_futex */), "D"(addr), "S"(1L /* FUTEX_WAKE */), "d"(0x7fffffffL)
 		: "rcx", "r11", "memory");
 	(void)r;
+#endif
 }
 static uint64_t now_ns(void) { static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb); return mach_absolute_time() * tb.numer / tb.denom; }
 static uint64_t wall_ns(void) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec; }

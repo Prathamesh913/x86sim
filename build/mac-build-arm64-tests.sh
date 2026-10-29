@@ -7,6 +7,8 @@ SIM="xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17
 MAC="xcrun -sdk macosx clang -arch arm64 -O2"
 for t in hello bench threads signals; do $SIM -o "$O/$t.sim" "$S/$t.c"; done
 $MAC -o "$O/bench.mac" "$S/bench.c"
+xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O1 -fobjc-arc -framework Foundation -o "$O/cfprobe.sim" "$S/cfprobe.m"
+xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O1 -fobjc-arc -framework Foundation -o "$O/threxit.sim" "$S/threxit.m"
 for k in sim mac; do
   if [ $k = sim ]; then sdk=iphonesimulator; tgt=arm64-apple-ios17.0-simulator; else sdk=macosx; tgt=arm64-apple-macos14.0; fi
   xcrun -sdk $sdk clang -target $tgt -O2 -fno-objc-arc -c "$S/objcpart.m" -o "$O/objcpart.$k.o"
