@@ -1,0 +1,173 @@
+// libarm64jit: libsystem_kernel/platform/pthread exports that the generic pass-through can't serve: variadic
+// functions, function-pointer arguments (native -> guest trampolines), bool results, Darling names that differ from
+// the arm64 ones (64-bit-inode stat), the setjmp family (guest code) and the guest-side init functions (no-ops: the
+// native libraries were initialized by the host program's own libSystem).
+#include "a64.h"
+#include <cstdio>
+#include <map>
+#include <unistd.h>
+
+namespace a64 {
+
+static u64 cb(u64 guest_fn) { return guest_fn > 1 ? (u64)guest_callable(guest_fn) : guest_fn; }  // keep SIG_DFL/IGN
+static u64 uncb(u64 native) { u64 g = guest_of_callable((const void *)native); return g ? g : native; }
+
+// Calls the thunk's native function with the guest's integer args after translating some of them.
+template <int... Fn> static void h_callbacks(GuestThread &t, u32 i) {
+    u64 ints[16];
+    for (int k = 0; k < 8; k++) ints[k] = t.x(k);
+    for (int k = 8; k < 16; k++) ints[k] = t.stack_slot(k - 8);
+    ((ints[Fn] = cb(ints[Fn])), ...);
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    t.set_x(0, r.rax);
+}
+
+static void h_pthread_create_with_workgroup(GuestThread &t, u32) {  // (thread, workgroup, attr, start, arg)
+    static auto *fn = (int (*)(u64, u64, const void *, u64))dsym("pthread_create");
+    t.set_x(0, (u32)fn(t.x(0), t.x(2), guest_callable(t.x(3)), t.x(4)));
+}
+
+static void h_introspection_hook(GuestThread &t, u32 i) {
+    auto *fn = (u64(*)(u64))g_thunks[i].native;
+    t.set_x(0, uncb(fn(cb(t.x(0)))));
+}
+
+static void h_workqueue_setup(GuestThread &t, u32 i) {  // (struct pthread_workqueue_config *, size)
+    struct Cfg { uint32_t flags, version; u64 kevent_cb, workloop_cb, workq_cb, serialno_offs, label_offs; } c{};
+    size_t n = t.x(1) < sizeof c ? t.x(1) : sizeof c;
+    memcpy(&c, (void *)t.x(0), n);
+    c.kevent_cb = cb(c.kevent_cb); c.workloop_cb = cb(c.workloop_cb); c.workq_cb = cb(c.workq_cb);
+    auto *fn = (int (*)(Cfg *, size_t))g_thunks[i].native;
+    t.set_x(0, (u32)fn(&c, t.x(1)));
+}
+
+// int __sigaction(int, struct __sigaction *{handler, tramp, mask, flags}, struct sigaction *{handler, mask, flags})
+static void h_sigaction(GuestThread &t, u32 i) {
+    struct NSA { u64 handler, tramp; uint32_t mask; int flags; } nsa;
+    struct OSA { u64 handler; uint32_t mask; int flags; } *osa = (OSA *)t.x(2);
+    NSA *p = nullptr;
+    if (t.x(1)) {
+        nsa = *(NSA *)t.x(1);
+        nsa.handler = cb(nsa.handler);
+        static u64 tramp = (u64)dsym("_sigtramp");
+        if (tramp) nsa.tramp = tramp;
+        p = &nsa;
+    }
+    auto *fn = (int (*)(int, NSA *, OSA *))g_thunks[i].native;
+    int r = fn((int)t.x(0), p, osa);
+    if (r == 0 && osa) osa->handler = uncb(osa->handler);
+    t.set_x(0, (u32)r);
+}
+
+// _simple_* formatters (libsystem_platform's async-signal-safe printf).
+static void simple_out(GuestThread &t, int fd, const std::string &s) {
+    (void)t;
+    if (write(fd, s.data(), s.size()) < 0) {}
+}
+static void h_simple_dprintf(GuestThread &t, u32) { simple_out(t, (int)t.x(0), guest_format((const char *)t.x(1), (const u64 *)t.sp())); }
+static void h_simple_vdprintf(GuestThread &t, u32) { simple_out(t, (int)t.x(0), guest_format((const char *)t.x(1), (const u64 *)t.x(2))); }
+static int sappend(u64 b, const std::string &s) {
+    static auto *fn = (int (*)(u64, const char *))dsym("_simple_sappend");
+    return fn(b, s.c_str());
+}
+static void h_simple_sprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x(0), guest_format((const char *)t.x(1), (const u64 *)t.sp()))); }
+static void h_simple_vsprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x(0), guest_format((const char *)t.x(1), (const u64 *)t.x(2)))); }
+static void h_simple_esprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x(0), guest_format((const char *)t.x(2), (const u64 *)t.sp()))); }
+static void h_simple_vesprintf(GuestThread &t, u32) { t.set_x(0, (u32)sappend(t.x(0), guest_format((const char *)t.x(2), (const u64 *)t.x(3)))); }
+
+Handler special_handler(const std::string &n, int *nfixed, const char **native_name) {
+    static const std::map<std::string, int> variadic = {
+        {"_open", 2}, {"_open$NOCANCEL", 2}, {"_openat", 3}, {"_openat$NOCANCEL", 3}, {"_fcntl", 2}, {"_fcntl$NOCANCEL", 2},
+        {"_ioctl", 2}, {"_syscall", 1}, {"_semctl", 3}, {"_sem_open", 2}, {"_shm_open", 2}, {"_msgsys", 1}, {"_semsys", 1},
+        {"_shmsys", 1}, {"_open_dprotected_np", 4}, {"_openat_dprotected_np", 5}, {"_guarded_open_np", 4},
+        {"_guarded_open_dprotected_np", 6}, {"_panic", 1},
+    };
+    if (auto it = variadic.find(n); it != variadic.end()) { *nfixed = it->second; return h_variadic; }
+    // Darling (x86_64) keeps the 32-bit-inode structs under the plain names; arm64 only has the 64-bit ones.
+    static const std::map<std::string, const char *> renamed = {
+        {"_stat", "stat$INODE64"}, {"_fstat", "fstat$INODE64"}, {"_lstat", "lstat$INODE64"}, {"_fstatat", "fstatat$INODE64"},
+        {"_statfs", "statfs$INODE64"}, {"_fstatfs", "fstatfs$INODE64"}, {"_getfsstat", "getfsstat$INODE64"},
+        {"___stat", "stat$INODE64"}, {"___fstat", "fstat$INODE64"}, {"___lstat", "lstat$INODE64"},
+        {"___fstatat", "fstatat$INODE64"}, {"___statfs", "statfs$INODE64"}, {"___fstatfs", "fstatfs$INODE64"},
+        {"___getfsstat", "getfsstat$INODE64"}, {"_getdirentries", "__getdirentries64"},
+        {"_mach_absolute_time_kernel", "mach_absolute_time"}, {"_mach_continuous_time_kernel", "mach_continuous_time"},
+        {"_cthread_yield", "sched_yield"},
+    };
+    if (auto it = renamed.find(n); it != renamed.end()) { *native_name = it->second; return h_generic; }
+    static const std::map<std::string, Handler> special = {
+        {"____chkstk_darwin", h_noop}, {"_thread_chkstk_darwin", h_noop},
+        {"___libkernel_init", h_zero}, {"___libkernel_platform_init", h_zero}, {"___libkernel_voucher_init", h_zero},
+        {"___libkernel_init_after_boot_tasks", h_zero}, {"___libplatform_init", h_zero}, {"___pthread_init", h_zero},
+        {"___pthread_late_init", h_zero}, {"_mach_init", h_zero}, {"__pthread_yield_to_enqueuer_4dispatch", h_zero},
+        {"__pthread_mutex_enable_legacy_mode", h_zero}, {"_pthread_prefer_alternate_cluster_self", h_zero},
+        {"_pthread_create", h_callbacks<2>}, {"_pthread_create_suspended_np", h_callbacks<2>},
+        {"_pthread_create_from_mach_thread", h_callbacks<2>}, {"_pthread_create_with_workgroup_np", h_pthread_create_with_workgroup},
+        {"_pthread_once", h_callbacks<1>}, {"_pthread_atfork", h_callbacks<0, 1, 2>},
+        {"_pthread_key_create", h_callbacks<1>}, {"_pthread_key_init_np", h_callbacks<1>},
+        {"__os_once", h_callbacks<2>}, {"__os_alloc_once", h_callbacks<2>},
+        {"__pthread_workqueue_init", h_callbacks<0>}, {"__pthread_workqueue_init_with_kevent", h_callbacks<0, 1>},
+        {"__pthread_workqueue_init_with_workloop", h_callbacks<0, 1, 2>}, {"_pthread_workqueue_setdispatch_np", h_callbacks<0>},
+        {"_pthread_workqueue_setup", h_workqueue_setup}, {"_pthread_introspection_hook_install", h_introspection_hook},
+        {"_mach_msg_server", h_callbacks<0>}, {"_mach_msg_server_once", h_callbacks<0>},
+        {"_mach_msg_server_importance", h_callbacks<0>}, {"___sigaction", h_sigaction},
+        {"__simple_dprintf", h_simple_dprintf}, {"__simple_vdprintf", h_simple_vdprintf},
+        {"__simple_sprintf", h_simple_sprintf}, {"__simple_vsprintf", h_simple_vsprintf},
+        {"__simple_esprintf", h_simple_esprintf}, {"__simple_vesprintf", h_simple_vesprintf},
+    };
+    if (auto it = special.find(n); it != special.end()) return it->second;
+    // bool results: x86 callees only define al; arm64 callers expect w0 zero-extended.
+    if (n.find("CompareAndSwap") != std::string::npos || n.find("TestAnd") != std::string::npos ||
+        n.find("trylock") != std::string::npos || n.find("Try") != std::string::npos || n == "_kdebug_is_enabled" ||
+        n == "_kdebug_using_continuous_time")
+        return h_generic_bool;
+    return nullptr;
+}
+
+// ---- setjmp family as guest code -----------------------------------------------------------------------------------
+// jmp_buf (ours, private to these functions): x19-x28, x29, x30, sp, d8-d15. The signal mask is not saved.
+bool is_guest_code_export(const std::string &n) {
+    return n == "_setjmp" || n == "__setjmp" || n == "_sigsetjmp" || n == "_longjmp" || n == "__longjmp" || n == "_siglongjmp";
+}
+size_t emit_guest_code(const std::string &n, uint32_t *o) {
+    static const uint32_t setjmp_code[] = {
+        0xA9005013,  // stp x19, x20, [x0]
+        0xA9015815,  // stp x21, x22, [x0, #16]
+        0xA9026017,  // stp x23, x24, [x0, #32]
+        0xA9036819,  // stp x25, x26, [x0, #48]
+        0xA904701B,  // stp x27, x28, [x0, #64]
+        0xA905781D,  // stp x29, x30, [x0, #80]
+        0x910003E1,  // mov x1, sp
+        0xF9003001,  // str x1, [x0, #96]
+        0x6D07A408,  // stp d8, d9, [x0, #120]
+        0x6D08AC0A,  // stp d10, d11, [x0, #136]
+        0x6D09B40C,  // stp d12, d13, [x0, #152]
+        0x6D0ABC0E,  // stp d14, d15, [x0, #168]
+        0x52800000,  // mov w0, #0
+        0xD65F03C0,  // ret
+    };
+    static const uint32_t longjmp_code[] = {
+        0xA9405013,  // ldp x19, x20, [x0]
+        0xA9415815,  // ldp x21, x22, [x0, #16]
+        0xA9426017,  // ldp x23, x24, [x0, #32]
+        0xA9436819,  // ldp x25, x26, [x0, #48]
+        0xA944701B,  // ldp x27, x28, [x0, #64]
+        0xA945781D,  // ldp x29, x30, [x0, #80]
+        0xF9403002,  // ldr x2, [x0, #96]
+        0x9100005F,  // mov sp, x2
+        0x6D47A408,  // ldp d8, d9, [x0, #120]
+        0x6D48AC0A,  // ldp d10, d11, [x0, #136]
+        0x6D49B40C,  // ldp d12, d13, [x0, #152]
+        0x6D4ABC0E,  // ldp d14, d15, [x0, #168]
+        0x7100003F,  // cmp w1, #0
+        0x1A9F1420,  // csinc w0, w1, wzr, ne
+        0xD65F03C0,  // ret
+    };
+    bool lj = n.find("longjmp") != std::string::npos;
+    const uint32_t *src = lj ? longjmp_code : setjmp_code;
+    size_t cnt = lj ? sizeof longjmp_code / 4 : sizeof setjmp_code / 4;
+    memcpy(o, src, cnt * 4);
+    return cnt;
+}
+
+}  // namespace a64

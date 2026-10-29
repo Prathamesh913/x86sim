@@ -1,0 +1,16 @@
+# Stage 1 of the arm64 plan: libarm64jit.so, the ELF side of arm64 iOS-simulator processes inside Darling (dynarmic,
+# the svc boundary, stub dylibs for the host libraries, dyld_sim setup). Loaded by host/arm64host through elfcalls.
+cmake_minimum_required(VERSION 3.20)
+project(arm64jit C CXX ASM)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(DYNARMIC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../external/dynarmic CACHE PATH "dynarmic source")
+set(DYNARMIC_TESTS OFF CACHE BOOL "" FORCE)
+set(DYNARMIC_FRONTENDS A64 CACHE STRING "" FORCE)
+set(DYNARMIC_USE_BUNDLED_EXTERNALS ON CACHE BOOL "" FORCE)
+set(DYNARMIC_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${DYNARMIC_SRC} dynarmic EXCLUDE_FROM_ALL)
+add_library(arm64jit SHARED host.cpp jit.cpp boundary.cpp handlers.cpp stubdylib.cpp callconv.S)
+target_compile_options(arm64jit PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-O2 -mcx16 -Wall -fvisibility=hidden>)
+target_link_options(arm64jit PRIVATE -static-libstdc++ -static-libgcc -Wl,--no-undefined)
+target_link_libraries(arm64jit PRIVATE dynarmic pthread)
