@@ -602,15 +602,39 @@ Screenshot: `13-stage3-idle-cpu-fix-home.png`. Scratch: `/home/bobby/scratch/x86
 home — previously park-from-t=0 was flake-prone toward status-bar-only. Still treat as improved,
 not proven across N boots.
 
-**SpringBoard smaps (unchanged by idle fix):** anon_host ~686 MB (largest VMA **448 MB** rw-p,
-plus 64/48 MB siblings; ~1175 anon VMAs), host_heap ~138 MB, JIT code cache 256 MB VMA (~155 MB
-PSS rwxp). Page-map `block_ranges` re-land still next.
+**SpringBoard smaps (after idle fix, before page-map):** anon_host ~686 MB (largest VMA **448 MB**
+rw-p), host_heap ~138 MB, JIT code cache 256 MB VMA (~155 MB PSS rwxp).
+
+### Page-map `block_ranges` re-land (2026-10-29)
+
+Replaced `boost::icl::interval_map` + per-interval `std::set` with page-indexed
+`tsl::robin_map` (`page_blocks` / `block_pages`). Unit test
+`/home/bobby/scratch/x86code/stage3/test_block_range` OK (narrow IVAU, wide IALLU, dedupe).
+dynarmic `fa4b9619`. Cold boot with park+page-map reached full home (bright≈0.21).
+
+| SB bucket (PSS MB) | interval_map (idle-fix home) | page-map home |
+| --- | --- | --- |
+| anon_host | 686 | **763** (448 MB VMA still present) |
+| host_heap | 137 | **79** |
+| whole-sim PSS | 3713 | 3790 |
+| glibc mallinfo2 mmapped | ~652 MB / 11 blocks | ~652 MB / 11 blocks (settled) |
+| idle | ~1.3% | ~1.3% |
+
+**Finding:** the 448 MB anon VMA is **not** cured by swapping `block_ranges` alone. SIGUSR1
+memlog shows it inside glibc `hblkhd` (large mmap chunks). `host_heap` did drop (~58 MB).
+Next attribution: log SharedStats (blocks/code MB) on SIGUSR1 (landed in arm64jit) and size
+the other dynarmic maps (`block_descriptors`, `fastmem_patch_info`, page_blocks entry counts).
+
+Screenshot: `14-stage3-pagemap-home.png`.
+
+**Cold boot:** park+strip from t=0 reached full home on both reboot2 (idle-fix) and the
+page-map reboot — improved vs the earlier status-bar-only flake; still want a few more reps.
 
 ### Still open (stage 3 remainder / stage 4 prep)
-1. Shrink SB `anon_host` (~686 MB) / `host_heap` (~138 MB): free dynarmic IR after emit, compact
-   block map (re-land page-map with unit tests), return freed guest heap via `madvise`.
+1. Attribute and shrink the 448 MB SB anon VMA (not fixed by page-map); trim remaining
+   `host_heap`; free dynarmic IR after emit; `madvise` freed guest heap.
 2. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
-3. Prove cold boot with park+strip across repeated boots (reboot2 succeeded once).
+3. A few more cold-boot reps with park+strip to call reliability done.
 4. Persistent on-disk translation cache; trim the early shared boot spin.
 5. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
 6. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.

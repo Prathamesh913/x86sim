@@ -283,6 +283,15 @@ static void profile_tick() {
          (unsigned long long)st.guest_instructions, st.code_bytes / 1048576.0, (unsigned long long)st.lookups, g_live_threads.load());
 }
 
+// Called from host.cpp memlog_once / SIGUSR1. Safe when this tid has no GuestThread.
+void memlog_shared_stats() {
+    if (!shared_translations() || !GuestThread::current()) return;
+    auto st = Dynarmic::A64::Jit::GetSharedStats(*shared_code(GuestThread::self().cfg));
+    logf("memlog: shared blocks %llu insns %llu code %.1f MB lookups %llu threads %d",
+         (unsigned long long)st.blocks, (unsigned long long)st.guest_instructions,
+         st.code_bytes / 1048576.0, (unsigned long long)st.lookups, g_live_threads.load());
+}
+
 void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
