@@ -1,22 +1,22 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: SHARED=0 home OK (199s contained). Shared boot: thunk race + IC fixed; still BKS/idle-black. Restoring home.",
+  "now": "Stage 3: SHARED=0 home under containment (181\u2013199s, ~8.5 GB). Shared boot: thunk+IC fixed; still BKS/idle-black. Sim at home.",
   "metrics": [
     [
-      "Boot to home (SHARED=0, contained, 8 MB)",
-      "199 s",
-      "sum VmRSS 8382 MB; OUT=0; 05-noshared-home-contained.png"
+      "Boot to home (SHARED=0, contained)",
+      "181\u2013199 s",
+      "sum VmRSS ~8.4\u20138.6 GB; OUT=0; 05-noshared-home-contained.png"
     ],
     [
       "Boot to home (shared cache)",
-      "FAIL idle black",
-      "thunk SIGSEGV fixed; BKS then black ~12 min (shared7)"
+      "FAIL",
+      "thunk SIGSEGV fixed (2bb1649); IC+no-RSB (ba741aa); still BKS then idle black"
     ],
     [
       "Cgroup containment",
       "IN=all OUT=0",
-      "memory.current under-counts; real cost \u2248 sum VmRSS ~8\u20139 GB"
+      "memory.current ~3.3 GB vs sum VmRSS ~8.5 GB"
     ],
     [
       "threads.sim new-Jit RSS",
@@ -31,7 +31,7 @@
     [
       "Rendering",
       "software home (black wallpaper)",
-      "bright\u22480.21 dark\u22480.74"
+      "bright\u22480.19\u20130.21"
     ],
     [
       "Device",
@@ -58,7 +58,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Containment + SHARED=0 home 199s. Thunk race (2bb1649) and IC invalidate (ba741aa) landed; shared full boot still BKS/idle-black. Metal/daemons open."
+      "detail": "Containment + SHARED=0 home. Thunk race and IC invalidate landed; shared full boot still open (BKS/idle-black). Metal/daemons later."
     },
     {
       "name": "4. Near native",
@@ -67,8 +67,8 @@
     }
   ],
   "issues": [
-    "Shared-cache full boot: BKS brk#0 at 0x1c8e3e420 then idle black (after thunk+IC fixes)",
-    "cgroup memory.current under-counts vs sum VmRSS; boots watch sum RSS",
+    "Shared-cache full boot still fails (BKS brk#0 then idle black) after thunk+IC fixes",
+    "cgroup memory.current under-counts vs sum VmRSS",
     "PosterBoard extensions RSS bomb; guest TLS destructor gap; no Metal yet"
   ],
   "milestones": [
