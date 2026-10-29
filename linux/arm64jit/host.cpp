@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -257,9 +258,43 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     else { signal(sig, SIG_DFL); raise(sig); }
 }
 // SIGABRT from native code (Darling's libsystem, dynarmic asserts): native and guest backtraces, then the default.
-static void on_abrt(int, siginfo_t *si, void *) {
+static void on_abrt(int, siginfo_t *si, void *uc) {
+    // Scratch breadcrumb (survives when per-pid logs truncate): real RIP from ucontext + maps line.
+    u64 rip = 0;
+    if (uc) rip = (u64)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RIP];
+    {
+        char path[128];
+        snprintf(path, sizeof path, "/home/bobby/scratch/x86code/abrt-%d-%ld.txt", (int)getpid(), (long)syscall(SYS_gettid));
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        if (fd >= 0) {
+            char line[512];
+            int n = snprintf(line, sizeof line, "pid %d tid %ld si_code %d si_pid %d rip %#lx guest=%d\n",
+                             (int)getpid(), (long)syscall(SYS_gettid), si->si_code, si->si_pid, (unsigned long)rip,
+                             GuestThread::current() ? 1 : 0);
+            if (n > 0) (void)write(fd, line, (size_t)n);
+            if (FILE *m = fopen("/proc/self/maps", "r")) {
+                char ml[512];
+                while (fgets(ml, sizeof ml, m)) {
+                    unsigned long lo, hi;
+                    if (sscanf(ml, "%lx-%lx", &lo, &hi) == 2 && rip >= lo && rip < hi) {
+                        (void)write(fd, ml, strlen(ml));
+                        break;
+                    }
+                }
+                fclose(m);
+            }
+            if (GuestThread *t = GuestThread::current()) {
+                n = snprintf(line, sizeof line, "guest_pc %#lx thunk %s\n", (unsigned long)t->jit->GetPC(),
+                             t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-");
+                if (n > 0) (void)write(fd, line, (size_t)n);
+            }
+            fsync(fd);
+            close(fd);
+        }
+    }
     void *bt[32]; int n = backtrace(bt, 32);
-    logf("SIGABRT (code %d pid %d) on tid %ld: native backtrace:", si->si_code, si->si_pid, (long)syscall(SYS_gettid));
+    logf("SIGABRT (code %d pid %d) on tid %ld rip %#lx: native backtrace:", si->si_code, si->si_pid,
+         (long)syscall(SYS_gettid), (unsigned long)rip);
     for (int i = 0; i < n; i++) {
         Dl_info di{};
         if (dladdr(bt[i], &di) && di.dli_fname) logf("  %p %s+%#lx %s", bt[i], di.dli_fname, (unsigned long)((char *)bt[i] - (char *)di.dli_fbase), di.dli_sname ? di.dli_sname : "");
@@ -268,6 +303,8 @@ static void on_abrt(int, siginfo_t *si, void *) {
     if (GuestThread *t = GuestThread::current()) {
         logf("guest pc %#lx, in thunk %s", (unsigned long)t->jit->GetPC(), t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-");
         guest_backtrace(*t);
+    } else {
+        logf("no GuestThread on aborting tid (native-only or TLS cleared)");
     }
     signal(SIGABRT, SIG_DFL);
     raise(SIGABRT);
@@ -312,23 +349,33 @@ static void hook_native_abort() {
     f[10] = 0xFF; f[11] = 0xE0;                       // jmp rax
     mprotect((void *)page, 0x2000, PROT_READ | PROT_EXEC);
 }
-// X86CODE_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS
+// One-shot glibc + anon RSS line (also used by the periodic MEMLOG thread and SIGUSR1).
+static void memlog_once() {
+    struct mallinfo2 mi = mallinfo2();
+    long anon = 0;
+    if (FILE *f = fopen("/proc/self/status", "r")) {
+        char l[256];
+        while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssAnon:", 8)) anon = atol(l + 8);
+        fclose(f);
+    }
+    logf("memlog: anon %ld MB, glibc arena %zu MB (in use %zu MB, mmapped %zu MB in %zu blocks, free %zu MB)", anon / 1024,
+         mi.arena >> 20, mi.uordblks >> 20, mi.hblkhd >> 20, mi.hblks, mi.fordblks >> 20);
+}
+static void on_usr1(int, siginfo_t *, void *) { memlog_once(); }
+// X86CODE_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS.
+// SIGUSR1 always dumps one memlog line (no env needed) for live attribution of host anon blobs.
 static void start_memlog() {
+    struct sigaction su{};
+    su.sa_sigaction = on_usr1;
+    su.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGUSR1, &su, nullptr);
     const char *e = getenv("X86CODE_A64_MEMLOG");
     if (!e || atoi(e) <= 0) return;
     int secs = atoi(e);
     std::thread([secs] {
         for (;;) {
             sleep(secs);
-            struct mallinfo2 mi = mallinfo2();
-            long anon = 0;
-            if (FILE *f = fopen("/proc/self/status", "r")) {
-                char l[256];
-                while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssAnon:", 8)) anon = atol(l + 8);
-                fclose(f);
-            }
-            logf("memlog: anon %ld MB, glibc arena %zu MB (in use %zu MB, mmapped %zu MB in %zu blocks, free %zu MB)", anon / 1024,
-                 mi.arena >> 20, mi.uordblks >> 20, mi.hblkhd >> 20, mi.hblks, mi.fordblks >> 20);
+            memlog_once();
         }
     }).detach();
 }
