@@ -2614,3 +2614,122 @@ semaphore of a dead parent.
 Other changes: host/openurl (requests, entitlements, run loop), cli/libexec/simctl.py, simdebug.sh, libsimshim with
 the os_log formatter, host/debugserver (build/mac-build-debugserver.sh), host/fseventsd latency, fpsim2host package
 types, tests/apps/DevTools, tests/devtools.sh, tests/probes/fsevprobe, suggestd in rundev, screens 99-100.
+
+## Spike 3.17 — Location simulation, LLDB expressions, console pty, FSEvents history (2026-10-28)
+
+**Results:**
+- **Location simulation works** as `simctl location`: `x86sim location set|clear|list|run <scenario>|start` (route
+  between waypoints at a speed, updates by interval or distance). CLLocationManager in the DevTools app gets the
+  points; Maps shows the blue dot at the Eiffel Tower (101) and drives along I-280 with "Freeway Drive" (102).
+- **Cause of the lost requests: nanoregistryd wasn't running.** locationd's start blocked in
+  `-[NRPairedDeviceRegistry initWithBoost:disconnected:]` (NanoRegistry waits synchronously for the paired-device
+  registry, and kept waiting although the lookup failed), on a queue its silos wait behind: the
+  `com.apple.locationd.simulation` listener (and `.synchronous`, `.spi`, ...) never took a connection. Whether a
+  request got through depended on which listeners had started before the block. The standard boot runs
+  `com.apple.nanoregistryd` now, as a Mac's simulator does.
+- **LLDB expressions work** for C and Objective-C (`po`, calls into the app, a loop JIT'ed in the app); Swift needs a
+  Swift-enabled LLDB. The "expression evaluation fails" of 3.16 was `po self` in a Swift frame.
+- **darlingserver crash fixed**: `task_info` on a port of a process that had just died (debugserver after `kill`)
+  dereferenced NULL and took the container down.
+- **`x86sim launch --console-pty`**: the app's stdout/stderr are a Linux pty (isatty true in the app).
+- **FSEvents history across boots** (host/fseventsd): journal + startup catch-up; tests/fsevhist.sh 5/5.
+- Game Center row icon: explained (not a bug of ours). Disk-load hang: one reproduction, stopped at the user's request.
+- Tests: tests/devtools.sh 23/23 (three runs), tests/fsevhist.sh 5/5.
+
+Prior work checked first: research/willi, VibeDarling and linuxkid473 have nothing on locationd, CLSimulationManager,
+NanoRegistry, LLDB expressions or FSEvents history.
+
+### How simctl location reaches apps (Mac, Xcode 27.1)
+CoreSimulatorBridge (strings) uses only `CLSimulationManager`: `clearSimulatedLocations`, `appendSimulatedLocation:`,
+`setLocationSpeed:`, `setLocationDistance:`/`setLocationInterval:`, `startLocationSimulation`/`stop...`, and for
+scenarios `availableScenarios`, `localizedNameForScenario:`, `selectScenario:` (the plists in
+CoreLocation.framework/Support/SimulationScenarios: Apple, City Bicycle Ride, City Run, Freeway Drive). The manager
+is an NSXPC client of locationd's `com.apple.locationd.simulation` (entitlement `com.apple.locationd.simulation`),
+whose CLSimulationController logs "Should accept incoming connection?" for each client and then "received
+daemon-side request to start location simulation" / "next location". locationd also reads
+`SimulatedLocationLatitude`/`Longitude` from its defaults at start (not used: CoreSimulator doesn't either).
+
+### Finding the block
+- liboslogdiag (`X86CODE_INSERT`, `data/oslog.filter` = locationd,DevTools,openurl) showed openurl's proxy calls but
+  never locationd's "Should accept incoming connection?".
+- openurl got an `xpcping` request (diagnosis): a plain XPC message to a service name, answering the reply or error.
+  Of locationd's ten services only `registration` and `eedhelper` answered; `simulation`, `synchronous`, `spi`,
+  `routine`, ... got no reply within 5 s (a missing service answers "Connection invalid" at once).
+- A core of locationd (tools/debug/stuck.sh): the main thread and two workers in `_dispatch_async_and_wait` behind a
+  thread in `-[NRRegistryClient syncGrabRegistryWithReadBlock:]` -> semaphore wait, under
+  `-[NRPairedDeviceRegistry initWithBoost:disconnected:]`, and one in `+[_SYDeviceMonitor sharedInstance]`
+  (CompanionSync) waiting on the same dispatch_once.
+- With `com.apple.nanoregistryd` in the boot: all of locationd's listeners answer, the app gets updates every second.
+
+### LLDB expressions
+- Linux lldb 23 with our debugserver: `expr (int)getpid()`, `expr -l objc -O -- [[[UIApplication sharedApplication]
+  keyWindow] recursiveDescription]`, `expr -l objc -- int $s = 0; for (...) $s += i; $s` all work (attached at
+  `viewDidLoad` and attached to a running app). Memory allocation in the inferior, thread setup and function calls
+  through debugserver work under Darling.
+- `po self` in a Swift frame: "use of undeclared identifier 'self'": the distribution's LLDB has no Swift language
+  plugin, so it falls back to Objective-C++. In a Swift method `self` is in r13 (swiftself), not rdi.
+- "could not execute support code to read Objective-C class data in the process": LLDB's shared-cache class table
+  pass doesn't run because the process has no dyld shared cache (the runtime has none: FINDINGS 3.2); the dynamic
+  pass read all 1065 realized classes. LLDB hides this warning for its `*-simulator` platforms, which Linux builds of
+  LLDB don't have (`platform list`), so it stays.
+- `[NSString stringWithFormat:...]` needs a cast or the SDK's headers: without an SDK, LLDB knows methods only from the
+  runtime's type encodings (no varargs).
+
+### darlingserver: task_info on a dead task
+During the second devtools run in a row the whole container died (every process SIGILL at once). darlingserver's core:
+SIGSEGV in duct-tape `task_info(xtask=NULL, flavor=17 TASK_DYLD_INFO)` from `task_info_from_user`: the port named a
+task that no longer existed (the debugger's `kill` had just ended the app, debugserver asked for its dyld info).
+XNU's `task_info` answers KERN_INVALID_ARGUMENT for TASK_NULL; the duct-tape version now does too.
+
+### --console-pty
+simctl gives the app a pty with `--console-pty`. FrontBoard takes stdout/stderr paths (`__StandardOutPath`), so the
+CLI opens a Linux pty and passes its slave as `/Volumes/SystemRoot/dev/pts/N`; launchd_sim opens it for the app. The
+DevTools app reports `stdout tty true` (false with `--console`, files). A test detail: an app already running keeps its
+old stdout, so the following steps launch with `--terminate-running-process` (simctl behaves the same).
+
+### FSEvents history across boots
+- Streams registered with a `sinceWhen` id (FSEventsGetCurrentEventId at their first start, kept by the client) make
+  their paths history roots (`roots`, with the id from which their history is complete). Their trees are watched from
+  daemon start on and their events journaled (`history`: id, flags, path), one id per Linux event (it was one id per
+  stream and event).
+- What changed while no daemon ran is found at startup: the roots' trees against the manifest (path, type, mtime,
+  size) saved 15 s after changes during the last run; differences are journaled as created/removed/modified with new
+  ids, after the ids of the last run.
+- A stream since an id gets the journal's events after it (file or directory events, its exclusions applied), then
+  HistoryDone; a path whose history starts later, or before the journal's start, gets MustScanSubDirs as before.
+- tests/fsevhist.sh (tests/probes/fsevhist): boot 1 records an id and creates a file, the file is modified and another
+  created from Linux with the device down, boot 2 asks since the id: created (journal) PASS, created between boots
+  (catch-up) PASS, modified between boots PASS, HistoryDone PASS, no MustScanSubDirs PASS.
+- The real consumer seen: LocalStorageFileProvider's `.docid` stream (dev 58, since an id of an earlier boot).
+
+### Game Center icon (gray wireframe in Settings, 103)
+The Settings row's icon is IconServices' generic app placeholder. The row is compiled into Preferences
+(`com.apple.settings.gameCenter`, `settings-navigation://com.apple.Settings.GameCenter`) next to the bundle id
+`com.apple.gamecenter.widgets`; the runtime's GameCenterWidgets.app (and Games.app) has no Info.plist or executable,
+only localizations and PlugIns, in this runtime and in the same runtime on the Mac
+(/Library/Developer/CoreSimulator/Volumes/iOS_23F77). LaunchServices has no record for it (`x86sim listapps`), so no
+icon. GameTrampoline.app ("Games") has an icon and shows it on the home screen. Not changed.
+
+### Heavy disk load
+One run with two `dd ... conv=fsync` writers and a copy of PrivateFrameworks in a loop, four boots: three reached the
+home screen (77 s), one stayed at the boot logo for 300 s (frame 3; backboardd had sent one frame, SpringBoard was in
+D state) and came up by itself once the load stopped (logs: failed-boot-20261028-185035 in the scratch dir). So far a
+stall under I/O, not a deadlock. Stopped there at the user's request: no further disk-stress runs.
+
+### Soak (not run)
+tests/soak.sh is written but was not run (needs the user's approval: two hours of app launches). Plan: one boot, apps
+in turn (Settings, Safari, Maps, Photos, Health, DevTools, News, Files) every ~15 s with a tap and two swipes, home;
+every 60 s the RSS of darlingserver, mtlvk, backboardd, SpringBoard and all Darling processes, core dumps and
+launchd_sim's crash exits into samples.csv. Load: one simulator at its normal interactive load (2-4 cores busy while
+apps launch, GPU for compositing), no extra disk I/O beyond logs (~1 MB/min), 120 minutes (`tests/soak.sh 120`;
+`tests/soak.sh 15` for a short run).
+
+### Open
+- Swift expressions in LLDB (Swift-enabled LLDB, and the SDK's Swift modules, which Linux doesn't have).
+- Boot stall under heavy disk I/O (above); the soak.
+
+Darling changes in this spike (darlingserver): `task_info` on TASK_NULL.
+
+Other changes: rundev (nanoregistryd), host/openurl (location set/start/scenarios, xpcping), cli/libexec/simctl.py
+(location commands, --console-pty), host/fseventsd (history), tests/devtools.sh (location, console-pty, LLDB
+expressions), tests/fsevhist.sh + tests/probes/fsevhist, tests/soak.sh, DevTools (stdout tty line), screens 101-103.

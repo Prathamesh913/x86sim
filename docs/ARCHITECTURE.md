@@ -114,7 +114,11 @@ id, openat/mkdirat/... on behalf of extensions, package lookup, directory entrie
 File-system events come from the Mac's fseventsd (`com.apple.FSEvents`) on a real simulator. `host/fseventsd` serves
 that MIG protocol ([protocols/FSEVENTS.md](protocols/FSEVENTS.md)) from Linux inotify, reached through Darling's
 private syscall 598. The On My iPhone extension needs it for its volume UUID and for live updates in Files. Each
-stream's latency is applied (events held, NoDefer, flush), as the Mac's fseventsd does. fpsim2host's package lookup
+stream's latency is applied (events held, NoDefer, flush), as the Mac's fseventsd does. Event history: the trees of
+streams registered with a `sinceWhen` id are history roots (`<data>/var/db/x86code-fseventsd/roots`); their events go
+to a journal (`history`, after the id in `history.start`), and at startup the trees are compared with the manifest
+saved during the last run, so what changed between boots is journaled too. A stream since an id gets the journal's
+events after it, then HistoryDone; roots whose history doesn't reach back get MustScanSubDirs. fpsim2host's package lookup
 also takes directories whose extension is a registered package type (UTType) for packages, as the Mac host does.
 
 Document ids (`did=` FileProvider items, bookmarks handed from Files to Preview) are resolved by the runtime's own
@@ -138,7 +142,10 @@ location|addmedia|log stream|io|pidof`) go to the same job as one-line JSON requ
 entitlements: FrontBoard's debug options (`__DebugOptions`: arguments, environment, stdout/stderr paths for
 `--console`, wait-for-debugger), `FBSSystemService` termination, `LSApplicationProxy` containers,
 `+[UNNotificationRequest requestWithIdentifier:pushPayload:bundleIdentifier:]` for `push`, `CLSimulationManager` for
-`location`, `PHPhotoLibrary` change requests for `addmedia`. `log stream --app` relaunches the app with
+`location` (locationd's `com.apple.locationd.simulation` service: one point repeated every second, waypoints moved along
+at a speed with updates by interval or distance, or one of the runtime's scenarios in CoreLocation.framework/Support/
+SimulationScenarios; nanoregistryd must run, see FINDINGS 3.17), `PHPhotoLibrary` change requests for `addmedia`.
+`--console-pty` passes a Linux pty's path (`/Volumes/SystemRoot/dev/pts/N`) as the app's stdout/stderr. `log stream --app` relaunches the app with
 `X86CODE_OSLOG`, which turns on libsimshim's built-in os_log formatter (`host/simshim/diag/oslogdiag.m` compiled in):
 messages go to `data/var/log/oslog.<prog>.<pid>.log` without logd/diagnosticd. `io recordVideo` encodes the frame
 ring with ffmpeg.
@@ -150,7 +157,8 @@ ring with ffmpeg.
 container with `darling shell`; it attaches with Darling's ptrace/Mach task, thread and exception-port emulation.
 Linux's own `lldb` connects to it over TCP (`platform select remote-macosx`, `process connect`) and reads the Mach-O
 images from the Linux paths (`image search-paths add /Volumes/SystemRoot /`), so breakpoints and backtraces have the
-app's and the runtime's symbols. `x86sim launch -w` starts the app stopped before `main` (FrontBoard's
+app's and the runtime's symbols. Expressions run in the app as on a Mac (debugserver allocates memory in it and runs
+LLDB's JIT'ed code on a thread there); C and Objective-C work, Swift needs a Swift-enabled LLDB. `x86sim launch -w` starts the app stopped before `main` (FrontBoard's
 `__WaitForDebugger`).
 
 ## CLI

@@ -99,6 +99,9 @@ x86sim app com.apple.Preferences
 x86sim install MyApp.app        # an iOS-simulator build (x86_64 slice), as xcrun simctl install: icon on the home screen
 x86sim launch com.example.myapp -arg value   # as simctl launch; also: x86sim uninstall com.example.myapp
 SIMCTL_CHILD_FOO=bar x86sim launch --console --terminate-running-process com.example.myapp   # env + stdout/stderr here
+x86sim launch --console-pty com.example.myapp      # the same through a pty (isatty in the app, as simctl)
+x86sim location set 48.8584,2.2945                 # simulated location (CLLocationManager, Maps' blue dot)
+x86sim location start --speed=30 37.3349,-122.0090 37.3317,-122.0302   # drive along waypoints; `location list|run "Freeway Drive"|clear`
 x86sim terminate com.example.myapp
 x86sim get_app_container com.example.myapp data   # app | data | groups | <group id> (Linux paths)
 x86sim listapps                 # installed apps (--json: bundle/data paths, executable, version)
@@ -150,8 +153,16 @@ Breakpoint 1: where = DevTools`$s8DevTools14ViewControllerC11viewDidLoadyyF, add
 ```
 
 Breakpoints by name or regex (`breakpoint set -r 'DevTools.*viewDidLoad'`), continue/step, `bt` with the app's and the
-runtime's symbols, registers and memory work. Expression evaluation (`p`, `po`) does not (LLDB can't run its support
-code in the process yet). Use `kill` or `process detach` to end a session. Crashes without a debugger:
+runtime's symbols, registers and memory work, and so do expressions in C and Objective-C (they run code in the app):
+
+```
+(lldb) expr -l objc -O -- [[[UIApplication sharedApplication] keyWindow] recursiveDescription]
+(lldb) expr -l objc -- (int)[(id)[UIApplication sharedApplication] applicationState]
+```
+
+Swift expressions (`po self` in a Swift frame) need an LLDB with Swift support (swift.org's toolchain); the
+distribution's lldb has none and falls back to Objective-C++. The warning "could not execute support code to read
+Objective-C class data" is about the dyld shared cache, which this runtime doesn't use; classes are still found. Use `kill` or `process detach` to end a session. Crashes without a debugger:
 `tools/debug/lastcrash.sh` (symbolized core) and `tools/debug/sigctx.py`.
 
 ## Simulator-side binaries
@@ -179,8 +190,9 @@ then attach the archive to a release or copy it over.
   CAMetalLayer, on the GPU) run at 60 fps. Sample apps: `tests/apps`, built on the Mac by `build/mac-build-apps.sh`.
 - Developer workflow as with simctl/Xcode: launch with environment and `--console`, `--wait-for-debugger`, terminate,
   containers, listapps, push notifications, Photos media, os_log streaming, screenshots and MP4 recording, and LLDB
-  debugging with breakpoints and symbolic backtraces (`x86sim debug`). `x86sim location set` doesn't reach apps yet.
-- Tests: `tests/devtools.sh` (16 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
+  debugging with breakpoints, symbolic backtraces and Objective-C/C expressions (`x86sim debug`), simulated location
+  (a point, a route between waypoints, Apple's scenarios) for CLLocationManager and Maps.
+- Tests: `tests/devtools.sh` (23 checks), `tests/fsevhist.sh` (FSEvents history across boots, 5 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
 ## Licensing
 
