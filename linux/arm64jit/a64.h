@@ -102,6 +102,7 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     void InterpreterFallback(u64 pc, size_t n) override;
     void CallSVC(uint32_t swi) override;
     void ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) override;
+    void InstructionCacheOperationRaised(Dynarmic::A64::InstructionCacheOperation op, u64 value) override;
     void AddTicks(u64) override {}
     u64 GetTicksRemaining() override { return ~0ull; }
     u64 GetCNTPCT() override;

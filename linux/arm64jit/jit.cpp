@@ -105,6 +105,9 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
     void InterpreterFallback(u64 pc, size_t n) override { T().InterpreterFallback(pc, n); }
     void CallSVC(uint32_t swi) override { T().CallSVC(swi); }
     void ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) override { T().ExceptionRaised(pc, e); }
+    void InstructionCacheOperationRaised(Dynarmic::A64::InstructionCacheOperation op, u64 value) override {
+        T().InstructionCacheOperationRaised(op, value);
+    }
     void AddTicks(u64) override {}
     u64 GetTicksRemaining() override { return ~0ull; }
     u64 GetCNTPCT() override { return T().GetCNTPCT(); }
@@ -128,11 +131,16 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         // off unless X86CODE_A64_LINK=1. Fastmem fault "recompile" Invalidates/Unpatches from the
         // SIGSEGV handler — even with shared_mutex held that still patches live code; redirect the
         // fault via FakeCall only (recompile_on_*_failure = false). FastDispatch stays (16-byte
-        // atomic data); RSB stays (per-thread state, imm64 codeptr updates are same length).
+        // atomic data). RSB is off by default: Invalidate clears the shared map/FD but cannot reset
+        // every thread's RSB, so a return can jump into a stale translation; set X86CODE_A64_RSB=1
+        // to re-enable for experiments.
         if (!(getenv("X86CODE_A64_LINK") && atoi(getenv("X86CODE_A64_LINK")) == 1)) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::BlockLinking;
         }
-        // X86CODE_A64_SAFE=1: also drop FastDispatch + RSB (narrows shared races further for experiments).
+        if (!(getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 1)) {
+            c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
+        }
+        // X86CODE_A64_SAFE=1: also drop FastDispatch (narrows shared races further for experiments).
         if (getenv("X86CODE_A64_SAFE") && atoi(getenv("X86CODE_A64_SAFE")) == 1) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
@@ -355,6 +363,23 @@ void guest_backtrace(GuestThread &t) {
         u64 next = GuestThread::rd<u64>(fp);
         if (next <= fp) break;
         fp = next;
+    }
+}
+
+void GuestThread::InstructionCacheOperationRaised(Dynarmic::A64::InstructionCacheOperation op, u64 value) {
+    // Guest IC IVAU / IALLU after writing instructions (dyld, objc, fishhook). Default dynarmic callback is a
+    // no-op; per-thread 8 MB caches masked that by evacuating on full, but the shared cache never frees.
+    using Op = Dynarmic::A64::InstructionCacheOperation;
+    if (!jit) return;
+    switch (op) {
+    case Op::InvalidateByVAToPoU:
+        // One cache line; invalidate a 64-byte window covering the VA.
+        jit->InvalidateCacheRange(value & ~u64(63), 64);
+        break;
+    case Op::InvalidateAllToPoU:
+    case Op::InvalidateAllToPoUInnerSharable:
+        jit->ClearCache();
+        break;
     }
 }
 
