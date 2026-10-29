@@ -2634,7 +2634,7 @@ types, tests/apps/DevTools, tests/devtools.sh, tests/probes/fsevprobe, suggestd 
 - **`x86sim launch --console-pty`**: the app's stdout/stderr are a Linux pty (isatty true in the app).
 - **FSEvents history across boots** (host/fseventsd): journal + startup catch-up; tests/fsevhist.sh 5/5.
 - Game Center row icon: explained (not a bug of ours). Disk-load hang: one reproduction, stopped at the user's request.
-- Tests: tests/devtools.sh 23/23 (three runs), tests/fsevhist.sh 5/5.
+- Tests: tests/devtools.sh 22/22 (two runs in a row), tests/fsevhist.sh 5/5.
 
 Prior work checked first: research/willi, VibeDarling and linuxkid473 have nothing on locationd, CLSimulationManager,
 NanoRegistry, LLDB expressions or FSEvents history.

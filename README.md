@@ -192,7 +192,7 @@ then attach the archive to a release or copy it over.
   containers, listapps, push notifications, Photos media, os_log streaming, screenshots and MP4 recording, and LLDB
   debugging with breakpoints, symbolic backtraces and Objective-C/C expressions (`x86sim debug`), simulated location
   (a point, a route between waypoints, Apple's scenarios) for CLLocationManager and Maps.
-- Tests: `tests/devtools.sh` (23 checks), `tests/fsevhist.sh` (FSEvents history across boots, 5 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
+- Tests: `tests/devtools.sh` (22 checks), `tests/fsevhist.sh` (FSEvents history across boots, 5 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
 ## Licensing
 
