@@ -33,11 +33,16 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No PosterBoard: it spawns a flock of
 # poster extensions (~450 MB each, 10+ processes, +5 GB) that push SHARED=0 past 13 GB before home. No chronod
 # (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
+# A64_JOBS=slim drops sleepd + usernotificationsd (~400-450 MB RSS each under the JIT); home + one app
+# does not need them. Default std keeps them for cold-boot stability (BKS XPC). A64_SLIM=1 (default)
+# still reaps Spotlight / WidgetRenderer / pkd after home.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd"
+UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination"
 FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
 case "${A64_JOBS:-std}" in
 	min) JOBS="$MIN" ;;
+	slim) JOBS="$MIN $UI_SLIM" ;;
 	full) JOBS="$MIN $UI $FULLUI" ;;
 	*) JOBS="$MIN $UI" ;;
 esac
@@ -131,6 +136,53 @@ if [ -n "$SCOPE" ]; then
 		esac
 	done
 	echo "guests IN=$in ($((in_rss/1024)) MB) OUT=$out ($((out_rss/1024)) MB)"
+fi
+# A64_SLIM=1 (default): reclaim Spotlight / WidgetRenderer / pkd once at end of boot window.
+# They are launched on demand by SpringBoard and cost ~0.5–1 GB RSS each under the JIT; not
+# needed for a static home screen + one app. A64_KEEP boots also start slim-reaper.sh to
+# re-kill them if SpringBoard respawns them.
+if [ "${A64_SLIM:-1}" = 1 ]; then
+	echo "== slim reclaim"
+	before_rss=0
+	for p in /proc/[0-9]*; do
+		[ -r "$p/environ" ] || continue
+		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
+		r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); before_rss=$((before_rss + ${r:-0}))
+	done
+	killed=""
+	for p in /proc/[0-9]*; do
+		pid=${p#/proc/}
+		[ -r "$p/comm" ] || continue
+		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
+		c=$(cat "$p/comm" 2>/dev/null) || continue
+		case "$c" in
+			Spotlight|WidgetRenderer_*|pkd)
+				r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null)
+				echo "  kill $c pid=$pid rss_mb=$((${r:-0}/1024))"
+				kill -KILL "$pid" 2>/dev/null || true
+				killed="$killed $c"
+				;;
+		esac
+	done
+	sleep 1
+	after_rss=0
+	for p in /proc/[0-9]*; do
+		[ -r "$p/environ" ] || continue
+		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
+		r=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); after_rss=$((after_rss + ${r:-0}))
+	done
+	echo "  sum guest VmRSS $((before_rss/1024)) -> $((after_rss/1024)) MB (killed:$killed)"
+	if [ "${A64_KEEP:-0}" = 1 ]; then
+		mkdir -p "$ST"
+		# stop a previous reaper for this state dir
+		if [ -f "$ST/slim-reaper.pid" ]; then
+			old=$(cat "$ST/slim-reaper.pid" 2>/dev/null || true)
+			[ -n "$old" ] && [ -d "/proc/$old" ] && kill "$old" 2>/dev/null || true
+		fi
+		A64_DPREFIX="$DPREFIX" A64_STATE="$ST" setsid "$X/cli/libexec/arm64/slim-reaper.sh" >>"$ST/slim-reaper.log" 2>&1 &
+		echo $! >"$ST/slim-reaper.pid"
+		echo "  slim-reaper pid=$(cat "$ST/slim-reaper.pid")"
+	fi
 fi
 # A64_KEEP=1: leave the device running (the container outlives the launcher's timeout); else stop this prefix
 [ "${A64_KEEP:-0}" = 1 ] || stop_prefix
