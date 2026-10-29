@@ -1,57 +1,37 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: SHARED=1 home + slim reclaim. Monitors must use a64 ring. PSS\u22483.7\u20134.5 GB; goal ~1 GB still open.",
+  "now": "Stage 3: shrinking SpringBoard's memory, replacing the Spotlight/widget kill-loop with a real fix, cutting idle CPU; then wallpaper and Metal.",
   "metrics": [
     [
-      "Boot to home (SHARED=1 + slim reclaim)",
-      "home OK",
-      "seq advancing; bright\u22480.21; 07-stage3-home.png; framecheck needs /dev/shm/x86code-a64-simfb.ring"
+      "Boot to home screen",
+      "~3 min (186 s)",
+      "was ~7 min; goal under 1 min"
     ],
     [
-      "PSS after slim (std jobs + reaper)",
+      "Real memory (PSS, whole sim)",
       "~3.7 GB",
-      "SB 1.39 / BB 0.38 / iconservices 0.29 / sleepd 0.19 / usernotif 0.18; cgroup\u22484.4 GB; WR/Spotlight reaped"
+      "was ~4.6 GB; goal under 1 GB"
     ],
     [
-      "smaps attribution (SB dominant)",
-      "anon_host",
-      "SB: anon_host PSS\u2248585 MB, jit_code\u2248158, dyld_TEXT\u2248184, host_heap\u2248140; Spotlight was +630 MB PSS before reaper"
+      "SpringBoard",
+      "~1.4 GB PSS",
+      "largest: ~585 MB unattributed host memory"
     ],
     [
-      "icstress.sim",
-      "pass",
-      "hits 48000 iallus 240; binary in scratch arm64/bins (source tests/arm64/icstress.c)"
+      "Translation cache",
+      "shared per process",
+      "new threads cost ~0 MB (was 18-21 MB)"
     ],
     [
-      "Boot to home (SHARED=1 + LINK)",
-      "186 s",
-      "sum VmRSS 8.4\u21929.4 GB; PSS\u22484.6 GB = memory.current; OUT=0; 06-shared-home.png"
-    ],
-    [
-      "Boot to home (SHARED=0, contained)",
-      "181\u2013199 s",
-      "sum VmRSS ~8.4\u20138.6 GB; OUT=0; 05-noshared-home-contained.png"
-    ],
-    [
-      "Cgroup containment",
-      "IN=all OUT=0",
-      "memory.current tracks PSS (~4.6 GB shared); sum VmRSS ~9.4 GB"
-    ],
-    [
-      "threads.sim new-Jit RSS",
-      "shared +0\u20138 kB",
-      "noshared +18\u201321 MB"
-    ],
-    [
-      "objcswift",
-      "shared \u2248 noshared ~3 s",
-      "identical results"
+      "CPU code vs M1 Mac",
+      "2-3x slower",
+      "allocation-heavy 3-7x"
     ],
     [
       "Rendering",
-      "software home (black wallpaper)",
-      "bright\u22480.19\u20130.21"
+      "software",
+      "Metal → Vulkan not yet on arm64"
     ],
     [
       "Device",
@@ -73,12 +53,12 @@
     {
       "name": "2. Boot to the home screen",
       "status": "done",
-      "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+      "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
     },
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "SHARED=1 home (ClearCache+BlockLinking). Slim reclaim + A64_JOBS=slim. PSS\u22483.7 GB after reaper (SB still ~1.4 GB). PosterBoard/Metal/1GB goal open."
+      "detail": "Done: shared translation cache per process (boot 7 → 3 min), memory cap covers every process, thunk and cache-flush races fixed, time zone, process names. Now: memory, idle CPU, wallpaper, Metal."
     },
     {
       "name": "4. Near native",
@@ -87,16 +67,16 @@
     }
   ],
   "issues": [
-    "Goal ~1 GB real for one app; still ~3.7\u20134.5 GB PSS (SB alone ~1.4 GB; anon_host dominant)",
-    "Spotlight/WidgetRenderer respawn thrash \u2014 slim-reaper kills every 5s; need unload/deny to stop spawn",
-    "PosterBoard extensions RSS bomb; chronod/FileProvider still deferred",
-    "X86CODE_A64_PROFILE/MEMLOG correlated with early launchd_sim SIGABRT",
-    "Guest TLS destructor gap; no Metal yet on arm64 path"
+    "Memory: ~3.7 GB real vs the 1 GB goal (SpringBoard ~1.4 GB)",
+    "Spotlight and widget renderer keep respawning; a temporary script kills them every 5 s",
+    "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory",
+    "No Metal yet: black wallpaper, software rendering",
+    "Profiling/memory-log switches can crash launchd_sim early in boot"
   ],
   "milestones": [
     [
       "07-stage3-home.png",
-      "Stage 3: SHARED=1 home + slim reclaim (PSS\u22483.7 GB, a64 ring monitors, icstress pass)"
+      "Stage 3: SHARED=1 home + slim reclaim (PSS≈3.7 GB, a64 ring monitors, icstress pass)"
     ],
     [
       "06-shared-home.png",
