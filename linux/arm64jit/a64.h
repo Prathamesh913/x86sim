@@ -126,6 +126,7 @@ u32 add_thunk(const std::string &name, Handler fn, const void *native = nullptr,
 u64 stub_code(u32 index);              // guest address of thunk i's "svc #i; ret" in the shared stub page
 void emit_stub(uint32_t *at, u32 index);  // writes "svc #index; ret" at a guest address
 void boundary_init();
+uint32_t thunk_count();                // acquire-load of published thunk count (see add_thunk)
 
 // Generic handlers: integer/pointer/fp arguments straight through (x0-x7 -> rdi..r9 + stack, d0-d7 -> xmm0-7).
 void h_generic(GuestThread &t, u32 i);

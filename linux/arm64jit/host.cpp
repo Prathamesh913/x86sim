@@ -352,7 +352,7 @@ void print_stats() {
     }
     extern u64 g_thunk_counts[0x10000];
     std::vector<std::pair<u64, u32>> v;
-    for (u32 i = 0; i < g_thunks.size(); i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});
+    for (u32 i = 0, n = thunk_count(); i < n; i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});
     std::sort(v.rbegin(), v.rend());
     for (size_t k = 0; k < v.size() && k < 12; k++) logf("  %10lu %s", (unsigned long)v[k].first, g_thunks[v[k].second].name.c_str());
 }

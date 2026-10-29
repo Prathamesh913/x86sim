@@ -265,7 +265,7 @@ void GuestThread::CallSVC(uint32_t swi) {
     }
     svc_count++;
     if (g_profile && (svc_count & 1023) == 0) profile_tick();
-    if (swi >= g_thunks.size()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
+    if (swi >= thunk_count()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
     if (g_count_thunks) __atomic_fetch_add(&g_thunk_counts[swi], 1, __ATOMIC_RELAXED);
     if (g_trace) {
         const std::string &nm = g_thunks[swi].name;

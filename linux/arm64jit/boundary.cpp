@@ -6,6 +6,7 @@
 // x0/x1/d0/d1. The guest continues at the "ret" after the svc.
 // Native -> guest: guest_callable(pc) returns a native trampoline that enters the guest function on the calling thread.
 #include "a64.h"
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <mutex>
@@ -19,6 +20,12 @@ std::vector<Thunk> g_thunks;
 u64 g_exit_stub;
 static uint32_t *g_stub_page;  // svc #i; ret for every thunk i (helpers that are not dylib exports use these)
 static constexpr size_t kMaxThunks = 0xff00;
+// Published length of g_thunks. add_thunk appends under g_thunks_mu then release-stores this; CallSVC
+// acquire-loads before indexing. Capacity is reserved to kMaxThunks so data() never moves — without that,
+// a concurrent push_back reallocate raced CallSVC's `call *fn` (SIGSEGV at GuestThread::CallSVC+0x7ae,
+// same rip offset in every PosterBoard/SpringBoard/WidgetRenderer crash under the shared cache).
+static std::mutex g_thunks_mu;
+static std::atomic<uint32_t> g_n_thunks{0};
 
 void emit_stub(uint32_t *at, u32 index) {
     at[0] = 0xD4000001u | (index << 5);  // svc #index
@@ -26,7 +33,7 @@ void emit_stub(uint32_t *at, u32 index) {
 }
 
 void boundary_init() {
-    g_thunks.reserve(4096);
+    g_thunks.reserve(kMaxThunks);
     g_stub_page = (uint32_t *)mmap(nullptr, (kMaxThunks + 1) * 8, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (g_stub_page == MAP_FAILED) die("cannot map the stub page");
     g_exit_stub = (u64)&g_stub_page[kMaxThunks * 2];
@@ -34,13 +41,16 @@ void boundary_init() {
 }
 
 u32 add_thunk(const std::string &name, Handler fn, const void *native, int nfixed) {
+    std::lock_guard<std::mutex> lock(g_thunks_mu);
     u32 i = (u32)g_thunks.size();
     if (i >= kMaxThunks) die("too many thunks");
     g_thunks.push_back({name, fn, native, nfixed});
     emit_stub(&g_stub_page[2 * i], i);
+    g_n_thunks.store(i + 1, std::memory_order_release);
     return i;
 }
 u64 stub_code(u32 index) { return (u64)&g_stub_page[2 * index]; }
+uint32_t thunk_count() { return g_n_thunks.load(std::memory_order_acquire); }
 
 // ---- generic handlers ---------------------------------------------------------------------------------------------
 static void ncall(GuestThread &t, const void *fn, u64 *ints, NRet &r) {
