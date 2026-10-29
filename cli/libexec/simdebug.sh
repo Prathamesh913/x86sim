@@ -8,26 +8,28 @@
 #                    and attach before its first instruction of main; default: attach to the running app (or launch
 #                    it waiting if it isn't running)
 #     --server-only  only start debugserver and print the lldb commands (connect from another terminal or an IDE)
+#     --exe PATH     the executable (Linux path) when attaching by pid to a process that is not an installed app
+#                    (e.g. SpringBoard: $X86SIM_RUNTIME/System/Library/CoreServices/SpringBoard.app/SpringBoard)
 . "$(dirname "$0")/../lib/config.sh"
 L=$(dirname "$0")
-port=12345 launch=0 server=0
+port=12345 launch=0 server=0 exe=
 while [ $# -gt 0 ]; do
 	case $1 in
 		--launch) launch=1 ;;
 		--port) port=$2; shift ;;
 		--server-only) server=1 ;;
+		--exe) exe=$2; shift ;;
 		-*) echo "x86sim debug: unknown option $1" >&2; exit 2 ;;
 		*) break ;;
 	esac
 	shift
 done
-[ $# -ge 1 ] || { sed -n 2,11p "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[ $# -ge 1 ] || { sed -n 2,13p "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 target=$1; shift
 [ "${1:-}" = -- ] && shift
 DS=$X86SIM_ROOT/host/debugserver/debugserver
 [ -x "$DS" ] || { echo "x86sim debug: $DS is not built (make mac-debugserver)" >&2; exit 1; }
 command -v lldb > /dev/null || [ $server = 1 ] || { echo "x86sim debug: no lldb on PATH (install your distribution's lldb)" >&2; exit 1; }
-exe=
 if [[ $target =~ ^[0-9]+$ ]]; then
 	pid=$target
 else

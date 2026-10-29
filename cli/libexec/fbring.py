@@ -88,6 +88,48 @@ class Ring:
         return None
 
 
+    def wait(self, seq, timeout=1.0):
+        """Block until the ring's seq differs from `seq` (or `timeout` s passed, or the ring was recreated); returns
+        the current seq. A version-2 ring (simfb wakes futex waiters on the low word of seq at every publish) is
+        waited on with FUTEX_WAIT: no polling, no wakeups while nothing changes. Older rings are polled every 4 ms."""
+        end = time.monotonic() + timeout
+        while True:
+            cur = self.seq()
+            if cur != seq or not self.mm:
+                return cur
+            left = end - time.monotonic()
+            if left <= 0:
+                return cur
+            if struct.unpack_from("<I", self.mm, 4)[0] < 2 or not _futex_wait(self.path, self.ino, cur, min(left, 1.0)):
+                time.sleep(min(left, 0.004))
+
+
+_fx = {"ino": None, "mm": None, "addr": 0}
+
+
+def _futex_wait(path, ino, seq, secs):
+    """FUTEX_WAIT on the header's seq low word (a read-write mapping of the header page, kept per ring inode)."""
+    import ctypes
+    if _fx["ino"] != ino:
+        try:
+            fd = os.open(path, os.O_RDWR)
+        except OSError:
+            return False
+        try:
+            mm = mmap.mmap(fd, HDR, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+        finally:
+            os.close(fd)
+        word = ctypes.c_uint32.from_buffer(mm, 32)
+        _fx.update(ino=ino, mm=mm, word=word, addr=ctypes.addressof(word),
+                   libc=ctypes.CDLL(None, use_errno=True))
+    class TS(ctypes.Structure):
+        _fields_ = [("s", ctypes.c_long), ("ns", ctypes.c_long)]
+    ts = TS(int(secs), int((secs - int(secs)) * 1e9))
+    # SYS_futex 202, FUTEX_WAIT 0 (shared): returns at once if the word is no longer seq
+    _fx["libc"].syscall(202, ctypes.c_void_p(_fx["addr"]), 0, ctypes.c_uint32(seq & 0xffffffff), ctypes.byref(ts), None, 0)
+    return True
+
+
 def latest_frame():
     """(w, h, stride, seq, pixels) from the ring, else from framebuffer.bgra; None if neither."""
     r = Ring().latest()

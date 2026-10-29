@@ -212,7 +212,7 @@ def main():
     child_defaults = {
         # X86CODE_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
         # simshim: stand-ins for host services (host/simshim/compat/simshim.c)
-        # simaudio: the audio devices (host/simaudio, X86CODE_AUDIO=0 leaves it out)
+        # simaudio: the audio devices (host/simaudio, opt-in: X86CODE_AUDIO=1)
         "DYLD_INSERT_LIBRARIES": ":".join([kqueue_sim, darling(PROJECT + "/host/simshim/compat/libsimshim.dylib")] +
                                           ([darling(PROJECT + "/host/simaudio/libsimaudio.dylib")] if AUDIO else []) + [darling(os.path.abspath(p))
                                           for p in os.environ.get("X86CODE_INSERT", "").split(":") if p]),

@@ -125,6 +125,26 @@ pub struct State {
 const PAGE: u64 = 4096;
 static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// x86Code: MTLVK_TIMING=1: per command buffer, the time to encode it (CB_COMMIT received -> committed), from commit
+/// to the completed handler, and the GPU's own time; a summary (avg/p50/p95/max in ms) every 300 command buffers.
+static TIMING: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("MTLVK_TIMING").is_some());
+static TIMES: Mutex<Vec<(f64, f64, f64)>> = Mutex::new(Vec::new());
+fn timing_add(enc: f64, done: f64, gpu: f64) {
+    let mut t = TIMES.lock().unwrap();
+    t.push((enc, done, gpu));
+    if t.len() < 300 {
+        return;
+    }
+    let col = |f: &dyn Fn(&(f64, f64, f64)) -> f64| {
+        let mut v: Vec<f64> = t.iter().map(f).collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let avg = v.iter().sum::<f64>() / v.len() as f64;
+        format!("avg {:.2} p50 {:.2} p95 {:.2} max {:.2}", avg, v[v.len() / 2], v[v.len() * 95 / 100], v[v.len() - 1])
+    };
+    eprintln!("mtlvk timing ({} cbs, ms): encode {} | commit->done {} | gpu {}", t.len(), col(&|x| x.0), col(&|x| x.1), col(&|x| x.2));
+    t.clear();
+}
+
 impl State {
     pub fn new(device: Device, out: Sink) -> Res<State> {
         let helper = device.new_command_queue().map_err(err("helper queue"))?;
@@ -836,6 +856,7 @@ impl State {
             Some(Obj::Queue(q)) => q.clone(),
             _ => return Err(format!("no queue {queue:#x}")),
         };
+        let t_recv = std::time::Instant::now();
         let count = r.u32();
         r.u32();
         let cb: CommandBuffer = q.command_buffer().map_err(err("command buffer"))?;
@@ -981,7 +1002,15 @@ impl State {
             DUMPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         let out = self.out.clone();
+        let t_commit = std::sync::Arc::new(std::sync::OnceLock::<std::time::Instant>::new());
+        let t_commit2 = t_commit.clone();
         cb.add_completed_handler(Box::new(move |cb: &CommandBuffer| {
+            if *TIMING {
+                let now = std::time::Instant::now();
+                let tc = *t_commit2.get().unwrap_or(&now);
+                let gpu = (cb.gpu_end_time().unwrap_or(0.0) - cb.gpu_start_time().unwrap_or(0.0)) * 1000.0;
+                timing_add((tc - t_recv).as_secs_f64() * 1000.0, (now - tc).as_secs_f64() * 1000.0, gpu);
+            }
             for (name, b) in &dumps {
                 if let Some(c) = b.contents() {
                     // SAFETY: the buffer's own length.
@@ -1001,6 +1030,7 @@ impl State {
             out(EV_CB_DONE, 0, w.0);
         }))
         .map_err(err("completed handler"))?;
+        let _ = t_commit.set(std::time::Instant::now());
         cb.commit().map_err(err("commit"))?;
         Ok(())
     }

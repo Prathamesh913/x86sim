@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Live video of the simulator's screen: feeds the newest frame of host/simfb's shared-memory ring
-(cli/libexec/fbring.py) to ffmpeg (NVENC H.264, 60 fps by default, constant frame rate: the newest frame is repeated when
-nothing new came) producing a low-latency HLS stream (0.75 s segments: a 0.5 s one made EXT-X-TARGETDURATION 0, which is invalid) in ~/scratch/x86code/site/live/stream.m3u8.
+"""Live video of the simulator's screen: feeds each new frame of host/simfb's shared-memory ring
+(cli/libexec/fbring.py) to ffmpeg (NVENC H.264, up to 60 fps) producing a low-latency HLS stream (0.75 s segments: a
+0.5 s one made EXT-X-TARGETDURATION 0, which is invalid) in ~/scratch/x86code/site/live/stream.m3u8.
+x86Code: event-driven, variable frame rate. It sleeps on the ring (a futex simfb wakes at each publish) and sends a
+frame only when one came (at most FPS a second), with wallclock timestamps; on a still screen the last frame is
+repeated every 0.25 s (KEEPALIVE), which keeps the segments and a keyframe every 0.25 s coming for late viewers. The
+crop/scale runs on the GPU (hwupload_cuda + scale_cuda), so a still screen costs ffmpeg almost nothing.
 Without a ring it falls back to the framebuffer.bgra dump.
     cli/libexec/simstream.py [fps]"""
 import os, struct, subprocess, sys, threading, time
@@ -24,13 +28,17 @@ for f in os.listdir(OUT):
 ff = None
 
 
+KEEPALIVE = 0.25
+
+
 def start(stride):
     return subprocess.Popen([
         "ffmpeg", "-hide_banner", "-loglevel", "warning",
-        "-f", "rawvideo", "-pix_fmt", "bgra", "-s", "%dx%d" % (stride // 4, H), "-r", str(FPS), "-i", "-",
-        "-vf", "crop=%d:%d:0:0,scale=%d:%d" % (W, H, OW, OH),
+        "-f", "rawvideo", "-pix_fmt", "bgra", "-s", "%dx%d" % (stride // 4, H), "-framerate", "1000",
+        "-use_wallclock_as_timestamps", "1", "-i", "-",
+        "-vf", "crop=%d:%d:0:0,hwupload_cuda,scale_cuda=%d:%d" % (W, H, OW, OH),
         "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr", "-b:v", "3000k", "-bf", "0",
-        "-g", str(FPS // 4), "-pix_fmt", "yuv420p",
+        "-g", "600", "-forced-idr", "1", "-force_key_frames", "expr:gte(t,n_forced*%g)" % KEEPALIVE, "-fps_mode", "vfr",
         "-f", "hls", "-hls_time", "0.75", "-hls_list_size", "6",
         "-hls_flags", "delete_segments+independent_segments+omit_endlist",
         os.path.join(OUT, "stream.m3u8")], stdin=subprocess.PIPE)
@@ -40,10 +48,10 @@ ring = fbring.Ring()
 frame, stride, seq = None, None, None
 mtime = None
 period = 1.0 / FPS
-next_t = time.monotonic()
+last = 0.0
 while ff is None or ff.poll() is None:
     try:
-        s = ring.seq()
+        s = ring.wait(seq, KEEPALIVE) if seq else ring.seq()
         if s and s != seq:
             f = ring.latest()
             if f and f[1] == H and f[0] >= W:
@@ -53,6 +61,8 @@ while ff is None or ff.poll() is None:
                 elif f[2] != stride:
                     frame = None
         elif not s:
+            seq = None
+            time.sleep(KEEPALIVE)
             st = os.stat(fbring.FILE)
             if st.st_mtime_ns != mtime:
                 data = open(fbring.FILE, "rb").read()
@@ -64,15 +74,18 @@ while ff is None or ff.poll() is None:
     except (OSError, struct.error):
         pass
     if frame is not None:
+        # at most FPS frames a second: a frame that comes sooner waits for the slot (and the newest one is sent)
+        d = last + period - time.monotonic()
+        if d > 0:
+            time.sleep(d)
+            f = ring.latest()
+            if f and f[3] != seq and f[1] == H and f[2] == stride:
+                frame, seq = f[5], f[3]
         if ff is None:
             ff = start(stride)
         try:
             ff.stdin.write(frame)
+            ff.stdin.flush()
         except BrokenPipeError:
             break
-    next_t += period
-    d = next_t - time.monotonic()
-    if d > 0:
-        time.sleep(d)
-    else:
-        next_t = time.monotonic()   # fell behind: don't burst
+        last = time.monotonic()

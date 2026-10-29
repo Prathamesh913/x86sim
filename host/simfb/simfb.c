@@ -239,6 +239,16 @@ static size_t ring_slot_bytes;
 static uint64_t ring_frames, file_last_ns;
 static dispatch_source_t file_timer;
 
+// x86Code: readers on Linux (simview, simstream, fbring.wait) sleep in FUTEX_WAIT on the low 32 bits of the header's
+// seq instead of polling; every publish wakes them. Darling processes are Linux processes and its userland makes
+// Linux syscalls directly, so this is Linux's futex(2) (shared, not FUTEX_PRIVATE: the page is a /dev/shm file
+// mapped by other processes).
+static void ring_wake(void* addr) {
+	long r;
+	__asm__ volatile("syscall" : "=a"(r) : "a"(202L /* SYS_futex */), "D"(addr), "S"(1L /* FUTEX_WAKE */), "d"(0x7fffffffL)
+		: "rcx", "r11", "memory");
+	(void)r;
+}
 static uint64_t now_ns(void) { static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb); return mach_absolute_time() * tb.numer / tb.denom; }
 static uint64_t wall_ns(void) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec; }
 
@@ -262,7 +272,7 @@ static void ring_open(size_t stride, size_t height) {
 	if (m == MAP_FAILED) { unlink(tmp); fprintf(stderr, "simfb: frame ring mmap failed\n"); return; }
 	ring = m;
 	ring->magic = 'RBFS';   // "SFBR" in memory (little-endian)
-	ring->version = 1;
+	ring->version = 2;   // 2: every publish wakes futex waiters on the low word of seq (ring_wake)
 	ring->nslots = RING_SLOTS;
 	ring->slot_bytes = (uint32_t)ring_slot_bytes;
 	ring->st_pid = getpid();
@@ -319,6 +329,7 @@ static void dump(SFBSwapchainRef sc, IOSurfaceRef s) {   // on dump_q
 		atomic_store_explicit(&rs->seq, ++ring_frames, memory_order_release);
 		atomic_store_explicit(&ring->latest, slot, memory_order_release);
 		atomic_store_explicit(&ring->seq, ring_frames, memory_order_release);
+		ring_wake((void*)&ring->seq);
 		IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
 		// the file: at most every 2 s, from the ring; the timer writes a newer last frame later
 		if (now_ns() - file_last_ns >= 2000000000ull) file_from_ring();

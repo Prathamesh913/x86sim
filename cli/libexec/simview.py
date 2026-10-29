@@ -9,7 +9,7 @@ Mouse: click/drag = touch; Ctrl+drag = two-finger pinch around the window centre
 centre); Shift+drag = two-finger pan (fingers 100 px apart at device scale, moving together). Keyboard: typed keys go
 to the simulator's hardware keyboard (host/simhid). F1 or Ctrl+H = home button, F2 = lock button, F3/F4 = volume
 up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in)."""
-import os, socket, struct, sys, time
+import os, threading, socket, struct, sys, time
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
@@ -148,8 +148,10 @@ def on_activate(app):
             state["shown"], state["logged"], state["peak"], state["logseq"] = 0, now, 0, seq
         state["peak"] = max(state.get("peak", 0), len(f))
 
-    # x86Code: one check per frame-clock tick (the display's rate); a frame is only built when the ring's seq changed
-    def tick(widget, clock):
+    # x86Code: event-driven. A thread sleeps on the ring (fbring.Ring.wait: a futex simfb wakes at every publish) and
+    # hands each new frame to the GTK main loop; nothing runs while the screen doesn't change (the frame-clock tick of
+    # before woke the process at the display's rate all the time). Without a ring: framebuffer.bgra every 0.5 s.
+    def update(done):
         try:
             seq = ring.seq()
             if seq:
@@ -167,9 +169,26 @@ def on_activate(app):
                     state["mtime"] = st.st_mtime_ns
         except (OSError, struct.error, ValueError, GLib.Error):
             pass
-        return GLib.SOURCE_CONTINUE
+        done.set()
+        return GLib.SOURCE_REMOVE
 
-    pic.add_tick_callback(tick)
+    def waiter():
+        seen = None
+        while True:
+            seq = ring.wait(seen, 1.0) if seen else ring.seq()
+            if not seq:   # no ring (yet): the file
+                GLib.idle_add(update, threading.Event())
+                seen = 0
+                time.sleep(0.5)
+                continue
+            if seq == seen:
+                continue
+            seen = seq
+            done = threading.Event()
+            GLib.idle_add(update, done)
+            done.wait(1.0)   # one update in flight at a time
+
+    threading.Thread(target=waiter, daemon=True).start()
     win.present()
 
 
