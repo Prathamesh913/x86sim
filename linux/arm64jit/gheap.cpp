@@ -10,6 +10,7 @@
 // A chunk table (one byte per MB of the guest range) gives malloc_size in O(1). Pointers the heap does not own fall
 // back to Darling's malloc (blocks that native code allocated and the guest frees).
 #include "a64.h"
+#include <cerrno>
 #include <mutex>
 #include <unordered_map>
 #include <sys/mman.h>
@@ -76,7 +77,10 @@ FreeBlock *refill(int c, uint32_t want, uint32_t *got) {
     while (n < want) {
         if (g.carve + sz > g.carve_end) {
             u64 a = reserve_aligned(kChunk, kChunk - 1);
-            if (!a || mprotect((void *)a, kChunk, PROT_READ | PROT_WRITE)) break;
+            if (!a || mprotect((void *)a, kChunk, PROT_READ | PROT_WRITE)) {
+                logf("gheap: no chunk for class %d (reserve %#lx, errno %d)", c, (unsigned long)a, errno);
+                break;
+            }
             g_chunk_class[(a - kLo) / kChunk] = (uint8_t)(c + 1);
             g.carve = a; g.carve_end = a + kChunk;
         }
@@ -118,7 +122,10 @@ void *small_alloc(int c) {
 void *large_alloc(size_t size, size_t align) {
     u64 len = (size + 0x3fff) & ~0x3fffull;
     u64 a = reserve_aligned(len, align > 0x4000 ? align - 1 : 0);
-    if (!a || mprotect((void *)a, len, PROT_READ | PROT_WRITE)) return nullptr;
+    if (!a || mprotect((void *)a, len, PROT_READ | PROT_WRITE)) {
+        logf("gheap: large allocation of %zu bytes (align %zu) failed (reserve %#lx, errno %d)", size, align, (unsigned long)a, errno);
+        return nullptr;
+    }
     std::lock_guard l(g_large_mu);
     g_large[a] = len;
     return (void *)a;

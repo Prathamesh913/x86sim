@@ -104,6 +104,7 @@ constexpr int kAnywhere = 1, kOverwrite = 0x4000;
 static std::atomic<u64> g_low_cursor{0x300000000ull};
 constexpr u64 kLowEnd = 0xFC0000000ull;
 static u64 reserve_low(u64 len) {
+    len = (len + 0x3fff) & ~0x3fffull;  // keep the cursor 16K-aligned (an unaligned one made every later mmap EINVAL)
     for (int wrapped = 0; wrapped < 2; wrapped++) {
         for (;;) {
             u64 at = g_low_cursor.load();
