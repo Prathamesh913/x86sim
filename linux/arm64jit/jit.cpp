@@ -26,8 +26,25 @@ static std::atomic<size_t> g_next_cpu{0};
 static thread_local GuestThread *t_self;
 static thread_local struct Owner { GuestThread *t = nullptr; ~Owner() { delete t; } } t_owner;
 
+// Darling's threads end without running the ELF's thread_local destructors: a native (Darling) TSD key with a
+// destructor frees the thread's GuestThread (Jit, code cache, guest stack) when the thread exits. Before this every
+// exited workqueue thread leaked ~20 MB.
+static void destroy_guest_thread(void *p) {
+    auto *t = (GuestThread *)p;
+    if (t->depth == 0 && t_self == t) { t_self = nullptr; t_owner.t = nullptr; delete t; }
+}
 GuestThread &GuestThread::self() {
-    if (!t_self) { t_owner.t = new GuestThread(); t_self = t_owner.t; }
+    if (!t_self) {
+        t_owner.t = new GuestThread(); t_self = t_owner.t;
+        static unsigned long key = [] {
+            unsigned long k = 0;
+            auto *create = (int (*)(unsigned long *, void (*)(void *)))dsym("pthread_key_create");
+            if (create) create(&k, destroy_guest_thread);
+            return k;
+        }();
+        static auto *setspec = (int (*)(unsigned long, const void *))dsym("pthread_setspecific");
+        if (key && setspec) setspec(key, t_self);
+    }
     return *t_self;
 }
 
@@ -77,7 +94,7 @@ void GuestThread::reset_after_unwind() {
     (void)jit.release();
     jit = std::make_unique<Dynarmic::A64::Jit>(cfg);
 }
-GuestThread::~GuestThread() { munmap((void *)stack_base, stack_size); }
+GuestThread::~GuestThread() { munmap((void *)stack_base, stack_size); free(tsd); }
 
 NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int nfps) {
     struct Saved {
