@@ -631,9 +631,68 @@ Screenshot: `14-stage3-pagemap-home.png`.
 **Cold boot:** park+strip from t=0 reached full home on both reboot2 (idle-fix) and the
 page-map reboot — improved vs the earlier status-bar-only flake; still want a few more reps.
 
+### Compact patch + fastmem maps (2026-10-29, round 3g)
+
+Fingerprinted the “448 MB” SpringBoard anon VMA as **two adjacent glibc `mmap` chunks**
+merged by the kernel:
+
+| chunk | owner | ~size before |
+| --- | --- | --- |
+| A | `tsl::robin_map` buckets for `fastmem_patch_info` (56 B/entry × ~1.5M) | ~224 MB |
+| B | `tsl::robin_map` buckets for `patch_information` (value held 4×`std::vector` ≈96 B) | ~224 MB |
+
+The “144 MB” VMA was `block_descriptors` (~64 MB) + `block_pages` (~80 MB); “56 MB” ≈
+`unlinked_heads`. Confirmed by walking `SharedCode*` pointers into the large VMAs after
+SIGUSR1 memlog + SharedStats (~885K blocks, ~152 MB code).
+
+**Fix (dynarmic `11608843`):**
+
+1. `PatchInformation`: four site vectors → one tagged `sites` vector (`Kind` + `CodePtr`,
+   96 B → 24 B per value) → patch map bucket array ~224 → ~80 MB.
+2. `FastmemPatchInfo`: keep only `resume_rip` + `callback`; move `marker` /
+   `recompile` into `fastmem_recompile_markers` (empty under our default
+   `recompile_on_fastmem_failure=false`) → ~224 → ~128 MB.
+3. `ClearCache` clears the side map.
+
+Cold boot with park+strip+compact maps reached full home (bright≈0.21, icons+dock).
+
+| metric | before (page-map home) | after (compact maps) |
+| --- | --- | --- |
+| SB PSS | ~1.4 GB | **~1.18 GB** |
+| SB anon_host PSS | ~763 MB | **~477 MB** |
+| largest anon VMA | 448 MB | **288 MB** (merged slim fastmem ~128 + compact patch ~80 + block_pages ~80) |
+| glibc mallinfo2 `hblkhd` | ~652 MB / 11 blocks | **~413 MB** / 12 blocks |
+| host_heap (smaps) | ~79 MB | ~86 MB (unchanged class) |
+| whole-sim PSS | ~3.8 GB | **~3.56 GB** |
+| SharedStats | — | ~885K blocks, ~152 MB code |
+
+Screenshot: `15-stage3-compact-maps-home.png`. Scratch: `/home/bobby/scratch/x86code/stage3g/`.
+
+**Whole-sim PSS by category (after compact, home):**
+
+| category | PSS MB | share |
+| --- | --- | --- |
+| anon_host_jit_meta (dynarmic maps) | 1642 | 46% |
+| dyld_cache (clean+dirty) | 726 | 20% |
+| jit_code (rwxp code cache) | 463 | 13% |
+| host_heap | 352 | 10% |
+| mapped_libs_files | 315 | 9% |
+| other / arm64jit.so / stacks | ~68 | 2% |
+| **TOTAL** | **3566** | |
+
+Top processes: SpringBoard 1178 MB (anon_host 477 / dyld 378 / jit 156), backboardd 368,
+iconservicesagent 248. Same JIT-meta pattern in every translated process — the remaining
+~2.5 GB to the 1 GB goal is mostly more of these maps + dyld + code cache across the job set.
+
+**PosterBoard:** left out this round. Prior notes: LaunchAngel wallpaper path blows RSS
+(extensions / PRSService / same JIT-meta tax). Restoring it before another ~200–400 MB of
+JIT meta is cut would push whole-sim further from 1 GB. Next pass: apply the same map
+compaction wins process-wide, then trial-enable PosterBoard with a before/after PSS.
+
 ### Still open (stage 3 remainder / stage 4 prep)
-1. Attribute and shrink the 448 MB SB anon VMA (not fixed by page-map); trim remaining
-   `host_heap`; free dynarmic IR after emit; `madvise` freed guest heap.
+1. Further shrink JIT meta (remaining 288 MB SB VMA = fastmem+patch+block_pages; sparse
+   `block_descriptors` / drop unused unlinked_heads; free IR after emit; `madvise` freed
+   guest heap). Goal gap: ~3.56 GB → under 1 GB.
 2. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
 3. A few more cold-boot reps with park+strip to call reliability done.
 4. Persistent on-disk translation cache; trim the early shared boot spin.
