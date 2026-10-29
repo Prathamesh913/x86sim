@@ -236,6 +236,11 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     // overrides cache clients' binds). A Darling variable's size is the gap to the next exported data symbol (<= 4K);
     // values are snapshotted now (constants such as mach_task_self_, NDR_record; vm_page_size is our own 16K).
     u64 text_size = (kCodeStart + code.size() * 4 + kPage - 1) & ~(kPage - 1);
+    {  // crash reports name the export of a stub pc (where())
+        std::vector<std::pair<u64, std::string>> fn;
+        for (auto &e : entries) fn.push_back({e.value, e.name});
+        register_stub_symbols(install.substr(install.rfind('/') + 1), std::move(fn));
+    }
     std::vector<const uint8_t *> starts;
     for (auto &d : data) starts.push_back((const uint8_t *)d.src);
     std::sort(starts.begin(), starts.end());

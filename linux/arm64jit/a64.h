@@ -38,7 +38,8 @@ extern "C" void a64_ncall(const void *fn, const u64 *ints, const u64 *fps, NRet 
 struct GuestThread;
 using Handler = void (*)(GuestThread &, u32 index);
 
-// One per native thread that runs guest code: its own dynarmic Jit (dynarmic Jits are single-threaded).
+// One per native thread that runs guest code: its own dynarmic Jit (guest state; a Jit is single-threaded) over the
+// process-wide translation cache.
 struct GuestThread final : Dynarmic::A64::UserCallbacks {
     std::unique_ptr<Dynarmic::A64::Jit> jit;
     u64 stack_base = 0, stack_size = 0;
@@ -59,6 +60,7 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
 
     GuestThread();
     void reset_after_unwind();  // after a longjmp out of call() (pthread_exit)
+    void run_guest_tsd_destructors();  // at thread exit (jit.cpp)
     Dynarmic::A64::UserConfig cfg;
     ~GuestThread() override;
     static GuestThread &self();
@@ -164,8 +166,11 @@ void *gh_malloc(size_t); void *gh_calloc(size_t, size_t); void *gh_realloc(void 
 void *gh_memalign(size_t align, size_t size); size_t gh_size(const void *); size_t gh_good_size(size_t);                               // from ___libkernel_init: patches the mapped cache text
 int stub_fd_for_path(const char *path);  // open() redirect: a dup of the stub dylib's fd, or -1
 
+void set_guest_key_destructor(u64 key, u64 guest_dtor);  // pthread keys (handlers.cpp, jit.cpp)
+
 // misc
 void guest_backtrace(GuestThread &t);
+void register_stub_symbols(const std::string &file, std::vector<std::pair<u64, std::string>> fn);  // stub dylib exports
 std::string where(u64 guest_addr);  // file+offset (non-cache) or "cache"  // frame-pointer chain to the log (jit.cpp)
 [[noreturn]] void die(const char *fmt, ...);
 void logf(const char *fmt, ...);

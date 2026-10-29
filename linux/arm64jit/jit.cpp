@@ -1,9 +1,12 @@
-// libarm64jit: guest threads. Each native thread that runs guest code gets one dynarmic Jit and an 8 MB guest stack.
+// libarm64jit: guest threads. Each native thread that runs guest code gets its own dynarmic Jit (guest registers) and an 8 MB guest stack; the translated code is shared by all threads of the process (shared_code below).
 // Native code may call back into guest code on the same thread (qsort comparators, pthread_once, TSD destructors...):
 // call() then runs a nested Jit::Run (re-entrant in our dynarmic fork) on a stack frame 128 bytes below the guest's
 // current SP and restores the full guest state afterwards.
 #include "a64.h"
 #include <atomic>
+#include <algorithm>
+#include <mutex>
+#include <map>
 #include <malloc.h>
 #include <sched.h>
 #include <cstdarg>
@@ -23,15 +26,40 @@ static Dynarmic::ExclusiveMonitor *monitor() {
     return m;
 }
 static std::atomic<size_t> g_next_cpu{0};
+static std::atomic<int> g_live_threads{0};  // GuestThreads alive (profiling)
 static thread_local GuestThread *t_self;
 static thread_local struct Owner { GuestThread *t = nullptr; ~Owner() { delete t; } } t_owner;
 
 // Darling's threads end without running the ELF's thread_local destructors: a native (Darling) TSD key with a
 // destructor frees the thread's GuestThread (Jit, code cache, guest stack) when the thread exits. Before this every
 // exited workqueue thread leaked ~20 MB.
+// Guest pthread key destructors (guest function addresses; 0 = none), see h_key_create.
+static std::atomic<u64> g_key_dtor[GuestThread::kGuestTsdSlots];
+void set_guest_key_destructor(u64 key, u64 guest_dtor) {
+    if (key < GuestThread::kGuestTsdSlots) g_key_dtor[key].store(guest_dtor);
+}
+// As libpthread's _pthread_tsd_cleanup: up to PTHREAD_DESTRUCTOR_ITERATIONS (4) passes over the keys, each value
+// cleared before its destructor runs (a destructor may set values again). Slots 0-9 are the reserved shared ones.
+void GuestThread::run_guest_tsd_destructors() {
+    for (int pass = 0; pass < 4; pass++) {
+        bool any = false;
+        for (int k = 10; k < kGuestTsdSlots; k++) {
+            const u64 v = tsd[k], d = g_key_dtor[k].load(std::memory_order_relaxed);
+            if (!v || !d) continue;
+            tsd[k] = 0;
+            any = true;
+            call(d, {v});
+        }
+        if (!any) break;
+    }
+}
+
 static void destroy_guest_thread(void *p) {
     auto *t = (GuestThread *)p;
-    if (t->depth == 0 && t_self == t) { t_self = nullptr; t_owner.t = nullptr; delete t; }
+    if (t->depth == 0 && t_self == t) {
+        t->run_guest_tsd_destructors();
+        t_self = nullptr; t_owner.t = nullptr; delete t;
+    }
 }
 GuestThread &GuestThread::self() {
     if (!t_self) {
@@ -50,11 +78,70 @@ GuestThread &GuestThread::self() {
 
 GuestThread *GuestThread::current() { return t_self; }
 
+// Stage 3: one translation cache per process, shared by every guest thread (dynarmic's shared_translations: the
+// code reads tpidr/tpidrro and the exclusive-monitor slot from the running thread's JitState). The code calls these
+// process-wide callbacks, which forward to the calling thread's GuestThread. X86CODE_A64_SHARED=0: one cache per
+// thread (stage 2). Shared code is never freed while the process runs (threads blocked in native calls return
+// into it), so the cache is a large reservation: only the code actually emitted is resident.
+namespace {
+struct Forward final : Dynarmic::A64::UserCallbacks {
+    static GuestThread &T() { return *t_self; }
+    std::optional<uint32_t> MemoryReadCode(u64 a) override { return GuestThread::rd<uint32_t>(a); }
+    uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
+    uint16_t MemoryRead16(u64 a) override { return GuestThread::rd<uint16_t>(a); }
+    uint32_t MemoryRead32(u64 a) override { return GuestThread::rd<uint32_t>(a); }
+    u64 MemoryRead64(u64 a) override { return GuestThread::rd<u64>(a); }
+    Dynarmic::A64::Vector MemoryRead128(u64 a) override { return GuestThread::rd<Dynarmic::A64::Vector>(a); }
+    void MemoryWrite8(u64 a, uint8_t v) override { GuestThread::wr(a, v); }
+    void MemoryWrite16(u64 a, uint16_t v) override { GuestThread::wr(a, v); }
+    void MemoryWrite32(u64 a, uint32_t v) override { GuestThread::wr(a, v); }
+    void MemoryWrite64(u64 a, u64 v) override { GuestThread::wr(a, v); }
+    void MemoryWrite128(u64 a, Dynarmic::A64::Vector v) override { GuestThread::wr(a, v); }
+    bool MemoryWriteExclusive8(u64 a, uint8_t v, uint8_t e) override { return T().MemoryWriteExclusive8(a, v, e); }
+    bool MemoryWriteExclusive16(u64 a, uint16_t v, uint16_t e) override { return T().MemoryWriteExclusive16(a, v, e); }
+    bool MemoryWriteExclusive32(u64 a, uint32_t v, uint32_t e) override { return T().MemoryWriteExclusive32(a, v, e); }
+    bool MemoryWriteExclusive64(u64 a, u64 v, u64 e) override { return T().MemoryWriteExclusive64(a, v, e); }
+    bool MemoryWriteExclusive128(u64 a, Dynarmic::A64::Vector v, Dynarmic::A64::Vector e) override { return T().MemoryWriteExclusive128(a, v, e); }
+    void InterpreterFallback(u64 pc, size_t n) override { T().InterpreterFallback(pc, n); }
+    void CallSVC(uint32_t swi) override { T().CallSVC(swi); }
+    void ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) override { T().ExceptionRaised(pc, e); }
+    void AddTicks(u64) override {}
+    u64 GetTicksRemaining() override { return ~0ull; }
+    u64 GetCNTPCT() override { return T().GetCNTPCT(); }
+};
+}
+
+static bool shared_translations() {
+    static const bool on = !(getenv("X86CODE_A64_SHARED") && atoi(getenv("X86CODE_A64_SHARED")) == 0);
+    return on;
+}
+
+static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmic::A64::UserConfig &thread_cfg) {
+    static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> code = [&] {
+        static Forward fwd;
+        Dynarmic::A64::UserConfig c = thread_cfg;
+        c.callbacks = &fwd;
+        c.shared_translations = true;
+        c.tpidr_el0 = nullptr; c.tpidrro_el0 = nullptr;
+        // Per process (reserved; only emitted pages are resident). Stage 2's per-thread 8 MB is too small here.
+        int mb = getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256;
+        if (mb > 0 && mb < 64) mb = 256;
+        c.code_cache_size = (size_t)mb << 20;
+        return Dynarmic::A64::Jit::MakeSharedCode(c);
+    }();
+    return code;
+}
+
+static std::unique_ptr<Dynarmic::A64::Jit> make_jit(const Dynarmic::A64::UserConfig &cfg) {
+    if (shared_translations()) return std::make_unique<Dynarmic::A64::Jit>(cfg, shared_code(cfg));
+    return std::make_unique<Dynarmic::A64::Jit>(cfg);
+}
+
 GuestThread::GuestThread() {
     // The guest has its own TSD (tpidrro_el0): slots 0-9 (pthread_self, errno, mach thread self, ...) are copied from
     // Darling's native TSD (the gs base on x86_64); keys 10+ are the guest's alone. Sharing the native array let
     // Darling's own libobjc/libdispatch destructors free guest values at thread exit (SIGABRT in every daemon).
-    // Guest TSD destructors are not run at thread exit (leak).
+    // Guest key destructors run at thread exit (run_guest_tsd_destructors).
     unsigned long gs = 0;
     syscall(SYS_arch_prctl, ARCH_GET_GS, &gs);
     tsd = (u64 *)calloc(kGuestTsdSlots, 8);
@@ -74,14 +161,15 @@ GuestThread::GuestThread() {
     c.cntfrq_el0 = 1000000000;           // the counter counts ns, like Darling's mach_absolute_time (timebase 1/1)
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
-    // x86Code: every guest thread has its own Jit (translations are not shared); a full cache is cleared, which also
-    // drops its block metadata (in glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
+    // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
+    // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
     c.code_cache_size = (getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 16) << 20;
     static const bool rss_debug = getenv("X86CODE_A64_RSS") != nullptr;
     auto rss = [] { long v = 0; if (FILE *f = fopen("/proc/self/statm", "r")) { long a, b, c2; if (fscanf(f, "%ld %ld %ld", &a, &b, &c2) == 3) v = (b - c2) * 4; fclose(f); } return v; };
     long before = rss_debug ? rss() : 0;
-    jit = std::make_unique<Dynarmic::A64::Jit>(c);
+    jit = make_jit(c);
     if (rss_debug) { struct mallinfo2 mi = mallinfo2(); logf("new Jit: anon RSS +%ld kB; glibc mmapped %zu MB in %zu blocks, arena %zu MB", rss() - before, mi.hblkhd >> 20, mi.hblks, mi.arena >> 20); }
+    g_live_threads++;
     stack_size = 8u << 20;
     stack_base = (u64)mmap(nullptr, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (stack_base == (u64)MAP_FAILED) die("cannot allocate a guest stack");
@@ -92,9 +180,9 @@ GuestThread::GuestThread() {
 void GuestThread::reset_after_unwind() {
     depth = 0; done = nullptr; in_thunk = -1;
     (void)jit.release();
-    jit = std::make_unique<Dynarmic::A64::Jit>(cfg);
+    jit = make_jit(cfg);
 }
-GuestThread::~GuestThread() { munmap((void *)stack_base, stack_size); free(tsd); }
+GuestThread::~GuestThread() { g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
 
 NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int nfps) {
     struct Saved {
@@ -135,6 +223,24 @@ bool GuestThread::MemoryWriteExclusive128(u64 a, Dynarmic::A64::Vector v, Dynarm
 bool g_count_thunks = getenv("X86CODE_A64_STATS") != nullptr;
 u64 g_thunk_counts[0x10000];
 
+// X86CODE_A64_PROFILE=1: every 10 s a line in the process log: wall and process CPU time since start, time spent
+// translating (shared cache), blocks, guest instructions and x86 bytes emitted, dispatcher lookups, live threads.
+static const bool g_profile = getenv("X86CODE_A64_PROFILE") != nullptr;
+static void profile_tick() {
+    static const u64 start = [] { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (u64)t.tv_sec * 1000000000ull + t.tv_nsec; }();
+    static std::atomic<u64> last{0};
+    timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    const u64 now = (u64)t.tv_sec * 1000000000ull + t.tv_nsec;
+    u64 prev = last.load();
+    if (now - prev < 10000000000ull || !last.compare_exchange_strong(prev, now)) return;
+    timespec c; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &c);
+    Dynarmic::A64::Jit::SharedStats st{};
+    if (shared_translations()) st = Dynarmic::A64::Jit::GetSharedStats(*shared_code(GuestThread::self().cfg));
+    logf("profile: wall %.1fs cpu %.1fs translate %.1fs blocks %llu insns %llu code %.1f MB lookups %llu threads %d",
+         (now - start) / 1e9, c.tv_sec + c.tv_nsec / 1e9, st.translate_ns / 1e9, (unsigned long long)st.blocks,
+         (unsigned long long)st.guest_instructions, st.code_bytes / 1048576.0, (unsigned long long)st.lookups, g_live_threads.load());
+}
+
 void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
@@ -142,6 +248,7 @@ void GuestThread::CallSVC(uint32_t swi) {
         return;
     }
     svc_count++;
+    if (g_profile && (svc_count & 1023) == 0) profile_tick();
     if (swi >= g_thunks.size()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
     if (g_count_thunks) __atomic_fetch_add(&g_thunk_counts[swi], 1, __ATOMIC_RELAXED);
     if (g_trace) {
@@ -184,6 +291,27 @@ void GuestThread::InterpreterFallback(u64 pc, size_t n) {
 }
 
 // "file+offset" of a guest address outside the shared cache (from /proc/self/maps), for crash reports.
+static std::mutex g_stub_syms_mu;
+static std::map<std::string, std::vector<std::pair<u64, std::string>>> g_stub_syms;  // file name -> sorted (offset, export)
+void register_stub_symbols(const std::string &file, std::vector<std::pair<u64, std::string>> fn) {
+    std::sort(fn.begin(), fn.end());
+    std::lock_guard<std::mutex> l(g_stub_syms_mu);
+    g_stub_syms[file] = std::move(fn);
+}
+static std::string stub_symbol(const char *path, u64 off) {  // "/memfd:libsystem_kernel.dylib (deleted)"
+    if (strncmp(path, "/memfd:", 7) != 0) return "";
+    std::string file(path + 7);
+    if (auto sp = file.find(" (deleted)"); sp != std::string::npos) file.resize(sp);
+    std::lock_guard<std::mutex> l(g_stub_syms_mu);
+    auto it = g_stub_syms.find(file);
+    if (it == g_stub_syms.end()) return "";
+    auto &v = it->second;
+    auto u = std::upper_bound(v.begin(), v.end(), std::make_pair(off, std::string("\xff")));
+    if (u == v.begin()) return "";
+    --u;
+    char b[300]; snprintf(b, sizeof b, " (%s+%#lx)", u->second.c_str(), (unsigned long)(off - u->first));
+    return b;
+}
 std::string where(u64 a) {
     if (a >= 0x1c0000000ull && a < 0x2c0000000ull) return "cache";
     std::string r;
@@ -192,7 +320,9 @@ std::string where(u64 a) {
         while (fgets(line, sizeof line, m)) {
             unsigned long lo, hi, off; char path[600] = "";
             if (sscanf(line, "%lx-%lx %*s %lx %*s %*s %599[^\n]", &lo, &hi, &off, path) >= 3 && a >= lo && a < hi) {
-                char b[700]; snprintf(b, sizeof b, "%s+%#lx", path[0] ? path : "anon", a - lo + off); r = b; break;
+                char b[700]; snprintf(b, sizeof b, "%s+%#lx", path[0] ? path : "anon", a - lo + off); r = b;
+                r += stub_symbol(path, a - lo + off);
+                break;
             }
         }
         fclose(m);

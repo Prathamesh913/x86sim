@@ -28,6 +28,35 @@ template <int... Fn> static void h_callbacks(GuestThread &t, u32 i) {
     t.set_x(0, r.rax);
 }
 
+// pthread keys: the values live in the guest's private TSD array (setspecific is guest code), which Darling's native
+// pthread never sees, so it could never run a guest key's destructor. The key is allocated natively (one key space
+// for both sides) without a destructor; the guest destructor is recorded here and run_guest_tsd_destructors (jit.cpp)
+// calls it at thread exit. CoreFoundation's TSD finalizer (NSThread's `finished`, autorelease pools, run loops) is one.
+static void h_key_create(GuestThread &t, u32 i) {  // int pthread_key_create(pthread_key_t *key, void (*dtor)(void *))
+    const u64 key_ptr = t.x(0), dtor = t.x(1);
+    u64 ints[16] = {key_ptr, 0};
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    if ((int)r.rax == 0 && key_ptr) set_guest_key_destructor(*(u64 *)key_ptr, dtor);
+    t.set_x(0, r.rax);
+}
+static void h_key_init_np(GuestThread &t, u32 i) {  // int pthread_key_init_np(int key, void (*dtor)(void *))
+    const u64 key = t.x(0), dtor = t.x(1);
+    u64 ints[16] = {key, 0};
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    if ((int)r.rax == 0) set_guest_key_destructor(key, dtor);
+    t.set_x(0, r.rax);
+}
+static void h_key_delete(GuestThread &t, u32 i) {
+    const u64 key = t.x(0);
+    u64 ints[16] = {key};
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    if ((int)r.rax == 0) set_guest_key_destructor(key, 0);
+    t.set_x(0, r.rax);
+}
+
 // Threads the guest creates start in thread_start(): pthread_exit on them unwinds back here (longjmp) and the thread
 // returns from its start routine instead. Darling's own pthread_exit killed the whole process (SIGABRT) when called
 // from a thread running guest code (backboardd, ARM64-PLAN stage 2).
@@ -304,7 +333,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_pthread_create", h_pthread_create}, {"_pthread_create_suspended_np", h_pthread_create},
         {"_pthread_create_from_mach_thread", h_pthread_create}, {"_pthread_create_with_workgroup_np", h_pthread_create_with_workgroup},
         {"_pthread_once", h_callbacks<1>}, {"_pthread_atfork", h_callbacks<0, 1, 2>},
-        {"_pthread_key_create", h_callbacks<1>}, {"_pthread_key_init_np", h_callbacks<1>},
+        {"_pthread_key_create", h_key_create}, {"_pthread_key_init_np", h_key_init_np}, {"_pthread_key_delete", h_key_delete},
         {"__os_once", h_callbacks<2>}, {"__os_alloc_once", h_callbacks<2>},
         {"__pthread_workqueue_init", h_callbacks<0>}, {"__pthread_workqueue_init_with_kevent", h_callbacks<0, 1>},
         {"__pthread_workqueue_init_with_workloop", h_callbacks<0, 1, 2>}, {"_pthread_workqueue_setdispatch_np", h_callbacks<0>},

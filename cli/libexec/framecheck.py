@@ -2,8 +2,9 @@
 """x86Code: coarse checks of the simulator's newest frame (shm ring, cli/libexec/fbring.py), for boot waits and the
 smoke test. Samples a 118x256 grid of the frame.
     framecheck.py stats                 print seq, dark/bright fractions (luma < 30 / > 200), mean saturation
-    framecheck.py home                  exit 0 if the frame looks like the home screen: wallpaper (colourful: mean
-                                        saturation > 25) and not mostly dark (boot logo: ~98% dark)
+    framecheck.py home                  exit 0 if the frame looks like the home screen: not the boot logo (~98% dark)
+                                        and either colourful wallpaper (mean sat > 25) or enough bright pixels for the
+                                        black-wallpaper software-render case (icons/dock, bright > 5%)
     framecheck.py app [ref.json]        exit 0 if the frame looks like a light-mode app page (> 60% bright) and,
                                         with ref.json (from `stats`), differs from that frame (mean abs diff > 20)
     framecheck.py wait home|app <secs> [ref.json]
@@ -47,7 +48,8 @@ def check(kind, ref=None):
     if not st:
         return False, "no frame"
     if kind == "home":
-        ok = st["sat"] > 25 and st["dark"] < 0.5
+        # Colourful wallpaper, or black wallpaper with icons/dock (stage 2/3 arm64 software render: ~21% bright, ~74% dark).
+        ok = st["dark"] < 0.95 and (st["sat"] > 25 or st["bright"] > 0.05)
     else:
         ok = st["bright"] > 0.6
         if ok and ref:

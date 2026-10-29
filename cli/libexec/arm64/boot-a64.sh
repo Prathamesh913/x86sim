@@ -61,6 +61,11 @@ stop_prefix() {
 }
 stop_prefix
 sleep 1
+# the time zone (as cli/libexec/run-launchd-sim.sh does for the x86 boot): link the prefix's /private/etc/localtime to
+# the Linux host's zone; without it the device ran on UTC. Darling's /usr/share/zoneinfo is Linux's.
+TZNAME=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#^.*/zoneinfo/##p')
+[ -n "$TZNAME" ] && [ -f "/usr/share/zoneinfo/$TZNAME" ] && \
+	timeout 30 "$X86SIM_DARLING" shell ln -sf "/usr/share/zoneinfo/$TZNAME" /private/etc/localtime < /dev/null > /dev/null 2>&1
 H="/Volumes/SystemRoot$X/host/simhost/simhost"
 (cli/libexec/limited.sh timeout $([ "${A64_KEEP:-0}" = 1 ] && echo 86400 || echo $((SECS + 5))) "$X86SIM_DARLING" shell sh -c \
 	"exec \"$H\" /usr/bin/env $ENVS \"$R/sbin/launchd_sim\" \"/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist\"" \

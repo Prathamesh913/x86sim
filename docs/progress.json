@@ -1,12 +1,12 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: one shared translation cache per process (memory and boot time), then the crash fixes and Metal on the GPU.",
+  "now": "Stage 3: shared translation cache verified (threads/objcswift); installing and measuring boot-to-home with process-wide cache.",
   "metrics": [
-    ["Boot to home screen", "~7 min", "goal: under 1 min"],
-    ["Memory (whole simulator)", "5.4-5.9 GB", "goal: under 1 GB"],
-    ["CPU code vs M1 Mac", "2-3x slower", "compute, ObjC dispatch, Swift generics"],
-    ["Allocation-heavy code vs M1", "3-7x slower", "was 10-16x before native malloc"],
+    ["Boot to home screen", "~7 min (stage 2)", "measuring shared-cache boot"],
+    ["Memory (whole simulator)", "5.4-5.9 GB (stage 2)", "shared cache: new Jit ~0 MB vs ~20 MB/thread"],
+    ["threads.sim new-Jit RSS", "shared +0–4 kB/thread", "per-thread was +18–21 MB each"],
+    ["objcswift totals", "shared ~3.1 s / noshared ~3.0 s", "results identical; single-thread mutex noise"],
     ["Rendering", "software", "Metal → Vulkan coming in stage 3"],
     ["Device", "iPhone 17 (1206x2622)", "iOS 27.0 (24A434)"]
   ],
