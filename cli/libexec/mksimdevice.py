@@ -31,6 +31,25 @@ MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.
 AUDIO_SOCKET = os.environ.get("X86CODE_AUDIO_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "simaudio.sock")
 AUDIO = os.environ.get("X86CODE_AUDIO", "0") != "0"  # opt-in until playback works (FINDINGS 3.18)
 DARLING_VIEW = "/Volumes/SystemRoot"  # Linux / as seen inside Darling
+# x86Code: X86SIM_ARCH=arm64: a device for the arm64 runtime (iOS 27.0, run under libarm64jit; ARM64-PLAN stage 2):
+# arm64 device type (iPhone 17, iPhone18,3), arm64 builds of our in-simulator binaries (host/<name>/arm64/...; jobs
+# and shims without one are left out), no libkqueue_sim (the arm64 process's libsystem_kernel is Darling's own, behind
+# the svc thunks) and no x86_64 dyld cache. Unset: the x86_64 iOS 26.5 device, unchanged.
+ARM64 = os.environ.get("X86SIM_ARCH") == "arm64"
+DEVTYPE = {"model": "iPhone18,3", "class": "V57", "w": "1206", "h": "2622", "json": "devicetype-iphone18,3.json",
+           "version": "27.0", "build": "24A434", "arch": "arm64"} if ARM64 else \
+          {"model": "iPhone17,3", "class": "D47", "w": "1179", "h": "2556", "json": "devicetype-iphone17,3.json",
+           "version": "26.5", "build": "23F73", "arch": "x86_64"}
+
+
+def host_path(rel):
+    """Linux path of one of our in-simulator binaries (rel: host/<name>/...); for arm64 host/<name>/arm64/..., or
+    None if that build doesn't exist."""
+    if not ARM64:
+        return PROJECT + "/" + rel
+    a, b, rest = rel.split("/", 2)
+    p = "/".join([PROJECT, a, b, "arm64", rest])
+    return p if os.path.exists(p) else None
 
 
 def darling(path):
@@ -133,7 +152,7 @@ def main():
     rt, home = darling(RUNTIME), darling(data)
     # x86Code: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
     capabilities = device + "/capabilities.plist"
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", "devicetype-iphone17,3.json")) as f:
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", DEVTYPE["json"])) as f:
         caps = json.load(f)
     with open(capabilities, "wb") as f:
         plistlib.dump(caps, f)
@@ -155,7 +174,7 @@ def main():
     # and interface keys of the primary interface), from Linux (linux/hostnet/hostnet.py), loaded by netconfig.
     # configd_sim's SimulatorSupport mirrors it into the simulator, whose IPMonitor derives State:/Network/Global/IPv4,
     # DNS and the nw_path/reachability state from it. X86CODE_NETCONFIG=0 leaves it out.
-    if os.environ.get("X86CODE_NETCONFIG", "1") != "0":
+    if os.environ.get("X86CODE_NETCONFIG", "1") != "0" and host_path("host/netconfig/netconfig"):
         import subprocess
         hostnet = data + "/var/run/x86code-hostnet.plist"
         subprocess.run([sys.executable, PROJECT + "/linux/hostnet/hostnet.py", hostnet], check=False)
@@ -163,7 +182,7 @@ def main():
         log = darling(data + "/var/log/com.x86code.netconfig.log")
         with open(os.path.join(daemons, "com.x86code.netconfig.plist"), "wb") as f:
             plistlib.dump({"Label": "com.x86code.netconfig",
-                           "ProgramArguments": ["/.." * depth + darling(PROJECT + "/host/netconfig/netconfig"),
+                           "ProgramArguments": ["/.." * depth + darling(host_path("host/netconfig/netconfig")),
                                                 darling(hostnet)],
                            "EnvironmentVariables": {"X86CODE_HOST_STORE": "1",
                                                     "OS_ACTIVITY_MODE": "disable"},
@@ -176,7 +195,7 @@ def main():
     # X86CODE_METAL=all also under the generic com.apple.metal.simulator, which hands a device to every process
     # (CoreAnimation, the wallpaper poster, apps).
     metal = os.environ.get("X86CODE_METAL", "")
-    if metal and metal != "0":
+    if metal and metal != "0" and host_path("host/metalhostd/metalhostd"):
         procs = ["mtlprobe"] if metal == "1" else [p for p in metal.split(",") if p and p != "all"]
         names = ["com.apple.metal.simulator." + p for p in procs]
         if "all" in metal.split(","):
@@ -191,14 +210,14 @@ def main():
                 menv[k] = os.environ[k]
         with open(os.path.join(daemons, "com.x86code.metalhostd.plist"), "wb") as f:
             plistlib.dump({"Label": "com.x86code.metalhostd",
-                           "ProgramArguments": ["/.." * depth + darling(PROJECT + "/host/metalhostd/metalhostd")],
+                           "ProgramArguments": ["/.." * depth + darling(host_path("host/metalhostd/metalhostd"))],
                            "MachServices": {n: True for n in names}, "EnvironmentVariables": menv,
                            "StandardOutPath": log, "StandardErrorPath": log}, f)
 
     # x86Code: cross-process IOSurfaces (host/iosurfaced): iosurfaced serves com.apple.IOSurface.Remote (what
     # CoreSimulator's SimRenderServer does on a Mac) and IOSURFACE_REMOTE_EMULATED is not set, so every process's
     # IOSurface.framework uses it. X86CODE_IOSURFACE=0 goes back to per-process emulation.
-    iosurface = os.environ.get("X86CODE_IOSURFACE", "1") not in ("", "0")
+    iosurface = os.environ.get("X86CODE_IOSURFACE", "1") not in ("", "0") and bool(host_path("host/iosurfaced/iosurfaced"))
     if iosurface:
         log = darling(data + "/var/log/com.x86code.iosurfaced.log")
         depth = len(darling(RUNTIME).strip("/").split("/"))
@@ -207,7 +226,7 @@ def main():
             ienv["X86CODE_IOSURFACE_LOG"] = "1"
         with open(os.path.join(daemons, "com.x86code.iosurfaced.plist"), "wb") as f:
             plistlib.dump({"Label": "com.x86code.iosurfaced",
-                           "ProgramArguments": ["/.." * depth + darling(PROJECT + "/host/iosurfaced/iosurfaced")],
+                           "ProgramArguments": ["/.." * depth + darling(host_path("host/iosurfaced/iosurfaced"))],
                            "MachServices": {"com.apple.IOSurface.Remote": True}, "EnvironmentVariables": ienv,
                            "KeepAlive": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
 
@@ -225,8 +244,9 @@ def main():
         # X86CODE_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
         # simshim: stand-ins for host services (host/simshim/compat/simshim.c)
         # simaudio: the audio devices (host/simaudio, opt-in: X86CODE_AUDIO=1)
-        "DYLD_INSERT_LIBRARIES": ":".join([kqueue_sim, darling(PROJECT + "/host/simshim/compat/libsimshim.dylib")] +
-                                          ([darling(PROJECT + "/host/simaudio/libsimaudio.dylib")] if AUDIO else []) + [darling(os.path.abspath(p))
+        "DYLD_INSERT_LIBRARIES": ":".join(([] if ARM64 else [kqueue_sim]) +
+                                          [darling(p) for p in [host_path("host/simshim/compat/libsimshim.dylib")] if p] +
+                                          [darling(p) for p in [host_path("host/simaudio/libsimaudio.dylib")] if p and AUDIO] + [darling(os.path.abspath(p))
                                           for p in os.environ.get("X86CODE_INSERT", "").split(":") if p]),
         "CFFIXED_USER_HOME": home,
         "HOME": home,
@@ -237,7 +257,7 @@ def main():
     # the x86_64 dyld shared cache (build/mac-build-dyldcache.sh; FINDINGS, dyld shared cache): dyld_sim maps it at 0x7FF800000000,
     # which Darling's mldr reserves for processes that have this variable. X86SIM_DYLD_CACHE=0: no cache
     cache = os.path.join(PROJECT, "runtimes", "dyld-cache-23F73-x86_64")
-    if os.environ.get("X86SIM_DYLD_CACHE", "1") != "0" and os.path.isfile(cache + "/dyld_sim_shared_cache_x86_64"):
+    if not ARM64 and os.environ.get("X86SIM_DYLD_CACHE", "1") != "0" and os.path.isfile(cache + "/dyld_sim_shared_cache_x86_64"):
         child_defaults["DYLD_SHARED_CACHE_DIR"] = darling(cache) + "/"
     env = dict(child_defaults)
     env.update({
@@ -247,15 +267,17 @@ def main():
         "IPHONE_SHARED_RESOURCES_DIRECTORY": home,
         "SIMULATOR_SHARED_RESOURCES_DIRECTORY": home,
         "PATH": ":".join(rt + p for p in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
-        "SIMULATOR_ARCHS": "x86_64",
+        "SIMULATOR_ARCHS": DEVTYPE["arch"],
+        # x86Code: libarm64jit's log (guest crashes, unimplemented thunks) per process, inside the container
+        **({"X86CODE_A64_LOG": "/private/var/tmp/x86code-a64"} if ARM64 else {}),
         "SIMULATOR_UDID": udid,
         "SIMULATOR_DEVICE_NAME": "x86code",
-        "SIMULATOR_RUNTIME_VERSION": "26.5",
-        "SIMULATOR_RUNTIME_BUILD_VERSION": "23F73",
-        "SIMULATOR_MODEL_IDENTIFIER": "iPhone17,3",
-        "SIMULATOR_PRODUCT_CLASS": "D47",
-        "SIMULATOR_MAINSCREEN_WIDTH": "1179",
-        "SIMULATOR_MAINSCREEN_HEIGHT": "2556",
+        "SIMULATOR_RUNTIME_VERSION": DEVTYPE["version"],
+        "SIMULATOR_RUNTIME_BUILD_VERSION": DEVTYPE["build"],
+        "SIMULATOR_MODEL_IDENTIFIER": DEVTYPE["model"],
+        "SIMULATOR_PRODUCT_CLASS": DEVTYPE["class"],
+        "SIMULATOR_MAINSCREEN_WIDTH": DEVTYPE["w"],
+        "SIMULATOR_MAINSCREEN_HEIGHT": DEVTYPE["h"],
         "SIMULATOR_MAINSCREEN_SCALE": "3.000000",
         "SIMULATOR_MAINSCREEN_PITCH": "460.000000",
         "SIMULATOR_LEGACY_ASSET_SUFFIX": "iphone",
@@ -272,7 +294,7 @@ def main():
         # listener). A Mac's device has the same empty file and variable.
         "SIMULATOR_MEMORY_WARNINGS": home + "/var/run/memory_warning_simulation",
         "SIMULATOR_BOOT_TIME": str(int(os.path.getmtime(data))),
-        "SIMULATOR_VERSION_INFO": "x86Code - Device: x86code (%s) - Runtime: iOS 26.5 (23F73)" % udid,
+        "SIMULATOR_VERSION_INFO": "x86Code - Device: x86code (%s) - Runtime: iOS %s (%s)" % (udid, DEVTYPE["version"], DEVTYPE["build"]),
         "XPC_SIMULATOR_LAUNCHD_NAME": "com.apple.CoreSimulator.SimDevice." + udid,
         # x86Code: no XPC_SERVICE_NAME here. launchd_sim gives each job XPC_SERVICE_NAME=<label> only when its own
         # environment has none, so every job inherited the device's name: lsd's [NSProcessInfo bs_jobLabel] wasn't
@@ -284,11 +306,12 @@ def main():
         **({"X86CODE_SHIMLOG": "1"} if os.environ.get("X86CODE_SHIMLOG") else {}),
         **({"X86CODE_AUDIO_SOCKET": darling(AUDIO_SOCKET)} if AUDIO else {}),
         **({"X86CODE_AUDIO_LOG": "1"} if os.environ.get("X86CODE_AUDIO_LOG") else {}),
-        "SIMULATOR_FRAMEBUFFER_FRAMEWORK": DARLING_VIEW + PROJECT + "/host/simfb/SimFramebuffer.framework/SimFramebuffer",
+        **({"SIMULATOR_FRAMEBUFFER_FRAMEWORK": darling(host_path("host/simfb/SimFramebuffer.framework/SimFramebuffer"))}
+           if host_path("host/simfb/SimFramebuffer.framework/SimFramebuffer") else {}),
         # x86Code: our SimulatorHID stand-in (host/simhid): backboardd's virtual touchscreen/buttons/keyboard,
         # fed through <data>/simhid.sock by cli/libexec/simview.py / cli/libexec/simtouch.py. X86CODE_HID=0 leaves it out.
-        **({} if os.environ.get("X86CODE_HID") == "0" else
-           {"SIMULATOR_HID_SYSTEM_MANAGER": DARLING_VIEW + PROJECT + "/host/simhid/SimulatorHID.framework"}),
+        **({} if os.environ.get("X86CODE_HID") == "0" or not host_path("host/simhid/SimulatorHID.framework") else
+           {"SIMULATOR_HID_SYSTEM_MANAGER": darling(host_path("host/simhid/SimulatorHID.framework"))}),
     })
 
     bootstrap = {
@@ -301,7 +324,7 @@ def main():
         "SIGTERMTimeout": 3,
         "UseGuardMalloc": False,
         "Bootstrap": {
-            "BinaryOrderPreference": "x86_64",
+            "BinaryOrderPreference": DEVTYPE["arch"],
             "CheckedAllocationsPosixSpawnFlagsGlobal": False,
             # As CoreSimulator's: HOME, CFFIXED_USER_HOME and TMPDIR are only defaults, so an
             # app's own values (its data container, set by RunningBoard) win; "Child" would force them

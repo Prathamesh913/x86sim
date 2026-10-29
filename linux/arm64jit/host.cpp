@@ -202,8 +202,35 @@ static void peek() {
         }
 }
 static struct sigaction g_old_segv, g_old_bus;
+// The cache's CONST_DATA mappings (read-only after dyld's fixups): guest atomics on them fault in fastmem and are
+// completed by dynarmic's fallback (ARM64-PLAN stage 2, 1e); those faults are not reported.
+static u64 g_const_lo[8], g_const_hi[8];
+static int g_nconst;
+static void read_const_mappings(const std::string &cache) {
+    static const char *suffixes[] = {"", ".01", ".02", ".03", ".04", ".05"};
+    for (const char *sfx : suffixes) {
+        int fd = d_open((cache + sfx).c_str(), O_RDONLY);
+        if (fd < 0) break;
+        uint8_t h[0x400]; uint32_t off = 0, cnt = 0;
+        if (pread(fd, h, sizeof h, 0) == (ssize_t)sizeof h) { memcpy(&off, h + 0x138, 4); memcpy(&cnt, h + 0x13c, 4); }
+        for (uint32_t i = 0; i < cnt && i < 16 && g_nconst < 8; i++) {
+            u64 m[7];
+            if (pread(fd, m, sizeof m, off + 56 * i) != (ssize_t)sizeof m) break;
+            if (m[5] & 4) { g_const_lo[g_nconst] = m[0]; g_const_hi[g_nconst++] = m[0] + m[1]; }
+        }
+        close(fd);
+    }
+}
+static bool in_const_data(u64 a) {
+    for (int i = 0; i < g_nconst; i++) if (a >= g_const_lo[i] && a < g_const_hi[i]) return true;
+    return false;
+}
 static void on_fault(int sig, siginfo_t *si, void *uc) {
     auto *ctx = (ucontext_t *)uc;
+    if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86CODE_A64_FAULTLOG")) {
+        struct sigaction *old = &g_old_segv;
+        if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
+    }
     char buf[256];
     int n = snprintf(buf, sizeof buf, "arm64host: signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
                      (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP], (unsigned long long)ctx->uc_mcontext.gregs[REG_ERR]);
@@ -280,6 +307,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
         build_stub_dylib(path, cache_exports(cache, path));
     }
     native_malloc_prepare(cache);
+    read_const_mappings(cache);
     double t_stubs = ms_since(g_t0);
 
     // Keep the cache's fixed range free for dyld_sim's MAP_FIXED mappings.

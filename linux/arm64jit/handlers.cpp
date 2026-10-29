@@ -188,6 +188,25 @@ static void h_dyld_cache_info(GuestThread &t, u32 i) {
 // libSystem's initializer calls this first, before __malloc_init: the cache is mapped, nothing has allocated yet.
 static void h_libkernel_init(GuestThread &t, u32) { native_malloc_install(); t.set_x(0, 0); }
 
+// abort_with_payload(ns, code, payload, size, reason, flags) / abort_with_reason(ns, code, reason, flags): log first
+static void h_abort_with(GuestThread &t, u32 i) {
+    const char *reason = (const char *)(g_thunks[i].name == "_abort_with_reason" ? t.x(2) : t.x(4));
+    logf("%s: namespace %lu code %#lx: %s (lr %#lx)", g_thunks[i].name.c_str(), (unsigned long)t.x(0), (unsigned long)t.x(1),
+         reason ? reason : "(null)", (unsigned long)t.x(30));
+    h_generic(t, i);
+}
+
+// pthread_exit on the main thread (dispatch_main does it): Darling's terminates nothing there and traps ("thread
+// didn't terminate", SIGILL). The main thread parks instead; the process ends when another thread calls exit().
+static void h_pthread_exit(GuestThread &t, u32 i) {
+    static auto *is_main = (int (*)())dsym("pthread_main_np");
+    if (is_main && is_main()) {
+        static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
+        for (;;) dsleep(100000);
+    }
+    h_generic(t, i);
+}
+
 void print_stats();
 static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends here
     print_stats();
@@ -232,7 +251,8 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
         {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
         {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite},
-        {"__exit", h_exit}, {"___exit", h_exit},
+        {"__exit", h_exit}, {"___exit", h_exit}, {"_abort_with_payload", h_abort_with}, {"_abort_with_reason", h_abort_with}, {"_pthread_exit", h_pthread_exit},
+        {"___abort_with_payload", h_abort_with},
         {"_exception_raise_state", h_stack_args<8>}, {"_exception_raise_state_identity", h_stack_args<4, 8, 8>},
         {"_host_swap_exception_ports", h_stack_args<8, 8>}, {"_task_swap_exception_ports", h_stack_args<8, 8>},
         {"_thread_swap_exception_ports", h_stack_args<8, 8>}, {"_kext_request", h_stack_args<8>},

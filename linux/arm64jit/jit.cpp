@@ -123,12 +123,21 @@ void GuestThread::InterpreterFallback(u64 pc, size_t) {
 void GuestThread::ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) {
     uint32_t insn = rd<uint32_t>(pc);
     // brk #0xf... (Swift/clang traps), udf: report like a crash with the guest registers.
-    fprintf(stderr, "arm64host: guest exception %d at pc %#lx (insn %08x) lr %#lx sp %#lx\n", (int)e, (unsigned long)pc, insn,
-            (unsigned long)x(30), (unsigned long)sp());
+    logf("guest exception %d at pc %#lx (insn %08x) lr %#lx sp %#lx", (int)e, (unsigned long)pc, insn, (unsigned long)x(30),
+         (unsigned long)sp());
     for (int i = 0; i < 31; i += 4)
-        fprintf(stderr, "  x%-2d %016lx x%-2d %016lx x%-2d %016lx x%-2d %016lx\n", i, (unsigned long)x(i), i + 1,
-                (unsigned long)(i + 1 < 31 ? x(i + 1) : 0), i + 2, (unsigned long)(i + 2 < 31 ? x(i + 2) : 0), i + 3,
-                (unsigned long)(i + 3 < 31 ? x(i + 3) : 0));
+        logf("  x%-2d %016lx x%-2d %016lx x%-2d %016lx x%-2d %016lx", i, (unsigned long)x(i), i + 1,
+             (unsigned long)(i + 1 < 31 ? x(i + 1) : 0), i + 2, (unsigned long)(i + 2 < 31 ? x(i + 2) : 0), i + 3,
+             (unsigned long)(i + 3 < 31 ? x(i + 3) : 0));
+    // frame-pointer backtrace
+    u64 fp = x(29);
+    for (int k = 0; k < 24 && fp && !(fp & 7); k++) {
+        u64 ret = rd<u64>(fp + 8);
+        logf("  #%d %#lx", k, (unsigned long)ret);
+        u64 next = rd<u64>(fp);
+        if (next <= fp) break;
+        fp = next;
+    }
     abort();
 }
 
@@ -153,6 +162,22 @@ void logf(const char *fmt, ...) {
     if (n > (int)sizeof buf - 2) n = sizeof buf - 2;
     buf[n++] = '\n';
     if (write(2, "arm64host: ", 11) < 0 || write(2, buf, n) < 0) {}
+    // X86CODE_A64_LOG=<Darwin dir>: also append to <dir>/<exe>.<pid>.log (simulator jobs' stderr is often gone)
+    static int fd = -2;
+    if (fd == -2) {
+        fd = -1;
+        if (const char *dir = getenv("X86CODE_A64_LOG")) {
+            static auto *dopen = (int (*)(const char *, int, ...))dsym("open");
+            static auto *dmkdir = (int (*)(const char *, int))dsym("mkdir");
+            const char *exe = getenv("X86CODE_A64_EXE");
+            const char *b = exe ? strrchr(exe, '/') : nullptr;
+            char path[512];
+            if (dmkdir) dmkdir(dir, 0777);
+            snprintf(path, sizeof path, "%s/%s.%d.log", dir, b ? b + 1 : "guest", (int)getpid());
+            if (dopen) fd = dopen(path, 0x209 /* O_WRONLY|O_APPEND|O_CREAT */, 0644);
+        }
+    }
+    if (fd >= 0) { static auto *dwrite = (long (*)(int, const void *, size_t))dsym("write"); if (dwrite) dwrite(fd, buf, n); }
 }
 
 // Native -> guest entry (from a64_tramp_entry). Frame: ints[8], fps[8], result[4].
