@@ -20,8 +20,15 @@ import fbring
 
 OUT = os.path.join(x86config.get("X86SIM_SITE"), "live")
 FPS = int(sys.argv[1]) if len(sys.argv) > 1 else 60
-W, H = 1178, 2556   # even width for 4:2:0; the frame is 1179 wide (cropped by one column)
-OW, OH = 590, 1278  # streamed at half size
+# x86Code: the size comes from the ring's frames (devices differ: 1179x2556, 1206x2622, ...); the width is cropped
+# to even for 4:2:0 and the stream is half size
+W = H = OW = OH = None
+
+
+def size_from(w, h):
+    global W, H, OW, OH
+    W, H = w & ~1, h   # H is the raw frame height (ffmpeg's input size); the crop makes it even
+    OW, OH = (W // 2) & ~1, (H // 2) & ~1
 
 os.makedirs(OUT, exist_ok=True)
 for f in os.listdir(OUT):
@@ -65,7 +72,7 @@ def start(stride):
         "ffmpeg", "-hide_banner", "-loglevel", "warning",
         "-f", "rawvideo", "-pix_fmt", "bgra", "-s", "%dx%d" % (stride // 4, H), "-framerate", "1000",
         "-use_wallclock_as_timestamps", "1", "-i", "-",
-        "-vf", "crop=%d:%d:0:0,hwupload_cuda,scale_cuda=%d:%d" % (W, H, OW, OH),
+        "-vf", "crop=%d:%d:0:0,hwupload_cuda,scale_cuda=%d:%d" % (W, H & ~1, OW, OH),
         "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr", "-b:v", "3000k", "-bf", "0",
         "-g", "600", "-forced-idr", "1", "-force_key_frames", "expr:gte(t,n_forced*%g)" % KEEPALIVE, "-fps_mode", "vfr",
         "-f", "hls", "-hls_time", "0.75", "-hls_list_size", "6",
@@ -98,7 +105,9 @@ while ff is None or ff.poll() is None:
         s = ring.wait(seq, KEEPALIVE) if seq else ring.seq()
         if s and s != seq:
             f = ring.latest()
-            if f and f[1] == H and f[0] >= W:
+            if f and H is None:
+                size_from(f[0], f[1])
+            if f and f[1] >= H and f[0] >= W:
                 frame, seq = f[5], f[3]
                 if stride is None:
                     stride = f[2]
@@ -111,7 +120,9 @@ while ff is None or ff.poll() is None:
             if st.st_mtime_ns != mtime:
                 data = open(fbring.FILE, "rb").read()
                 w, h, st_, sq = struct.unpack("<4I", data[:16])
-                if h == H and w >= W and (stride is None or st_ == stride):
+                if H is None:
+                    size_from(w, h)
+                if h >= H and w >= W and (stride is None or st_ == stride):
                     stride = st_
                     frame = data[16:16 + st_ * h]
                 mtime = st.st_mtime_ns
@@ -123,7 +134,7 @@ while ff is None or ff.poll() is None:
         if d > 0:
             time.sleep(d)
             f = ring.latest()
-            if f and f[3] != seq and f[1] == H and f[2] == stride:
+            if f and f[3] != seq and f[1] >= H and f[2] == stride:
                 frame, seq = f[5], f[3]
         if ff is None:
             ff = start(stride)
