@@ -14,13 +14,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fbring
 
 GW, GH = 118, 256
+# Optional ring path: argv "... framecheck.py [/path/to.ring] stats|home|..." or SIMFB_RING_LINUX.
+# Arm64 boots use /dev/shm/x86code-a64-simfb.ring; the fbring default is the x86 ring.
+_RING = None
+
+
+def _frame():
+    if _RING:
+        return fbring.Ring(_RING).latest()
+    return fbring.latest_frame()
 
 
 def sample():
-    f = fbring.latest_frame()
+    f = _frame()
     if not f:
         return None
-    w, h, stride, seq, px = f
+    w, h, stride, seq, t, px = f if len(f) == 6 else (*f[:4], None, f[4])
     pts = []
     for j in range(GH):
         y = (2 * j + 1) * h // (2 * GH)
@@ -62,7 +71,12 @@ def check(kind, ref=None):
 
 
 def main():
+    global _RING
     a = sys.argv[1:]
+    # Leading path to a .ring file (arm64: /dev/shm/x86code-a64-simfb.ring) selects the ring.
+    if a and a[0].endswith(".ring"):
+        _RING = a[0]
+        a = a[1:]
     if not a or a[0] == "stats":
         st = stats()
         print(json.dumps(st) if st else "no frame")  # (grid: sampled luma, for `app ref.json`)
