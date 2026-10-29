@@ -6,6 +6,10 @@ x86Code: event-driven, variable frame rate. It sleeps on the ring (a futex simfb
 frame only when one came (at most FPS a second), with wallclock timestamps; on a still screen the last frame is
 repeated every 0.25 s (KEEPALIVE), which keeps the segments and a keyframe every 0.25 s coming for late viewers. The
 crop/scale runs on the GPU (hwupload_cuda + scale_cuda), so a still screen costs ffmpeg almost nothing.
+Only while someone watches: frames go to ffmpeg while the site's http server (progress_tunnel.sh, its request log
+$X86SIM_SCRATCH/site-http.log) served /live/ in the last WATCH s; otherwise nothing is encoded (the stream cost
+~1.3% of a core at idle and ~25% while scrolling with nobody watching). A new viewer's first playlist request
+resumes it within POLL s. X86SIM_STREAM_ALWAYS=1 encodes regardless.
 Without a ring it falls back to the framebuffer.bgra dump.
     cli/libexec/simstream.py [fps]"""
 import os, struct, subprocess, sys, threading, time
@@ -29,6 +33,31 @@ ff = None
 
 
 KEEPALIVE = 0.25
+WATCH = 20.0
+POLL = 1.0
+IDLE_EXIT = 60.0
+HTTPLOG = os.path.join(x86config.get("X86SIM_SCRATCH"), "site-http.log")
+ALWAYS = os.environ.get("X86SIM_STREAM_ALWAYS") == "1"
+_log = {"pos": None, "seen": 0.0}
+
+
+def watched():
+    """True while /live/ was requested in the last WATCH s (reads only what the http server appended)."""
+    if ALWAYS:
+        return True
+    try:
+        size = os.stat(HTTPLOG).st_size
+        if _log["pos"] is None or size < _log["pos"]:
+            _log["pos"] = max(0, size - 4096)
+        if size > _log["pos"]:
+            with open(HTTPLOG, "rb") as f:
+                f.seek(_log["pos"])
+                if b"/live/" in f.read(size - _log["pos"]):
+                    _log["seen"] = time.monotonic()
+            _log["pos"] = size
+    except OSError:
+        return True   # no request log (stream started without the site): keep encoding
+    return time.monotonic() - _log["seen"] < WATCH
 
 
 def start(stride):
@@ -40,6 +69,7 @@ def start(stride):
         "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr", "-b:v", "3000k", "-bf", "0",
         "-g", "600", "-forced-idr", "1", "-force_key_frames", "expr:gte(t,n_forced*%g)" % KEEPALIVE, "-fps_mode", "vfr",
         "-f", "hls", "-hls_time", "0.75", "-hls_list_size", "6",
+        "-start_number", str(int(time.time())),   # media sequence keeps growing across restarts (see IDLE_EXIT)
         "-hls_flags", "delete_segments+independent_segments+omit_endlist",
         os.path.join(OUT, "stream.m3u8")], stdin=subprocess.PIPE)
 
@@ -50,6 +80,20 @@ mtime = None
 period = 1.0 / FPS
 last = 0.0
 while ff is None or ff.poll() is None:
+    if not watched():
+        # nobody watching: send nothing; when a viewer comes, the newest frame is read at once (seq None). After
+        # IDLE_EXIT s ffmpeg is closed too (its CUDA threads wake ~100-150 times a second even without input) and is
+        # started again with the next frame.
+        time.sleep(POLL)
+        seq = frame = None
+        if ff is not None and time.monotonic() - max(_log["seen"], last) > IDLE_EXIT:
+            try:
+                ff.stdin.close()
+                ff.wait(10)
+            except (OSError, subprocess.TimeoutExpired):
+                ff.kill()
+            ff = None
+        continue
     try:
         s = ring.wait(seq, KEEPALIVE) if seq else ring.seq()
         if s and s != seq:

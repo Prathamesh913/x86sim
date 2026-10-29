@@ -317,6 +317,7 @@ def launch(bundle):
         bundle, (first - tw) / 1e6 if first else -1, (end - t0) * 1000 if end else -1))
     print(frame_stats([t for q, t in f.t.items() if q > base], "frames"))
     print(c.report(8))
+    terminate(bundle)   # apps launched by a test don't stay behind (each costs ~300 MB here)
 
 
 def terminate(bundle):

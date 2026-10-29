@@ -171,6 +171,8 @@ cmd_shutdown() {
 	rm -f "$ST/mdns.pid"
 	if alive_pidfile "$ST/simaudio.pid"; then kill "$(cat "$ST/simaudio.pid")"; fi
 	rm -f "$ST/simaudio.pid"
+	if alive_pidfile "$ST/jetsam.pid"; then kill "$(cat "$ST/jetsam.pid")"; fi
+	rm -f "$ST/jetsam.pid"
 	echo "x86sim: stopped"
 }
 

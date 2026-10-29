@@ -22,6 +22,9 @@ import x86config  # noqa: E402  (cli/lib/config.sh: repo root, Darling prefix, r
 
 PROJECT = x86config.ROOT
 RUNTIME = x86config.get("X86SIM_RUNTIME")
+# x86Code: jobs that stay eager (RunAtLoad/KeepAlive as Apple ships them); the rest start on first lookup (see below)
+EAGER = {"com.apple.SpringBoard", "com.apple.backboardd", "com.apple.runningboardd", "com.apple.configd_sim",
+         "com.apple.syslogd", "com.apple.UserEventAgent-System", "com.apple.distnoted.xpc.daemon"}
 PREFIX = x86config.get("X86SIM_PREFIX")
 MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
 # x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by rundev.sh)
@@ -102,6 +105,15 @@ def main():
         # domain instead, where all lookups from the device's jobs resolve.
         if plist.get("LimitLoadToSessionType") == "System":
             del plist["LimitLoadToSessionType"]
+        # x86Code: slim by default. launchd_sim starts a job with MachServices at the first lookup of one of them; what
+        # RunAtLoad / KeepAlive (true, or SuccessfulExit) starts eagerly at boot runs whether anything uses it or not
+        # (assistantd, locationd, identityservicesd, ids_simd, navd, sleepd, revisiond, amsaccountsd: ~100 MB each
+        # here). Those become on-demand, except what the home screen itself needs (EAGER). X86SIM_EAGER=1: Apple's.
+        if os.environ.get("X86SIM_EAGER") != "1" and job not in EAGER and plist.get("MachServices"):
+            plist.pop("RunAtLoad", None)
+            ka = plist.get("KeepAlive")
+            if ka is True or (isinstance(ka, dict) and "SuccessfulExit" in ka):
+                del plist["KeepAlive"]
         if os.environ.get("X86CODE_JOBLOG") == "1":
             # X86CODE_JOBLOG=1: job output and os_log (OS_ACTIVITY_DT_MODE) to data/var/log/<label>.log
             log = darling(data + "/var/log/" + job + ".log")

@@ -83,6 +83,14 @@ if [ "${X86CODE_AUDIO:-0}" != 0 ]; then
 	setsid python3 $X/cli/libexec/simaudio.py $ST/simaudio.sock > $ST/simaudio.log 2>&1 &
 	echo $! > $ST/simaudio.pid
 fi
+# x86Code: jetsam stand-in (cli/libexec/jetsam.py): kills extensions and older background apps that RunningBoard keeps
+# suspended (Darling records pid_suspend in the container's /private/var/run/x86code-suspended). X86SIM_JETSAM=0: off.
+if [ "${X86SIM_JETSAM:-1}" != 0 ]; then
+	[ -f $ST/jetsam.pid ] && kill $(cat $ST/jetsam.pid) 2>/dev/null
+	rm -rf "$X86SIM_DPREFIX/private/var/run/x86code-suspended"
+	setsid python3 $X/cli/libexec/jetsam.py > $ST/jetsam.log 2>&1 &
+	echo $! > $ST/jetsam.pid
+fi
 X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py $D com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.apple.notifyd com.apple.configd_sim \
 	com.apple.runningboardd com.apple.lsd com.apple.containermanagerd com.apple.containermanagerd.system \
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd com.apple.mobile.installd \

@@ -2869,3 +2869,90 @@ Fix: `defrag=madvise` (/etc/tmpfiles.d/thp.conf overrides the distro file; runti
 /sys/kernel/mm/transparent_hugepage/defrag). The capped boot then read 1.38 GB, 223 refaults (was 675k), kswapd idle.
 Guards kept: `x86sim boot` runs the stack in a systemd scope capped at 40 MB/s with low IO/CPU weight
 (cli/libexec/limited.sh) and stops a boot that reads over 6 GB before the home screen (X86SIM_IO_MAX, X86SIM_IO_BUDGET).
+
+### 3.20 Perf round 3: what the slow frames are, idle wakeups, suspension and a jetsam stand-in, memory (2026-10-28)
+
+Measured on a clean host page cache after 3.19 (THP defrag=madvise), short runs, one before and one after per change.
+
+| | before | after |
+|---|---|---|
+| Idle (home screen), whole stack | 3.1-3.4% of a core, 2,850-2,880 wakeups/s | 2.2%, 2,580 wakeups/s |
+| HLS stream with nobody watching | ffmpeg + simstream 1.2-1.4% idle, ~25% while scrolling | 0 (encodes only while /live/ is requested) |
+| openurl (x86sim app / launch tests) | polls every 0.3 s: 40 wakeups/s, +0-300 ms per launch | inotify: 0 wakeups at idle, picked up at once |
+| Settings scroll, all >25 ms intervals | 8-18 per 8 s, max 84-86 ms | same (by design, see below) |
+| Settings scroll, >25 ms while in motion | — | 0-1 of ~250-350 intervals |
+| darlingserver rt_sigprocmask while scrolling | ~112,000/s (a third of its syscalls) | ~0 |
+| launchd_sim lstat while an app launches | ~2,000/s (/proc/<pid>/stat, cmdline per logged lookup) | 0 for those |
+| Boot to home / disk read to home | 88-93 s / 3.3-3.6 GB (cold cache, host swapping) | 51 s / 1.9 GB |
+| Disk read until post-boot spawns settle | 10.0 GB | 4.4 GB |
+| Stack memory 10 min after boot (scope anon+shmem / swap / procs) | 5.6 GB / 10.0 GB / 136-138 | ~8.5 GB / 0.4 GB / ~100 |
+
+**Slow frames are not stalls.** perf.py's frame list was dominated by gaps at fling+800-900 ms and drag+15-80 ms. Off-CPU
+traces of the app's main thread and backboardd's render-server threads (perf sched_switch with call chains,
+CLOCK_MONOTONIC, lined up with the gaps via `PERF_MONO=1`) show the app ticking every 16.7 ms and the render server
+waiting in its run loop: nothing was committed. backboardd's display thread arms its own CA display timer +60 ms
+(mk_timer uprobe in darlingserver: `mk_timer_arm_trap_internal`), the app's display link drops itself to a 33 ms
+period, the Liquid Glass search bar's backdrop luma updates every ~65 ms (QuartzCore has CA_BACKDROP_LUMA_RATE_OVERRIDE /
+CA_BACKDROP_THROTTLE_CONSTANT), and the scroll indicator fades at ~15 Hz. These are CA/UIKit's reduced-rate settle
+phases at the end of a fling, and the next drag interrupts them. An isolated fling is a steady 16.7 ms to its end.
+`perf.py scroll` now also counts slow intervals only while in motion (touch-down+50 ms to touch-up+600 ms): 0-1.
+Symbolizing note: the runtime's dylibs are fat files, so perf's dso offsets include the x86_64 slice offset (0x4000).
+
+**SpringBoard at idle (~600 wakeups/s).** The 30 Hz main-thread tick is `-[_UIMotionEffectEngine
+_handleLatestDeviceMotion]` on a CA display link: UIKit's parallax engine with the simulator's
+`_UIMotionEffectSimulatorMotionEventProvider` (which never produces events). A booted Mac simulator does the same
+(SpringBoard at the home screen: ~100-130 context switches/s; `sample` shows display_timer_callback ->
+DisplayLink::dispatch_items). Not an emulation bug. Here each tick costs ~22 darlingserver RPCs (per second: mach_msg
+~260, mach_port_insert_member/extract_member ~130 each, CFRunLoop moving the dispatch port in and out of its port set
+every iteration, mk_timer_arm ~97, cancel ~33). The lever is the RPC transport, not the timer.
+SBFMachNextMinuteDateProvider arms its minute timer with flags 3 (MK_TIMER_CRITICAL | continuous) and a
+mach_continuous_time deadline; Darling treats it as absolute, which is equal here (no sleep).
+
+**Stream only while watched.** simstream sends frames to ffmpeg only while the site's http server served /live/ in
+the last 20 s (its request log), closes ffmpeg after 60 s without viewers (NVENC/CUDA threads woke ~100-150/s idle),
+and restarts it with an increasing HLS media sequence (`-start_number` = epoch).
+
+**darlingserver microthreads without the signal mask.** glibc's getcontext/setcontext each make an rt_sigprocmask
+call; Thread::doWork does ~4 per RPC. src/fastcontext.cpp: same ucontext_t layout (offsets static_asserted), registers,
+x87 env and MXCSR only (darlingserver never changes its mask; no microthread returns through uc_link).
+
+**vchroot /proc.** launchd_sim reads /proc/<pid>/stat and cmdline of the requestor for every lookup it logs; the
+openat2 fast path left /proc to the component walk (3-4 lstat each). /proc/<digits>/{stat,cmdline,status,statm,comm,
+environ,auxv} is now the prefix + the path. Steady-state lstat while scrolling: 57/s for the whole stack (the 21k/s of
+round 2 was installd's post-boot scan; the openat2 fast path covers it).
+
+**Suspension and a jetsam stand-in.** runningboardd's log: `pid_suspend() failed with error 78` ~10,000 times a boot,
+`Error 22 setting priority to PRIO_DARWIN_BG`, and memorystatus/jetsam calls that do nothing. Nothing was ever
+suspended or reclaimed, so ~40 widget/poster/file-provider extensions that chronod and PosterBoard start after boot
+stayed resident (the Mac simulator also keeps ~44, but at a fraction of the private memory). Now: pid_suspend/
+pid_resume (433/434) map to task_suspend/task_resume (darling-xnu), setpriority accepts PRIO_DARWIN_THREAD/PROCESS,
+and each suspension is recorded in the container's /private/var/run/x86code-suspended/<pid>. cli/libexec/jetsam.py
+(started by rundev, X86SIM_JETSAM=0 off) kills (SIGKILL, as jetsam) an extension suspended > 10 s and background apps
+suspended > 30 s beyond the most recent one; each kill of the same executable doubles its grace (MercuryPosterExtension,
+the wallpaper's poster, is relaunched right away). Jobs with MachServices that Apple marks RunAtLoad/KeepAlive start on
+first lookup now (mksimdevice EAGER list keeps SpringBoard, backboardd, runningboardd, configd_sim, syslogd,
+UserEventAgent, distnoted; X86SIM_EAGER=1 restores Apple's): navd, identityservicesd and revisiond no longer start;
+assistantd, locationd, sleepd, ids_simd, amsaccountsd are looked up at boot anyway.
+
+**Memory: where it goes.** Each process carries ~190-300 MB of anonymous memory; in a widget extension 169 of 198 MB are
+private dirty pages of framework __DATA mappings (dyld's fixups, copy-on-write per process). Frameworks load at
+different addresses in every process (Linux mmap ASLR), so these pages differ and can't be shared or merged. ~100
+processes x ~90 MB (daemons) to ~300 MB (apps) = ~8.5 GB. A dyld shared cache would make most of it shared and clean:
+the runtime ships `Contents/Resources/update_dyld_sim_shared_cache` (options -root, -cache_dir, -arch, -force,
+-dylib_order_file, -dirty_data_order_file); the Mac only has an arm64 cache (2.8 GB + 0.4 GB) built for 23F73/23F77.
+Building the x86_64 one (Mac, from the 23F73 RuntimeRoot) and teaching Darling/dyld_sim to map it is the next step.
+perf.py launch now terminates the app it launched.
+
+**Also seen.** Messages (opened by a stray gesture) retried lookups of absent services (com.apple.translationd,
+com.apple.StatusKit.subscribe) ~900 times a second; each failure is a launchd log line (1 MB/s of launchd.log) and a
+/proc read. A directory DISPATCH_SOURCE_TYPE_VNODE never registered a watch in a simulator process (no inotify
+descriptor) even with libkqueue now mapping a directory's NOTE_WRITE to IN_CREATE/IN_DELETE/IN_MOVED_*; openurl uses a
+raw Linux inotify instead (open). simview costs ~60% of a core while the screen changes at 60 Hz (a 12 MB frame per
+update through Python), 0 at idle.
+
+### Open (after round 3)
+- Memory: the x86_64 dyld shared cache (above); the stack is ~8.5 GB anon for ~100 processes, target < 1 GB.
+- Cold launch: Settings first frame 1.0-2.4 s (runningboardd/launchd work before the process runs; the process
+  itself ~1.4 s of CPU, mostly dyld without a shared cache).
+- RPC transport (per-wakeup cost of ~20 darlingserver round trips): shared-memory rings + futex (willi darlingserver #19).
+- Directory vnode sources in simulator processes (see above).

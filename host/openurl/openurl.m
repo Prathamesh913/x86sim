@@ -15,6 +15,7 @@
 #include <objc/message.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <dlfcn.h>
 #include <objc/runtime.h>
 #include <xpc/xpc.h>
@@ -354,6 +355,13 @@ static void request(NSString* rest) {
 	answer(rid, r);
 }
 
+// x86Code: a Linux system call (Darling processes are Linux processes)
+static long linux_syscall3(long n, long a, long b, long c) {
+	long r;
+	__asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
+	return r;
+}
+
 int main(void) {
 	@autoreleasepool {
 		NSString* home = @(getenv("HOME") ?: "/private/var/tmp");
@@ -368,11 +376,39 @@ int main(void) {
 		dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_NOW);
 		fprintf(logf_, "openurl: ready\n"); fflush(logf_);
 		const char* path = [home stringByAppendingString:@"/tmp/x86code-openurl"].UTF8String;
+		// x86Code: wait for the request file instead of polling it every 0.3 s (~40 wakeups a second at idle, and up to
+		// 0.3 s added to every `x86sim app`). The writers rename x86code-openurl.new over it: a Linux inotify watch on the
+		// directory (IN_MOVED_TO/IN_CLOSE_WRITE; Darling processes make Linux syscalls directly, as simfb's futex does)
+		// whose descriptor a dispatch read source waits on. (A DISPATCH_SOURCE_TYPE_VNODE on the directory never
+		// registered under Darling's libkqueue: FINDINGS 3.20.) The run loop still runs between requests (CoreLocation
+		// delivers on the main queue); a 5 s poll stays as a fallback, 0.3 s if the watch can't be set up.
+		__block BOOL wake = NO;
+		int dirfd = open([home stringByAppendingString:@"/tmp"].UTF8String, O_RDONLY);
+		long ifd = dirfd >= 0 ? linux_syscall3(294 /* inotify_init1 */, 04000 | 02000000 /* IN_NONBLOCK|IN_CLOEXEC */, 0, 0) : -1;
+		if (ifd >= 0) {
+			char fdpath[64];
+			snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", dirfd);
+			if (linux_syscall3(254 /* inotify_add_watch */, ifd, (long)fdpath, 0x80 | 0x8 /* IN_MOVED_TO|IN_CLOSE_WRITE */) < 0)
+				ifd = -1;
+		}
+		if (ifd >= 0) {
+			dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)ifd, 0, dispatch_get_main_queue());
+			dispatch_source_set_event_handler(src, ^{
+				char buf[4096];
+				while (linux_syscall3(0 /* read */, ifd, (long)buf, sizeof(buf)) > 0) {}
+				wake = YES;
+				CFRunLoopStop(CFRunLoopGetMain());
+			});
+			dispatch_resume(src);
+			fprintf(logf_, "openurl: watching %s/tmp (inotify)\n", home.UTF8String); fflush(logf_);
+		}
 		for (;;) {
 			@autoreleasepool {
-				// x86Code: run the main run loop between polls: CoreLocation (CLSimulationManager) and others deliver on the
-				// main queue, which a plain usleep() loop never drains
-				[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+				if (!wake)
+					// returns after one source was handled (the vnode event, or anything else on the main queue)
+					[[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+						beforeDate:[NSDate dateWithTimeIntervalSinceNow:ifd >= 0 ? 5.0 : 0.3]];
+				wake = NO;
 				NSString* s = [NSString stringWithContentsOfFile:@(path) encoding:NSUTF8StringEncoding error:nil];
 				if (!s) continue;
 				unlink(path);
