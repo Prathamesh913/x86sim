@@ -45,6 +45,11 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     u64 tpidr = 0, tpidrro = 0;
     static constexpr int kGuestTsdSlots = 768;
     u64 *tsd = nullptr;  // the guest's TSD array (tpidrro_el0), see GuestThread()
+    u64 *native_tsd = nullptr;
+    // The reserved slots 1-9 (errno, MIG reply, QoS class, special reply port, semaphore cache, ...) are shared
+    // state: both sides read and write them. Copied across at every guest<->native transition.
+    void tsd_to_native() { if (native_tsd) memcpy(native_tsd + 1, tsd + 1, 9 * 8); }
+    void tsd_from_native() { if (native_tsd) memcpy(tsd + 1, native_tsd + 1, 9 * 8); }
     bool *done = nullptr;   // the innermost call()'s completion flag; the exit stub sets it
     int depth = 0;          // nesting of call() on this thread (native -> guest -> native -> guest ...)
     u64 svc_count = 0;

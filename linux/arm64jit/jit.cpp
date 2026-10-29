@@ -40,6 +40,7 @@ GuestThread::GuestThread() {
     unsigned long gs = 0;
     syscall(SYS_arch_prctl, ARCH_GET_GS, &gs);
     tsd = (u64 *)calloc(kGuestTsdSlots, 8);
+    native_tsd = (u64 *)gs;
     if (gs) memcpy(tsd, (void *)gs, 10 * 8);
     tpidrro = (u64)tsd;
     Dynarmic::A64::UserConfig &c = cfg;
@@ -128,11 +129,17 @@ void GuestThread::CallSVC(uint32_t swi) {
         bool path = nm.find("open") != std::string::npos || nm.find("stat") != std::string::npos ||
                     nm.find("access") != std::string::npos || nm.find("getattr") != std::string::npos ||
                     nm.find("readlink") != std::string::npos || nm.find("realpath") != std::string::npos;
-        if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
+        if (path && (nm.find("at") != std::string::npos && nm.find("stat") == std::string::npos ? true : false) && x(1) > 0x10000)
+            logf("-> %s(%#lx, \"%.200s\", %#lx)", nm.c_str(), (unsigned long)x(0), (const char *)x(1), (unsigned long)x(2));
+        else if (path && nm.find("at") != std::string::npos && nm.find("stat") == std::string::npos)
+            logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
+        else if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
         else logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
     }
     int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
+    tsd_to_native();
     g_thunks[swi].fn(*this, swi);
+    tsd_from_native();
     in_thunk = outer_thunk;
     if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
 }
@@ -245,7 +252,10 @@ void logf(const char *fmt, ...) {
 
 // Native -> guest entry (from a64_tramp_entry). Frame: ints[8], fps[8], result[4].
 extern "C" void a64_enter_guest(u64 pc, u64 *frame) {
-    NRet r = GuestThread::self().call(pc, frame, 8, frame + 8, 8);
+    GuestThread &t = GuestThread::self();
+    t.tsd_from_native();
+    NRet r = t.call(pc, frame, 8, frame + 8, 8);
+    t.tsd_to_native();
     frame[16] = r.rax; frame[17] = r.rdx; frame[18] = r.xmm0; frame[19] = r.xmm1;
 }
 
