@@ -19,6 +19,7 @@ import fbring  # noqa: E402
 import simtouch  # noqa: E402
 
 HZ = os.sysconf("SC_CLK_TCK")
+MONO_OFF = time.time_ns() - time.monotonic_ns()
 X86SIM = os.path.join(os.path.dirname(L), "x86sim")
 
 
@@ -73,22 +74,32 @@ def cpu(pids):
 
 
 def ctxsw(pids):
-    """pid -> (context switches over all threads, RSS kB)."""
+    """pid -> ({tid: context switches}, RSS kB). Per thread, so threads that exit or start mid-sample do not
+    subtract from (or inflate) the total: wakeups() counts only deltas of threads seen at both ends, plus new ones."""
     r = {}
     for p in pids:
-        n = 0
+        th = {}
         try:
             for t in os.listdir("/proc/%d/task" % p):
-                with open("/proc/%d/task/%s/status" % (p, t)) as f:
-                    for line in f:
-                        if line.startswith(("voluntary_ctxt_switches", "nonvoluntary_ctxt_switches")):
-                            n += int(line.split()[1])
+                n = 0
+                try:
+                    with open("/proc/%d/task/%s/status" % (p, t)) as f:
+                        for line in f:
+                            if line.startswith(("voluntary_ctxt_switches", "nonvoluntary_ctxt_switches")):
+                                n += int(line.split()[1])
+                except OSError:
+                    continue
+                th[t] = n
             with open("/proc/%d/status" % p) as f:
                 rss = next((int(l.split()[1]) for l in f if l.startswith("VmRSS")), 0)
-            r[p] = (n, rss)
+            r[p] = (th, rss)
         except (OSError, ValueError):
             pass
     return r
+
+
+def ctx_delta(a, b):
+    return sum(max(0, n - a.get(t, 0)) for t, n in b.items())
 
 
 class CPU:
@@ -112,7 +123,7 @@ class CPU:
                 continue
             e = g.setdefault(self.names[p], [0, 0, 0, 0])
             e[0] += v - self.t0[p]
-            e[1] += self.c1[p][0] - self.c0[p][0]
+            e[1] += ctx_delta(self.c0[p][0], self.c1[p][0])
             e[2] += self.c1[p][1]
             e[3] += 1
         tot = [sum(e[i] for e in g.values()) for i in range(4)]
@@ -195,8 +206,23 @@ def hitch_report(f, gestures, limit=25):
                 phase = "drag+%.0f" % ((b - down) / 1e6)
             elif up is not None and up < b < up + 1.2e9:
                 phase = "fling+%.0f" % ((b - up) / 1e6)
-        out.append("%.0f ms (%s, %s, age %.1f)" % (d, phase or "?", "CA late" if age < d - 16.7 else "held", age))
+        out.append("%.0f ms (%s, %s, age %.1f%s)" % (d, phase or "?", "CA late" if age < d - 16.7 else "held", age,
+                                                  # PERF_MONO=1: the gap's start in CLOCK_MONOTONIC ns (bpftrace's nsecs)
+                                                  ", mono %d" % (a - MONO_OFF) if os.environ.get("PERF_MONO") else ""))
     return "    >%d ms intervals: %s" % (limit, "; ".join(out) if out else "none")
+
+
+def motion_hitches(f, gestures, limit=25, settle_ms=600):
+    """Slow intervals while the content is in motion: from the first frame after touch-down + 50 ms to touch-up +
+    settle_ms. Outside that window CA/UIKit lower the rate on purpose (FINDINGS 3.20: the end of a fling, scroll
+    indicator fades and Liquid Glass luma updates run at ~15-30 Hz; a touch-down interrupts the settle)."""
+    t = sorted(f.t.values())
+    n = slow = 0
+    for a, b in zip(t, t[1:]):
+        if any(down + 50e6 <= a and b <= (up or b) + settle_ms * 1e6 for down, up in gestures):
+            n += 1
+            slow += (b - a) / 1e6 > limit
+    return n, slow
 
 
 def idle(secs=10):
@@ -235,7 +261,7 @@ def scroll(secs=8):
                 f.run(0.008)
             simtouch.touch(s, "up", x, y1)
             gestures[-1][1] = time.time_ns()
-            f.run(0.9)
+            f.run(float(os.environ.get("PERF_PAUSE", "0.9")))   # PERF_PAUSE=2: each fling ends before the next drag
             # latency: first frame published after the first move
             newer = sorted(t for q, t in f.t.items() if q > base)
             if newer and sent:
@@ -247,6 +273,8 @@ def scroll(secs=8):
     print("scroll %.0f s, %d gestures:" % (secs, k))
     print(frame_stats(f.t.values(), "frames"))
     print(hitch_report(f, gestures))
+    n, slow = motion_hitches(f, gestures)
+    print("    in motion (touch-down+50 ms .. touch-up+600 ms): %d intervals, >25 ms: %d" % (n, slow))
     if lat:
         print("    input->frame latency ms (first move -> first new frame published): p50 %.1f max %.1f (%s)" % (
             pct(lat, .5), max(lat), " ".join("%.0f" % x for x in lat)))
@@ -279,6 +307,10 @@ def launch(bundle):
     tw = time.time_ns()
     with CPU() as c:
         subprocess.Popen([X86SIM, "app", bundle], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        lim = time.monotonic() + 15      # the first frame may come later than the quiet period
+        while f.seq() == base and time.monotonic() < lim:
+            f.poll()
+            time.sleep(0.002)
         end = settled(f, quiet=1.0, limit=30)
     first = min((t for q, t in f.t.items() if q > base), default=None)
     print("launch %s: first frame %.0f ms, settled %.0f ms (last frame before 1 s without frames)" % (
