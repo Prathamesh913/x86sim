@@ -210,3 +210,79 @@ Mac (c) baseline (`objcswift.mac`, ms): msgSend 20M 53.1, objc alloc/release 2M 
     swift_retain/release and the libdispatch fast paths to native earlier (stage 1-2, not stage 3).
   - Start the AOT/LLVM shadow cache investigation in parallel: dynarmic's block-at-a-time register model caps
     tight-loop performance.
+
+## Stage 1 results (2026-10-29)
+
+**What runs.** Inside Darling on the Ryzen 7 9800X3D, `tests/arm64/run.sh <binary>` (own prefix
+`$X86SIM_SCRATCH/a64prefix`, so a booted x86 simulator is untouched) runs the stage-0 test binaries through mldr ->
+`host/arm64host` -> `libarm64jit.so`, with the iOS 27.0 runtime's own `dyld_sim` and its prebuilt shared cache:
+- (a) `hello.sim`: output correct, exit code 7.
+- (b) `bench.sim`: all results identical to stage 0; total 1429 ms (stage 0: 1438 ms).
+- (d) `threads.sim`: all counters correct (native pthreads, one Jit per thread, LSE now translated by the fork).
+- (c) `objcswift.sim`: libobjc + libswiftCore from the cache, all results correct (ObjC msgSend dispatch, alloc/release,
+  Swift generics, existentials, ARC, Dictionary).
+
+Startup: stub dylibs 11 ms, setup 23 ms, `_dyld_sim_prepare` done at 150-165 ms (about 9.3k thunk calls).
+
+### Design as built
+- **mldr** (darling, `x86code`): an arm64-only Mach-O makes mldr re-exec itself on `arm64host` (installed next to mldr
+  with `libarm64jit.so`, `linux/arm64jit/install.sh`). It renames `DYLD_*` to `X86CODE_A64_DYLD_*`, sets
+  `X86CODE_A64_EXE`/`X86CODE_A64_JIT`, reserves 0x1C0000000 (+4 GB) and registers the arm64 program as the executable
+  path with darlingserver (proc_pidpath, platform 7). libsystem_kernel (darling-xnu) treats processes with
+  `X86CODE_A64_EXE` as foreign-libSystem/simulator processes (kevent workqueues, workloops, kern.osrelease 25.0.0,
+  which `libsystem_sim_kernel` requires to be >= 23).
+- **arm64host** (x86_64 Mach-O, built on Linux with Darling's toolchain): normal Darling startup, then dlopens the ELF
+  library via `elf_calls` and passes Darwin's dlopen/dlsym/dladdr/__error.
+- **libarm64jit**: maps the main executable and `dyld_sim`, writes a 16K arm64 commpage at 0xFFFFFC000, builds
+  KernelArgs below argv and calls `_dyld_sim_prepare` with a version-18 SyscallHelpers table of svc thunks (open/stat
+  redirect the three host-library paths to our stubs; amfi allows everything). dyld_sim maps the cache itself.
+- **Stub dylibs**: generated per launch into memfds from the cache placeholders' export tries (kernel 1477 functions /
+  28 data, platform 157/6, pthread 204/3; 251 names have no Darling implementation and return -1/ENOSYS with a one-time
+  log). Functions are `svc #i; ret`. Data exports are *copies* in the stub's `__DATA` (dyld adds the image base even to
+  absolute exports when it patches cache clients); `vm_page_*` are 16K; `_os_alloc_once_table` starts empty.
+  setjmp/longjmp family are emitted as arm64 code. `__libkernel_init`/`__pthread_init`/`__libplatform_init` are no-ops.
+- **Boundary**: generic handler passes x0-x7 (+ stack slots) and d0-d7 straight to SysV (`callconv.S`); variadic
+  (open/fcntl/ioctl/syscall/..., fixed-arg table), bool results masked, 64-bit-inode names (`stat$INODE64`), packed
+  stack args for >8-arg VM calls, `_simple_*` formatters, `__sigaction`, pthread_create/once/atfork/key, workqueue
+  setup, os_once -> per-function native trampolines (`guest_callable`, cached, reversible).
+- **Guest memory**: anonymous `mmap`/`vm_allocate`/`vm_map`/`vm_remap` "anywhere" requests are placed 16K-aligned (or
+  the requested mask) first-fit in [12 GB, 63 GB): xzone malloc asserts that segments are below 64 GB.
+- **Re-entrancy**: dynarmic fork `Jit::Run` has a depth counter; nested calls save/restore the full guest state, start
+  128 bytes below the guest SP, and only the outermost run frees code.
+- **Time**: CNTVCT counts ns (CNTFRQ 1 GHz) so it agrees with Darling's mach_absolute_time (timebase 1/1).
+- Debug aids: `X86CODE_A64_TRACE=1` (every thunk call), `X86CODE_A64_STEP=1` (single-step, exact fault PCs),
+  `X86CODE_A64_STATS=1`, a fault reporter with the guest PC, `tools/debug/dscsym.py` (symbolize/disassemble cache
+  addresses).
+
+### Performance (objcswift, best of 3, ms)
+| test | Mac M1 native | stage 1 JIT | ratio |
+|---|---:|---:|---:|
+| msgSend 20M | 53.1 | 134.0 | 2.5x |
+| objc alloc/release 2M | 40.7 | 645.3 | 15.9x |
+| generic sum Int / Double | 0.68 / 2.0 | 2.0 / 5.3 | 3.0x / 2.6x |
+| existential 10M | 28.8 | 61.0 | 2.1x |
+| ARC list 2M nodes | 92.6 | 887.1 | 9.6x |
+| Dictionary 1M | 20.4 | 42.7 | 2.1x |
+
+Pure compute matches stage 0 (2-3x the M1). Allocation-heavy code is 10-16x: malloc/free run as guest code (xzone
+malloc under the JIT, plus its atomics); **native malloc was not done in this round** although the plan wanted it.
+
+### Gaps
+1. Native malloc/free (patch libsystem_malloc entry points to thunks) and retain/release fast paths: the biggest win.
+2. Signals: `__sigaction` installs trampolines, but async signals are not yet deferred to block boundaries and the
+   handler sees an x86 ucontext; synchronous faults only get a report.
+3. Two write faults per launch on libobjc `__DATA_CONST` (0x22241dxxx) are absorbed somewhere in the host's handler chain
+   and execution continues correctly; understand before stage 2.
+4. 251 libsystem exports missing in Darling (skywalk/nexus/exclaves/etc.; ENOSYS). `___kernelVersion*`, pthread qos
+   encode/decode helpers are stubs.
+5. Struct-by-value and >8-argument functions beyond the VM ones are not audited (list being collected).
+6. Per-thread Jit cost (12 ms) and per-thread 64 MB code cache unchanged; data-export values are snapshots (fine for
+   constants, wrong if Darling changes one later).
+7. Blocks passed to native APIs, thread_get_state with arm64 flavors, ucontext functions: not handled.
+
+### Readiness for stage 2 (launchd_sim -> SpringBoard)
+The mechanism works end to end: any arm64 simulator binary exec'd inside Darling runs through dyld_sim and the cache,
+with Darling's simulator-mode kernel paths. Before booting launchd_sim: native malloc (allocation speed decides UI
+feel), async signal deferral, the >8-arg/struct-by-value audit, and Mach exception/crash reporting at guest PCs. Then
+start launchd_sim in the a64prefix with `sim.env` pointed at the 27.0 runtime and port the host shims (simfb, simhid,
+metalhostd: they are loaded into sim processes and must become arm64 or be thunked like libsystem).
