@@ -11,6 +11,7 @@
 // back to Darling's malloc (blocks that native code allocated and the guest frees).
 #include "a64.h"
 #include <cerrno>
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 #include <sys/mman.h>
@@ -28,7 +29,10 @@ uint32_t g_class_size[kClasses + 1];
 uint8_t g_class_of[kMaxSmall / 16 + 1];      // (size + 15) / 16 -> class
 uint8_t g_chunk_class[(kHi - kLo) / kChunk];  // 0: not a small chunk; else class + 1
 
-struct FreeBlock { FreeBlock *next; };
+struct FreeBlock { FreeBlock *next; u64 magic; };
+// Freed small blocks carry a marker in their second word: a second free of the same block is reported (with the
+// guest backtrace) and ignored instead of corrupting the free lists.
+constexpr u64 kFreeMagic = 0x5f2c8e1d0a7b4f63ull;
 struct Global {
     std::mutex mu;
     FreeBlock *free = nullptr;
@@ -117,6 +121,7 @@ void *small_alloc(int c) {
         tc.head[c] = b; tc.count[c] = got;
     }
     tc.head[c] = b->next; tc.count[c]--;
+    b->magic = 0;
     return b;
 }
 void *large_alloc(size_t size, size_t align) {
@@ -177,6 +182,15 @@ void gh_free(void *p) {
     if (__builtin_expect(c >= 0, 1)) {
         Cache &tc = t_cache;
         auto *b = (FreeBlock *)p;
+        if (__builtin_expect(b->magic == kFreeMagic, 0)) {
+            static std::atomic<int> reported{0};
+            if (reported++ < 20) {
+                logf("gheap: double free of %p (class size %u)", p, g_class_size[c]);
+                if (GuestThread *t = GuestThread::current()) guest_backtrace(*t);
+            }
+            return;
+        }
+        b->magic = kFreeMagic;
         b->next = tc.head[c]; tc.head[c] = b;
         if (++tc.count[c] > limit_for(c)) flush(c, limit_for(c) / 2);
         return;

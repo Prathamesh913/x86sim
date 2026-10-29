@@ -4,6 +4,7 @@
 // current SP and restores the full guest state afterwards.
 #include "a64.h"
 #include <atomic>
+#include <malloc.h>
 #include <sched.h>
 #include <cstdarg>
 #include <cstdio>
@@ -56,12 +57,14 @@ GuestThread::GuestThread() {
     c.cntfrq_el0 = 1000000000;           // the counter counts ns, like Darling's mach_absolute_time (timebase 1/1)
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
-    c.code_cache_size = 64u << 20;
+    // x86Code: every guest thread has its own Jit (translations are not shared); a full cache is cleared, which also
+    // drops its block metadata (in glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
+    c.code_cache_size = (getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 16) << 20;
     static const bool rss_debug = getenv("X86CODE_A64_RSS") != nullptr;
     auto rss = [] { long v = 0; if (FILE *f = fopen("/proc/self/statm", "r")) { long a, b, c2; if (fscanf(f, "%ld %ld %ld", &a, &b, &c2) == 3) v = (b - c2) * 4; fclose(f); } return v; };
     long before = rss_debug ? rss() : 0;
     jit = std::make_unique<Dynarmic::A64::Jit>(c);
-    if (rss_debug) logf("new Jit: anon RSS +%ld kB", rss() - before);
+    if (rss_debug) { struct mallinfo2 mi = mallinfo2(); logf("new Jit: anon RSS +%ld kB; glibc mmapped %zu MB in %zu blocks, arena %zu MB", rss() - before, mi.hblkhd >> 20, mi.hblks, mi.arena >> 20); }
     stack_size = 8u << 20;
     stack_base = (u64)mmap(nullptr, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (stack_base == (u64)MAP_FAILED) die("cannot allocate a guest stack");
@@ -144,7 +147,12 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
 }
 
-void GuestThread::InterpreterFallback(u64 pc, size_t) {
+bool fp16_interpret(GuestThread &t, u32 insn);
+void GuestThread::InterpreterFallback(u64 pc, size_t n) {
+    // FEAT_FP16 SIMD (fp16.cpp): execute and continue after it
+    u64 at = pc;
+    for (size_t k = 0; k < n && fp16_interpret(*this, rd<uint32_t>(at)); k++) at += 4;
+    if (at != pc) { jit->SetPC(at); return; }
     logf("unimplemented instruction %08x at %#lx lr %#lx sp %#lx x0 %#lx x16 %#lx x17 %#lx", rd<uint32_t>(pc), (unsigned long)pc,
          (unsigned long)x(30), (unsigned long)sp(), (unsigned long)x(0), (unsigned long)x(16), (unsigned long)x(17));
     if (FILE *m = fopen("/proc/self/maps", "r")) {

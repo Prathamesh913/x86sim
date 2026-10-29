@@ -270,9 +270,12 @@ def main():
         "SIMULATOR_ARCHS": DEVTYPE["arch"],
         # x86Code: libarm64jit's log (guest crashes, unimplemented thunks) per process, inside the container
         **({"X86CODE_A64_LOG": "/private/var/tmp/x86code-a64"} if ARM64 else {}),
+        # x86Code: glibc malloc of libarm64jit/dynarmic (the ELF side): one arena per thread kept tens of MB of freed
+        # JIT metadata resident per thread; two arenas for the process
+        **({"GLIBC_TUNABLES": "glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576"} if ARM64 else {}),
         # x86Code: its own frame ring, so an x86_64 device's viewers are not disturbed
         **({"SIMFB_RING": os.environ.get("SIMFB_RING", "/Volumes/SystemRoot/dev/shm/x86code-a64-simfb.ring")} if ARM64 else {}),
-        **({k: os.environ[k] for k in ("X86CODE_A64_TRACE_PROC", "X86CODE_A64_STEP_PROC", "X86CODE_A64_STATS") if ARM64 and os.environ.get(k)}),
+        **({k: os.environ[k] for k in ("X86CODE_A64_TRACE_PROC", "X86CODE_A64_STEP_PROC", "X86CODE_A64_STATS", "X86CODE_A64_MEMLOG", "X86CODE_A64_CODECACHE_MB", "X86CODE_A64_GUEST_MALLOC") if ARM64 and os.environ.get(k)}),
         "SIMULATOR_UDID": udid,
         "SIMULATOR_DEVICE_NAME": "x86code",
         "SIMULATOR_RUNTIME_VERSION": DEVTYPE["version"],

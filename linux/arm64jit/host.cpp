@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <malloc.h>
+#include <thread>
 // libarm64jit: process setup. Called by the x86_64 host program (host/arm64host) after Darling's libSystem is up.
 // Maps the arm64 main executable and dyld_sim, writes the 16K arm64 commpage, builds the stub dylibs for the host
 // libraries, then runs _dyld_sim_prepare() and main under the JIT on this (the main) thread. dyld_sim maps the
@@ -310,7 +312,28 @@ static void hook_native_abort() {
     f[10] = 0xFF; f[11] = 0xE0;                       // jmp rax
     mprotect((void *)page, 0x2000, PROT_READ | PROT_EXEC);
 }
+// X86CODE_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS
+static void start_memlog() {
+    const char *e = getenv("X86CODE_A64_MEMLOG");
+    if (!e || atoi(e) <= 0) return;
+    int secs = atoi(e);
+    std::thread([secs] {
+        for (;;) {
+            sleep(secs);
+            struct mallinfo2 mi = mallinfo2();
+            long anon = 0;
+            if (FILE *f = fopen("/proc/self/status", "r")) {
+                char l[256];
+                while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssAnon:", 8)) anon = atol(l + 8);
+                fclose(f);
+            }
+            logf("memlog: anon %ld MB, glibc arena %zu MB (in use %zu MB, mmapped %zu MB in %zu blocks, free %zu MB)", anon / 1024,
+                 mi.arena >> 20, mi.uordblks >> 20, mi.hblkhd >> 20, mi.hblks, mi.fordblks >> 20);
+        }
+    }).detach();
+}
 static void install_fault_report() {
+    start_memlog();
     hook_native_abort();
     { struct sigaction sa{}; sa.sa_sigaction = on_abrt; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigaction(SIGABRT, &sa, nullptr); }
     struct sigaction sa{};
