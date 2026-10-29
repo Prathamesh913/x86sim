@@ -1,22 +1,22 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: SHARED=0 home under containment at 199s (~8.4 GB sum RSS, OUT=0). Next: shared-cache SAFE bisect.",
+  "now": "Stage 3: SHARED=0 home OK (199s contained). Shared boot: thunk race + IC fixed; still BKS/idle-black. Restoring home.",
   "metrics": [
     [
       "Boot to home (SHARED=0, contained, 8 MB)",
       "199 s",
-      "sum VmRSS 8382 MB; cgroup~3.5 GB; OUT=0; screenshot 05-noshared-home-contained.png; MEM_MAX=14G"
+      "sum VmRSS 8382 MB; OUT=0; 05-noshared-home-contained.png"
     ],
     [
       "Boot to home (shared cache)",
-      "FAIL (open)",
-      "prior SB BKS/SIGSEGV then black; SAFE=1 (no FD/RSB) bisect next"
+      "FAIL idle black",
+      "thunk SIGSEGV fixed; BKS then black ~12 min (shared7)"
     ],
     [
       "Cgroup containment",
       "IN=all OUT=0",
-      "memory.current under-counts vs sum VmRSS; real host cost \u2248 sum VmRSS ~8\u20139 GB; default MEM_MAX 12\u201314G"
+      "memory.current under-counts; real cost \u2248 sum VmRSS ~8\u20139 GB"
     ],
     [
       "threads.sim new-Jit RSS",
@@ -58,7 +58,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Cgroup containment fixed; SHARED=0 home 199s under MemoryMax (05-noshared-home-contained.png). Shared-cache full boot still failing; SAFE/RSB bisect next."
+      "detail": "Containment + SHARED=0 home 199s. Thunk race (2bb1649) and IC invalidate (ba741aa) landed; shared full boot still BKS/idle-black. Metal/daemons open."
     },
     {
       "name": "4. Near native",
@@ -67,10 +67,9 @@
     }
   ],
   "issues": [
-    "Shared-cache boot does not reach home (crash/black); SHARED=0 contained home OK at 199s",
-    "BKS brk#0 and libobjc/dyld_sim thunk SIGSEGVs under shared cache",
-    "cgroup memory.current under-counts (~3.5 GB vs ~8.4 GB sum VmRSS); boots also watch sum RSS",
-    "PosterBoard extensions are the RSS bomb; guest TLS destructor gap; no Metal yet"
+    "Shared-cache full boot: BKS brk#0 at 0x1c8e3e420 then idle black (after thunk+IC fixes)",
+    "cgroup memory.current under-counts vs sum VmRSS; boots watch sum RSS",
+    "PosterBoard extensions RSS bomb; guest TLS destructor gap; no Metal yet"
   ],
   "milestones": [
     [

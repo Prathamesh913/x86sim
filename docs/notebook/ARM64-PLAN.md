@@ -453,6 +453,20 @@ Fix (`linux/arm64jit`): `reserve(kMaxThunks)` so `data()` never moves; mutex aro
 publish length via `std::atomic` release/acquire (`thunk_count()`). CallSVC bounds-checks against
 the published count. Microtests (sharestress) already passed; re-measure shared boot-to-home next.
 
+
+### Shared-cache boot after thunk + IC fixes (still open)
+Commits on top `main`: `2bb1649` (thunk publish race), `ba741aa` (IC invalidate + RSB off under shared).
+
+| run | result |
+| --- | --- |
+| sharedsafe (SAFE=1, before thunk fix) | CallSVC SIGSEGV + BKS |
+| shared6 (thunk fix only) | CallSVC SIGSEGV **gone**; BKS crash-loop every ~2 min |
+| shared7 (thunk + IC + no RSB) | one BKS then **idle black** ~12 min (seq stuck, bright≈0.014, SB ~1.6 GB) |
+
+CallSVC race was real (same rip `…c90ae` across SB/PosterBoard/WidgetRenderer) but not sufficient for home.
+Remaining: BKS `brk #0` at `0x1c8e3e420` and the idle-black UI path under shared translations.
+Default boot stays `X86CODE_A64_SHARED=0`.
+
 ### Still open (stage 3 remainder / stage 4 prep)
 1. Fix shared-cache SpringBoard boot (linking/invalidation races or thunk-boundary crashes under contention).
 2. Then re-measure shared boot-to-home + memory; restore chronod/FileProvider if it fits.
