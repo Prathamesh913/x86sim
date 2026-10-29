@@ -126,15 +126,15 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         c.callbacks = &fwd;
         c.shared_translations = true;
         c.tpidr_el0 = nullptr; c.tpidrro_el0 = nullptr;
-        // Shared code must not be cross-modified while other threads execute it (x86 IMC rules).
-        // BlockLinking's atomic 8-byte heads still rewrite instruction bytes underfoot; keep linking
-        // off unless X86CODE_A64_LINK=1. Fastmem fault "recompile" Invalidates/Unpatches from the
-        // SIGSEGV handler — even with shared_mutex held that still patches live code; redirect the
-        // fault via FakeCall only (recompile_on_*_failure = false). FastDispatch stays (16-byte
-        // atomic data). RSB is off by default: Invalidate clears the shared map/FD but cannot reset
-        // every thread's RSB, so a return can jump into a stale translation; set X86CODE_A64_RSB=1
-        // to re-enable for experiments.
-        if (!(getenv("X86CODE_A64_LINK") && atoi(getenv("X86CODE_A64_LINK")) == 1)) {
+        // Shared BlockLinking uses atomic 8-byte patch heads (see EmitSharedPatchSite). Required for
+        // boot-to-home: with linking off, SpringBoard livelocks in the dispatcher (billions of
+        // lookups, idle black). X86CODE_A64_LINK=0 disables linking for experiments.
+        // Fastmem fault "recompile" Invalidates/Unpatches from the SIGSEGV handler — even with
+        // shared_mutex held that still patches live code; redirect the fault via FakeCall only
+        // (recompile_on_*_failure = false). FastDispatch stays (16-byte atomic data). RSB is off by
+        // default: Invalidate clears the shared map/FD but cannot reset every thread's RSB; set
+        // X86CODE_A64_RSB=1 to re-enable for experiments.
+        if (getenv("X86CODE_A64_LINK") && atoi(getenv("X86CODE_A64_LINK")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::BlockLinking;
         }
         if (!(getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 1)) {

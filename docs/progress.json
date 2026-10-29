@@ -1,37 +1,37 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Stage 3: SHARED=0 home under containment (181\u2013199s, ~8.5 GB). Shared boot: thunk+IC fixed; still BKS/idle-black. Sim at home.",
+  "now": "Stage 3: SHARED=1 home in 186s (ClearCache + BlockLinking). Sim at home. MEM_MAX stays 12G (sum RSS ~9.4 GB).",
   "metrics": [
     [
-      "Boot to home (SHARED=0, contained)",
-      "181\u2013199 s",
-      "sum VmRSS ~8.4\u20138.6 GB; OUT=0; 05-noshared-home-contained.png"
+      "Boot to home (SHARED=1 + LINK)",
+      "186 s",
+      "sum VmRSS 8.4→9.4 GB; PSS≈4.6 GB = memory.current; OUT=0; 06-shared-home.png"
     ],
     [
-      "Boot to home (shared cache)",
-      "FAIL",
-      "thunk SIGSEGV fixed (2bb1649); IC+no-RSB (ba741aa); still BKS then idle black"
+      "Boot to home (SHARED=0, contained)",
+      "181–199 s",
+      "sum VmRSS ~8.4–8.6 GB; OUT=0; 05-noshared-home-contained.png"
     ],
     [
       "Cgroup containment",
       "IN=all OUT=0",
-      "memory.current ~3.3 GB vs sum VmRSS ~8.5 GB"
+      "memory.current tracks PSS (~4.6 GB shared); sum VmRSS ~9.4 GB"
     ],
     [
       "threads.sim new-Jit RSS",
-      "shared +0\u20138 kB",
-      "noshared +18\u201321 MB"
+      "shared +0–8 kB",
+      "noshared +18–21 MB"
     ],
     [
       "objcswift",
-      "shared \u2248 noshared ~3 s",
+      "shared ≈ noshared ~3 s",
       "identical results"
     ],
     [
       "Rendering",
       "software home (black wallpaper)",
-      "bright\u22480.19\u20130.21"
+      "bright≈0.19–0.21"
     ],
     [
       "Device",
@@ -53,12 +53,12 @@
     {
       "name": "2. Boot to the home screen",
       "status": "done",
-      "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+      "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
     },
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Containment + SHARED=0 home. Thunk race and IC invalidate landed; shared full boot still open (BKS/idle-black). Metal/daemons later."
+      "detail": "Shared per-process cache boots to home (ClearCache + BlockLinking). Memory still ~9 GB sum RSS. PosterBoard/daemons/Metal next."
     },
     {
       "name": "4. Near native",
@@ -67,11 +67,15 @@
     }
   ],
   "issues": [
-    "Shared-cache full boot still fails (BKS brk#0 then idle black) after thunk+IC fixes",
-    "cgroup memory.current under-counts vs sum VmRSS",
-    "PosterBoard extensions RSS bomb; guest TLS destructor gap; no Metal yet"
+    "PosterBoard extensions RSS bomb; chronod/FileProvider still deferred",
+    "Early shared boot still spins hard before linking pays off (~40 s)",
+    "Guest TLS destructor gap; no Metal yet; icstress.sim needs Mac build"
   ],
   "milestones": [
+    [
+      "06-shared-home.png",
+      "Stage 3: SHARED=1 + BlockLinking home in 186s (sum RSS 8.4 GB, PSS 4.6 GB, no BKS)"
+    ],
     [
       "05-noshared-home-contained.png",
       "Stage 3: SHARED=0 home under cgroup containment in 199s (sum RSS 8.4 GB, OUT=0)"

@@ -8,8 +8,8 @@
 #
 # Memory: Stage 2's 6G default was based on cgroup memory.current that missed every guest (darlingserver was
 # started by a darling shell *outside* the scope — the TZ link — so guests inherited that foreign cgroup). Real
-# SHARED=0 sum VmRSS at home is ~11.1 GB (noshared.sample t=372s). Default here is 12G so MemoryMax does not
-# OOM a known-good boot; drop back toward 6–8G once the shared translation cache lands. Override with X86SIM_MEM_MAX.
+# Shared boot sum VmRSS at home is ~8.4–9.4 GB (PSS/cgroup ~4.6 GB). Default 12G so MemoryMax does not
+# OOM on the sum-RSS guests (6–8G is too low for that accounting). Override with X86SIM_MEM_MAX.
 # Usage: SECS=120 cli/libexec/arm64/boot-a64.sh [extra jobs...]   (A64_JOBS=min|std: the job list)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 export X86SIM_ARCH=arm64

@@ -464,12 +464,36 @@ Commits on top `main`: `2bb1649` (thunk publish race), `ba741aa` (IC invalidate 
 | shared7 (thunk + IC + no RSB) | one BKS then **idle black** ~12 min (seq stuck, bright≈0.014, SB ~1.6 GB) |
 
 CallSVC race was real (same rip `…c90ae` across SB/PosterBoard/WidgetRenderer) but not sufficient for home.
-Remaining: BKS `brk #0` at `0x1c8e3e420` and the idle-black UI path under shared translations.
-Default boot stays `X86CODE_A64_SHARED=0`.
+
+### Shared ClearCache + BlockLinking → home (shared9)
+BKS `brk #0` at `0x1c8e3e420` is `_BKSRestartActionOptionsDescription+0x18a0` → assert
+`failure in … _connectionLock_connectToRemoteServiceIfNeeded` (XPC connect). Registers from
+shared7: x0 tagged ptr, x1=`0x8000100`. It fired under shared when IALLU stalled every thread.
+
+**Root causes (two, both required):**
+1. **Shared `ClearCache` (IALLU) walked every block** via `InvalidateCacheRanges([0,~0])` under the
+   process mutex and left `block_ranges` populated (dynarmic TODO). After minutes of SpringBoard that
+   stalls all guest threads for seconds → BKS/XPC assert. Fix: `emitter.ClearCache()` (O(1) map/FD
+   clear); erase invalidated intervals from `block_ranges`; atomic 16-byte FD clears.
+   dynarmic `3a31a903`.
+2. **BlockLinking was off under shared.** Without linking, SB burns billions of dispatcher lookups on
+   a few thousand blocks and never paints (idle black, bright≈0.014). Atomic 8-byte patch heads make
+   linking safe; default is now **on** (`X86CODE_A64_LINK=0` to disable).
+
+| run | result |
+| --- | --- |
+| shared8 (ClearCache fix, linking still off) | **no BKS**; still idle black (lookup storm) |
+| **shared9 (ClearCache + LINK=1)** | **HOME 186 s**; bright 0.20; sum VmRSS 8.4→9.4 GB; PSS≈4.6 GB = memory.current; OUT=0 |
+
+Screenshot: `docs/screens/arm64/06-shared-home.png`. Bisect knobs: `FASTDISPATCH`, `IVAU_CLEAR`,
+`EXEC_LOCK`, `ICLOG`. Reproducer source: `tests/arm64/icstress.c` (needs Mac rebuild of `.sim`).
+
+**Default boot is now shared** (`X86CODE_A64_SHARED` unset). `MEM_MAX` stays **12G**: settled sum
+VmRSS ≈9.4 GB (PSS/cgroup ≈4.6 GB); 6–8G would OOM the sum-RSS guests. PosterBoard / chronod /
+FileProvider still deferred (+several GB).
 
 ### Still open (stage 3 remainder / stage 4 prep)
-1. Fix shared-cache SpringBoard boot (linking/invalidation races or thunk-boundary crashes under contention).
-2. Then re-measure shared boot-to-home + memory; restore chronod/FileProvider if it fits.
-3. Persistent on-disk translation cache; profile the ~6 min boot.
-4. Crash fixes: BKS assert, dyld_sim/thunk SIGSEGV, guest TLS destructors on every exit path.
-5. Metal → Vulkan (arm64 shims / 27.0 selector changes).
+1. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
+2. Persistent on-disk translation cache; trim the early shared boot spin (first ~40 s still high lookups).
+3. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
+4. Build `icstress.sim` on the Mac and land it next to sharestress.
