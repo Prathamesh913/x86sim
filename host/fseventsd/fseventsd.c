@@ -9,10 +9,14 @@
 //
 // This job (cli/libexec/rundev.sh: com.x86code.fseventsd, MachServices com.apple.FSEvents) implements the
 // protocol, reconstructed from the runtime's FSEvents.framework MIG stubs (docs/protocols/FSEVENTS.md), and
-// watches the registered paths with Linux inotify (Darling-private syscall 598, x86code_inotify.c). There is no
-// event history across boots: a stream that asks for events since an id before this daemon started gets
-// MustScanSubDirs for each of its paths, then HistoryDone. Event ids and the volume UUID persist in
-// $HOME/var/db/x86code-fseventsd so they don't go backwards between boots.
+// watches the registered paths with Linux inotify (Darling-private syscall 598, x86code_inotify.c). Event ids and
+// the volume UUID persist in $HOME/var/db/x86code-fseventsd so they don't go backwards between boots.
+// x86Code: event history, as fseventsd's per-volume event log: the trees of streams that ask for events since an
+// id (history roots, kept in <state>/roots with the id from which their history is complete) are watched from
+// startup on, and their events go to a journal (<state>/history). What changed while no daemon ran (between boots)
+// is found at startup by comparing those trees with the manifest of the last run (<state>/manifest) and journaled
+// as created/removed/modified. A stream registered with sinceWhen gets the journal's events after that id, then
+// HistoryDone; a root whose history doesn't reach back that far gets MustScanSubDirs, as before.
 #include <mach/mach.h>
 // bootstrap.h is not in the iOS SDK
 extern mach_port_t bootstrap_port;
@@ -162,6 +166,205 @@ static void load_state(void) {
 	}
 }
 
+
+// ---- history (x86Code) ----
+#define JOURNAL_MAX (32 << 20)
+#define MANIFEST_MAX 200000
+struct hroot { char* path; uint64_t since; };  // history of path complete for events after `since`
+static struct hroot* hroots;
+static int nhroots;
+static FILE* journal;
+static uint64_t journal_first;     // events after this id are in the journal
+static int manifest_dirty;
+static int under(const char* path, const char* root);
+
+static void save_roots(void) {
+	char p[1100], t[1100];
+	snprintf(p, sizeof p, "%s/roots", state_dir); snprintf(t, sizeof t, "%s.tmp", p);
+	FILE* f = fopen(t, "w");
+	if (!f) return;
+	for (int i = 0; i < nhroots; i++) fprintf(f, "%llu %s\n", (unsigned long long) hroots[i].since, hroots[i].path);
+	fclose(f);
+	rename(t, p);
+}
+static void load_roots(void) {
+	char p[1100]; snprintf(p, sizeof p, "%s/roots", state_dir);
+	FILE* f = fopen(p, "r");
+	if (!f) return;
+	char line[2200];
+	while (fgets(line, sizeof line, f)) {
+		unsigned long long v; int n = 0;
+		line[strcspn(line, "\n")] = 0;
+		if (sscanf(line, "%llu %n", &v, &n) != 1 || !line[n]) continue;
+		hroots = realloc(hroots, (nhroots + 1) * sizeof *hroots);
+		hroots[nhroots].path = strdup(line + n); hroots[nhroots].since = v; nhroots++;
+	}
+	fclose(f);
+}
+static int in_history(const char* path) {
+	for (int i = 0; i < nhroots; i++) if (under(path, hroots[i].path)) return 1;
+	return 0;
+}
+// one journal line per event: "<id> <raw flags hex> <path>"
+static void journal_add(uint64_t id, uint32_t flags, const char* path) {
+	if (!journal) return;
+	fprintf(journal, "%llu %x %s\n", (unsigned long long) id, flags, path);
+	manifest_dirty = 1;
+}
+// keep the newer half when the journal grows past JOURNAL_MAX (the oldest history is lost, as fseventsd purges)
+static void journal_open(void) {
+	char p[1100]; snprintf(p, sizeof p, "%s/history", state_dir);
+	char sp[1100]; snprintf(sp, sizeof sp, "%s/history.start", state_dir);
+	// the journal holds every event of the history roots after the id in history.start
+	unsigned long long start = 0;
+	FILE* sf = fopen(sp, "r");
+	if (sf) { if (fscanf(sf, "%llu", &start) != 1) start = 0; fclose(sf); }
+	struct stat st;
+	int have = stat(p, &st) == 0;
+	if (!have || !start) {
+		start = cur_id;
+		unlink(p);
+		sf = fopen(sp, "w"); if (sf) { fprintf(sf, "%llu\n", start); fclose(sf); }
+	} else if (st.st_size > JOURNAL_MAX) {
+		FILE* in = fopen(p, "r");
+		char t[1100]; snprintf(t, sizeof t, "%s.tmp", p);
+		FILE* out = in ? fopen(t, "w") : NULL;
+		if (out) {
+			fseeko(in, st.st_size / 2, SEEK_SET);
+			char line[2200];
+			unsigned long long id, last = start;
+			if (fgets(line, sizeof line, in)) {}   // the rest of a cut line
+			// the first whole line kept: history is complete after the id before it
+			long pos = ftell(in);
+			if (fgets(line, sizeof line, in) && sscanf(line, "%llu", &id) == 1) last = id - 1;
+			fseek(in, pos, SEEK_SET);
+			while (fgets(line, sizeof line, in)) fputs(line, out);
+			fclose(out);
+			rename(t, p);
+			start = last;
+			sf = fopen(sp, "w"); if (sf) { fprintf(sf, "%llu\n", start); fclose(sf); }
+		}
+		if (in) fclose(in);
+	}
+	journal_first = start;
+	journal = fopen(p, "a");
+	if (journal) setvbuf(journal, NULL, _IOLBF, 0);
+}
+
+// manifest: "<isdir> <mtime ns> <size> <path>" for every item under the history roots
+struct mentry { char* path; int isdir; long long mtime, size; };
+static int mcmp(const void* a, const void* b) { return strcmp(((const struct mentry*) a)->path, ((const struct mentry*) b)->path); }
+static void mwalk(const char* path, struct mentry** v, int* n, int* cap, int depth) {
+	struct stat st;
+	if (*n >= MANIFEST_MAX || lstat(path, &st) != 0) return;
+	if (*n == *cap) { *cap = *cap ? *cap * 2 : 1024; *v = realloc(*v, *cap * sizeof **v); }
+	int isdir = S_ISDIR(st.st_mode);
+	(*v)[(*n)++] = (struct mentry) { strdup(path), isdir, (long long) st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec,
+		isdir ? 0 : (long long) st.st_size };
+	if (!isdir || depth > 64) return;
+	DIR* d = opendir(path);
+	if (!d) return;
+	struct dirent* e;
+	while ((e = readdir(d))) {
+		if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+		char sub[2048]; snprintf(sub, sizeof sub, "%s/%s", path, e->d_name);
+		mwalk(sub, v, n, cap, depth + 1);
+	}
+	closedir(d);
+}
+static void manifest_scan(struct mentry** v, int* n) {
+	int cap = 0; *v = NULL; *n = 0;
+	// the roots as they are now (register adds to them on the server thread)
+	pthread_mutex_lock(&mu);
+	int nr = nhroots;
+	char** roots = calloc(nr ? nr : 1, sizeof *roots);
+	for (int i = 0; i < nr; i++) roots[i] = strdup(hroots[i].path);
+	pthread_mutex_unlock(&mu);
+	for (int i = 0; i < nr; i++) {
+		int nested = 0;
+		for (int k = 0; k < nr && !nested; k++) nested = k != i && under(roots[i], roots[k]) && strcmp(roots[i], roots[k]);
+		if (!nested) mwalk(roots[i], v, n, &cap, 0);
+	}
+	for (int i = 0; i < nr; i++) free(roots[i]);
+	free(roots);
+	qsort(*v, *n, sizeof **v, mcmp);
+}
+static void manifest_free(struct mentry* v, int n) { for (int i = 0; i < n; i++) free(v[i].path); free(v); }
+static void manifest_save(struct mentry* v, int n) {
+	char p[1100], t[1100];
+	snprintf(p, sizeof p, "%s/manifest", state_dir); snprintf(t, sizeof t, "%s.tmp", p);
+	FILE* f = fopen(t, "w");
+	if (!f) return;
+	for (int i = 0; i < n; i++) fprintf(f, "%d %lld %lld %s\n", v[i].isdir, v[i].mtime, v[i].size, v[i].path);
+	fclose(f);
+	rename(t, p);
+}
+static void manifest_load(struct mentry** v, int* n) {
+	char p[1100]; snprintf(p, sizeof p, "%s/manifest", state_dir);
+	*v = NULL; *n = 0;
+	FILE* f = fopen(p, "r");
+	if (!f) return;
+	int cap = 0;
+	char line[2200];
+	while (fgets(line, sizeof line, f)) {
+		int isdir, k = 0; long long mt, sz;
+		line[strcspn(line, "\n")] = 0;
+		if (sscanf(line, "%d %lld %lld %n", &isdir, &mt, &sz, &k) != 3 || !line[k]) continue;
+		if (*n == cap) { cap = cap ? cap * 2 : 1024; *v = realloc(*v, cap * sizeof **v); }
+		(*v)[(*n)++] = (struct mentry) { strdup(line + k), isdir, mt, sz };
+	}
+	fclose(f);
+	qsort(*v, *n, sizeof **v, mcmp);
+}
+static uint64_t next_id(void);
+// what changed in the history roots while no daemon ran: journaled with new ids (the manifest of the last run against
+// the trees now)
+static void history_catch_up(void) {
+	struct mentry *old, *cur; int no, nc;
+	manifest_load(&old, &no);
+	manifest_scan(&cur, &nc);
+	int i = 0, j = 0, changes = 0;
+	while (i < no || j < nc) {
+		int c = i >= no ? 1 : j >= nc ? -1 : strcmp(old[i].path, cur[j].path);
+		if (c < 0) {
+			if (in_history(old[i].path)) { journal_add(next_id(), R_REMOVED | (old[i].isdir ? R_ISDIR : R_ISFILE), old[i].path); changes++; }
+			i++;
+		} else if (c > 0) {
+			journal_add(next_id(), R_CREATED | (cur[j].isdir ? R_ISDIR : R_ISFILE), cur[j].path); changes++;
+			j++;
+		} else {
+			if (old[i].isdir != cur[j].isdir) {
+				journal_add(next_id(), R_REMOVED | (old[i].isdir ? R_ISDIR : R_ISFILE), old[i].path);
+				journal_add(next_id(), R_CREATED | (cur[j].isdir ? R_ISDIR : R_ISFILE), cur[j].path); changes += 2;
+			} else if (!cur[j].isdir && (old[i].mtime != cur[j].mtime || old[i].size != cur[j].size)) {
+				journal_add(next_id(), R_MODIFIED | R_ISFILE, cur[j].path); changes++;
+			}
+			i++; j++;
+		}
+	}
+	// a root whose manifest is missing (new root, or no manifest yet) has its history start now
+	if (!no) for (int r = 0; r < nhroots; r++) if (hroots[r].since < cur_id) hroots[r].since = cur_id;
+	LOG("history: %d root(s), %d item(s), %d change(s) since the last run, journal from %llu", nhroots, nc, changes,
+		(unsigned long long) journal_first);
+	manifest_save(cur, nc);
+	manifest_free(old, no); manifest_free(cur, nc);
+	manifest_dirty = 0;
+	save_roots();
+}
+// the manifest follows the trees while we run (every 15 s after events), so a later boot compares with a recent state
+static void* manifest_thread(void* arg) {
+	for (;;) {
+		sleep(15);
+		if (!manifest_dirty) continue;
+		manifest_dirty = 0;
+		struct mentry* v; int n;
+		manifest_scan(&v, &n);
+		manifest_save(v, n);
+		manifest_free(v, n);
+	}
+	return NULL;
+}
+
 // ---- watches ----
 static const char* watch_path(int wd) {
 	return wd >= 0 && wd < capwd ? wdpath[wd] : NULL;
@@ -283,7 +486,7 @@ static struct batch hist;   // history answer of the last register, sent after i
 
 // one Linux event: queue it for every stream that watches the path
 struct pending { struct stream* s; struct batch b; };
-static void dispatch_event(struct pending* pend, int np, const char* full, uint32_t raw, int isdir) {
+static void dispatch_event(struct pending* pend, int np, const char* full, uint32_t raw, int isdir, uint64_t id) {
 	char parent[2048];
 	snprintf(parent, sizeof parent, "%s", full);
 	char* sl = strrchr(parent, '/');
@@ -294,7 +497,6 @@ static void dispatch_event(struct pending* pend, int np, const char* full, uint3
 		for (int k = 0; k < s->npaths && !match; k++) match = under(full, s->roots[k]) || (!(s->flags & F_FILEEVENTS) && under(parent, s->roots[k]));
 		for (int k = 0; k < s->nexcl && match; k++) if (under(full, s->excl[k])) match = 0;
 		if (!match) continue;
-		uint64_t id = next_id();
 		if (s->flags & F_FILEEVENTS) {
 			batch_add(&pend[i].b, report_path(s, full), raw | (isdir ? R_ISDIR : R_ISFILE), id);
 		} else {
@@ -380,7 +582,11 @@ static void* inotify_thread(void* arg) {
 			if (verbose) LOG("inotify %s mask %#x", full, e->mask);
 			// new directories get watches of their own (and what's already in them)
 			if (isdir && (e->mask & (L_IN_CREATE | L_IN_MOVED_TO)) && wanted(full)) watch_tree(full, 0);
-			if (np) dispatch_event(pend, np, full, raw, isdir);
+			// x86Code: one id per event (every stream sees it under the same id, as from fseventsd's log); events in
+			// the history roots go to the journal
+			uint64_t id = next_id();
+			if (in_history(full)) journal_add(id, raw | (isdir ? R_ISDIR : R_ISFILE), full);
+			if (np) dispatch_event(pend, np, full, raw, isdir, id);
 		}
 		double t = now_s();
 		for (int k = 0; k < np; k++) {
@@ -548,15 +754,62 @@ static void handle_register(register_req_t* r, mach_msg_header_t* rep) {
 	p->port.disposition = MACH_MSG_TYPE_MAKE_SEND;
 	p->port.type = MACH_MSG_PORT_DESCRIPTOR;
 
-	// history: none kept. A stream that starts in the past is told to rescan, then that history is done.
+	// x86Code: history. The stream's paths become history roots (journaled from now on, and across boots). Events
+	// after `since` come from the journal; a path whose history doesn't reach back to `since` is told to rescan.
+	// Then HistoryDone.
 	if (r->since != UINT64_MAX) {
 		struct batch b = { 0 };
 		pthread_mutex_lock(&mu);
-		if (r->since < start_id)
-			for (int i = 0; i < s->npaths; i++) {
+		int added = 0;
+		for (int i = 0; i < s->npaths; i++) {
+			// (an ancestor of the device's data directory, "/" for one, is journaled for that directory only)
+			const char* hr = device_home[0] && under(device_home, s->roots[i]) ? device_home : s->roots[i];
+			int have = 0;
+			for (int k = 0; k < nhroots && !have; k++) have = under(hr, hroots[k].path);
+			if (have) continue;
+			hroots = realloc(hroots, (nhroots + 1) * sizeof *hroots);
+			hroots[nhroots].path = strdup(hr); hroots[nhroots].since = cur_id; nhroots++;
+			added = 1;
+		}
+		if (added) { save_roots(); manifest_dirty = 1; }
+		int complete[s->npaths ? s->npaths : 1];
+		for (int i = 0; i < s->npaths; i++) {
+			complete[i] = 0;
+			for (int k = 0; k < nhroots && !complete[i]; k++)
+				complete[i] = under(s->roots[i], hroots[k].path) && r->since >= hroots[k].since;
+			if (r->since < journal_first) complete[i] = 0;
+			if (!complete[i]) {
 				char rp[2100]; snprintf(rp, sizeof rp, "%s/", report_path(s, s->roots[i]));
 				batch_add(&b, rp, R_MUSTSCAN, next_id());
 			}
+		}
+		int replayed = 0;
+		if (journal && r->since < cur_id) {
+			fflush(journal);
+			char jp[1100]; snprintf(jp, sizeof jp, "%s/history", state_dir);
+			FILE* jf = fopen(jp, "r");
+			char line[2200];
+			while (jf && fgets(line, sizeof line, jf)) {
+				unsigned long long id; unsigned fl; int k = 0;
+				line[strcspn(line, "\n")] = 0;
+				if (sscanf(line, "%llu %x %n", &id, &fl, &k) != 2 || id <= r->since || !line[k]) continue;
+				const char* full = line + k;
+				char parent[2048];
+				snprintf(parent, sizeof parent, "%s", full);
+				char* sl = strrchr(parent, '/');
+				if (sl && sl != parent) *sl = 0;
+				int match = 0;
+				for (int i = 0; i < s->npaths && !match; i++)
+					match = complete[i] && (under(full, s->roots[i]) || (!(s->flags & F_FILEEVENTS) && under(parent, s->roots[i])));
+				for (int e = 0; e < s->nexcl && match; e++) if (under(full, s->excl[e])) match = 0;
+				if (!match) continue;
+				if (s->flags & F_FILEEVENTS) batch_add(&b, report_path(s, full), fl, id);
+				else { char dir[2100]; snprintf(dir, sizeof dir, "%s/", report_path(s, parent)); batch_add(&b, dir, 0, id); }
+				replayed++;
+			}
+			if (jf) fclose(jf);
+		}
+		LOG("  history since %llu: %d event(s) replayed", (unsigned long long) r->since, replayed);
 		batch_add(&b, "", R_HISTORYDONE, cur_id);
 		pthread_mutex_unlock(&mu);
 		// sent after the reply (the client registers its port in its stream table once the RPC returns)
@@ -584,6 +837,22 @@ int main(int argc, char** argv) {
 
 	ino_fd = (int) syscall(SYS_X86CODE_INOTIFY, 0, L_IN_CLOEXEC, 0, 0);
 	if (ino_fd < 0) LOG("inotify_init1: errno %d (no live events)", errno);
+
+	// x86Code: history: the roots' trees are watched from the start; what changed since the last run is journaled
+	load_roots();
+	journal_open();
+	for (int i = 0; i < nhroots; i++) {
+		struct stat st;
+		if (stat(hroots[i].path, &st) != 0) continue;
+		int covered = 0;
+		for (int t = 0; t < ntrees && !covered; t++) covered = under(hroots[i].path, trees[t]);
+		if (covered) continue;
+		watch_tree(hroots[i].path, 0);
+		trees = realloc(trees, (ntrees + 1) * sizeof *trees);
+		trees[ntrees++] = strdup(hroots[i].path);
+	}
+	history_catch_up();
+	{ pthread_t t; pthread_create(&t, NULL, manifest_thread, NULL); }
 
 	kern_return_t kr = bootstrap_check_in(bootstrap_port, "com.apple.FSEvents", &service);
 	if (kr) { LOG("bootstrap_check_in com.apple.FSEvents: %#x", kr); return 1; }

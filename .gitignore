@@ -65,6 +65,7 @@ core.[0-9]*
 /tests/probes/pathprobe
 /tests/probes/prefs
 /tests/probes/fsevprobe
+/tests/probes/fsevhist
 /tests/probes/probe
 /tests/probes/rcvdieprobe
 /tests/probes/shmprobe
