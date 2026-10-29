@@ -2818,11 +2818,23 @@ Causes and fixes:
 - Once, during launches with `x86sim terminate` in between: `Thread has both a pending call and a pending
   continuation` (thread.cpp:484, std::runtime_error -> abort). Not reproduced in the next run. Open.
 
+### Frame pacing
+CA's SimDisplay does not throttle on the swap callback: `SimDisplay::finished_update` returns the seed of the buffer
+being replaced (0x6410, set in `finish_update` after SwapSubmit), and `can_update` only checks a flag. So presents
+went out whenever CA rendered: 77-94 a second while dragging (touch moves every 8 ms), unevenly spaced. simfb now
+publishes at the display's refresh: a GPU-complete present waits for the next 16.67 ms slot after the previous
+publish, and a newer ready present replaces one still waiting (`SIMFB_HZ`, default 60; 0 = at once). Settings
+scroll: frame interval p50 16.7 ms, p90 18.6 ms, peak 61 fps (CA submitted 78/s, 212 of 627 replaced before
+"scanout"); touch -> frame latency p50 ~24 ms (up to one refresh more than before). Screens 104 (home), 105
+(Settings) after the changes.
+
 ### Still open (performance)
-- Frame pacing is not locked to the display: frames follow touch events and commits (77-86 frames/s while
-  dragging with moves every 8 ms), and the publish time includes the GPU wait, so intervals vary (p95 ~20 ms). A
-  vsync-paced SwapSubmit callback / display link timing in simfb is the next step; 120 Hz would need a ProMotion
-  device type (the device is an iPhone 16, 60 Hz).
+- Hitches remain where CA itself renders late (gaps of 25-70 ms, 22 in an 8 s scroll): the processes are busy in
+  Mach IPC. While scrolling, backboardd + Settings + metalhostd send ~13,800 darlingserver RPCs a second
+  (mach_msg_overwrite 7,900/s, mach_port_deallocate 2,800/s, psynch cv/mutex ~1,600/s, mk_timer ~500/s); each is a
+  sendmsg/recvmsg round trip to darlingserver. A cheaper transport (shared-memory request rings with futex wakeups,
+  or handling port deallocation/psynch in the client where XNU semantics allow) is the next big lever.
+- 120 Hz would need a ProMotion device type (the device is an iPhone 16, 60 Hz); `SIMFB_HZ=120` only paces simfb.
 - darlingserver is still the busiest process while scrolling (61-76%): its profile is flat (Mach message RPCs,
   `dtape_share_region`, `memoryRegionInfo` parsing /proc maps, getuid/getpid per call).
 - vchroot path resolution lstat()s every component of every path (installd: ~21,000 lstat/s during its post-boot
