@@ -121,13 +121,23 @@ extern "C" void a64_tramp_entry();           // callconv.S
 // Special handlers for libsystem functions (handlers.cpp). Returns null if the export needs no special handling.
 Handler special_handler(const std::string &name, int *nfixed, const char **native_name);
 bool is_guest_code_export(const std::string &name);  // setjmp family: emitted as arm64 code in the stub dylib
-size_t emit_guest_code(const std::string &name, uint32_t *out);  // arm64 code for those, returns instruction count
+size_t emit_guest_code(const std::string &name, uint32_t *out, u32 slow_thunk);  // arm64 code for those, returns instruction count
 
 // ---- stub dylibs ------------------------------------------------------------------------------------------------
 struct StubLib { std::string install_name; int fd = -1; size_t size = 0; };
 // Builds the arm64 stub dylib for one host library (exports from the cache placeholder's export trie).
 StubLib build_stub_dylib(const std::string &install_name, const std::vector<std::string> &exports);
-std::vector<std::string> cache_exports(const std::string &cache_path, const std::string &image);
+// addrs (optional): each export's unslid address (the cache is mapped at its fixed address), ~0 for re-exports.
+std::vector<std::string> cache_exports(const std::string &cache_path, const std::string &image, std::vector<u64> *addrs = nullptr,
+                                       u64 *text_lo = nullptr, u64 *text_hi = nullptr);
+// Native malloc (malloc.cpp): replaces libsystem_malloc's exports in the mapped cache with thunks to Darling's malloc.
+void native_malloc_prepare(const std::string &cache_path);  // before dyld_sim maps the cache: reads the exports
+void native_malloc_install();
+u64 reserve_aligned(u64 size, u64 mask);  // guest-VM range [12 GB, 63 GB), PROT_NONE
+// gheap.cpp
+void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *));
+void *gh_malloc(size_t); void *gh_calloc(size_t, size_t); void *gh_realloc(void *, size_t); void gh_free(void *);
+void *gh_memalign(size_t align, size_t size); size_t gh_size(const void *); size_t gh_good_size(size_t);                               // from ___libkernel_init: patches the mapped cache text
 int stub_fd_for_path(const char *path);  // open() redirect: a dup of the stub dylib's fd, or -1
 
 // misc

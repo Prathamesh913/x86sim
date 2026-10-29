@@ -1,3 +1,4 @@
+#include <algorithm>
 // libarm64jit: process setup. Called by the x86_64 host program (host/arm64host) after Darling's libSystem is up.
 // Maps the arm64 main executable and dyld_sim, writes the 16K arm64 commpage, builds the stub dylibs for the host
 // libraries, then runs _dyld_sim_prepare() and main under the JIT on this (the main) thread. dyld_sim maps the
@@ -200,6 +201,13 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     if (GuestThread *t = GuestThread::current())
         logf("guest pc %#lx lr %#lx sp %#lx x0 %#lx x1 %#lx x8 %#lx", (unsigned long)t->jit->GetPC(), (unsigned long)t->x(30),
              (unsigned long)t->sp(), (unsigned long)t->x(0), (unsigned long)t->x(1), (unsigned long)t->x(8));
+    if (const char *pk = getenv("X86CODE_A64_PEEK"))  // debug: comma-separated guest addresses to dump (8 bytes each)
+        for (const char *q = pk; *q;) {
+            char *e; u64 a = strtoull(q, &e, 16);
+            if (e == q) break;
+            logf("peek %#lx: %#lx", (unsigned long)a, (unsigned long)*(u64 *)a);
+            q = *e == ',' ? e + 1 : e;
+        }
     struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;
     if (old->sa_flags & SA_SIGINFO) old->sa_sigaction(sig, si, uc);
     else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) old->sa_handler(sig);
@@ -212,7 +220,13 @@ static void install_fault_report() {
 }
 
 void print_stats() {
-    if (getenv("X86CODE_A64_STATS")) logf("exit after %.1f ms", ms_since(g_t0));
+    if (!getenv("X86CODE_A64_STATS")) return;
+    logf("exit after %.1f ms", ms_since(g_t0));
+    extern u64 g_thunk_counts[0x10000];
+    std::vector<std::pair<u64, u32>> v;
+    for (u32 i = 0; i < g_thunks.size(); i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t k = 0; k < v.size() && k < 12; k++) logf("  %10lu %s", (unsigned long)v[k].first, g_thunks[v[k].second].name.c_str());
 }
 
 }  // namespace a64
@@ -256,6 +270,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
         std::string path = std::string("/usr/lib/system/libsystem_") + lib + ".dylib";
         build_stub_dylib(path, cache_exports(cache, path));
     }
+    native_malloc_prepare(cache);
     double t_stubs = ms_since(g_t0);
 
     // Keep the cache's fixed range free for dyld_sim's MAP_FIXED mappings.

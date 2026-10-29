@@ -28,10 +28,14 @@ void put_uleb(std::vector<uint8_t> &o, u64 v) {
 }
 size_t uleb_len(u64 v) { size_t n = 1; while (v >= 0x80) { v >>= 7; n++; } return n; }
 
-void walk_trie(const uint8_t *start, const uint8_t *end, const uint8_t *p, std::string &prefix, std::vector<std::string> &out) {
+void walk_trie(const uint8_t *start, const uint8_t *end, const uint8_t *p, std::string &prefix, std::vector<std::string> &out,
+               std::vector<u64> *values = nullptr) {
     if (p >= end) return;
     u64 ts = uleb(p);
-    if (ts) out.push_back(prefix);
+    if (ts) {
+        out.push_back(prefix);
+        if (values) { const uint8_t *q = p; u64 fl = uleb(q); values->push_back(fl & 8 /* reexport */ ? ~0ull : uleb(q)); }
+    }
     p += ts;
     uint8_t n = *p++;
     for (uint8_t i = 0; i < n; i++) {
@@ -41,7 +45,7 @@ void walk_trie(const uint8_t *start, const uint8_t *end, const uint8_t *p, std::
         u64 off = uleb(p);
         size_t keep = prefix.size();
         prefix.append(s, len);
-        walk_trie(start, end, start + off, prefix, out);
+        walk_trie(start, end, start + off, prefix, out, values);
         prefix.resize(keep);
     }
 }
@@ -138,7 +142,8 @@ std::vector<StubLib> g_libs;
 
 }  // namespace
 
-std::vector<std::string> cache_exports(const std::string &cache_path, const std::string &image) {
+std::vector<std::string> cache_exports(const std::string &cache_path, const std::string &image, std::vector<u64> *addrs,
+                                       u64 *text_lo, u64 *text_hi) {
     struct File { const uint8_t *p; size_t size; };
     std::vector<File> files;
     static const char *suffixes[] = {"", ".01", ".02", ".03", ".04", ".05", ".06", ".07", ".08", ".09", ".10"};
@@ -175,12 +180,14 @@ std::vector<std::string> cache_exports(const std::string &cache_path, const std:
         for (uint32_t k = 0; k < mh->ncmds; k++, lc += ((const load_command *)lc)->cmdsize) {
             auto *sg = (const segment_command_64 *)lc;
             if (sg->cmd == LC_SEGMENT_64 && !strcmp(sg->segname, "__LINKEDIT")) le = sg->vmaddr - sg->fileoff;
+            if (sg->cmd == LC_SEGMENT_64 && !strcmp(sg->segname, "__TEXT") && text_lo) { *text_lo = sg->vmaddr; *text_hi = sg->vmaddr + sg->vmsize; }
             if (sg->cmd == LC_DYLD_EXPORTS_TRIE) { toff = ((const linkedit_data_command *)lc)->dataoff; tsize = ((const linkedit_data_command *)lc)->datasize; }
         }
         if (!tsize) die("%s has no export trie in the cache", image.c_str());
         const uint8_t *t = rd(le + toff);
         std::string prefix;
-        walk_trie(t, t + tsize, t, prefix, out);
+        walk_trie(t, t + tsize, t, prefix, out, addrs);
+        if (addrs) for (u64 &v : *addrs) if (v != ~0ull) v += addr;
         break;
     }
     for (auto &f : files) munmap((void *)f.p, f.size);
@@ -201,7 +208,8 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
         }
         u64 at = kCodeStart + code.size() * 4;
         if (is_guest_code_export(name)) {
-            uint32_t buf[64]; size_t n = emit_guest_code(name, buf);
+            const void *nat = dsym(name.c_str() + 1);  // slow path of guest-code fast paths
+            uint32_t buf[64]; size_t n = emit_guest_code(name, buf, nat ? add_thunk(name, h_generic, nat) : 0);
             code.insert(code.end(), buf, buf + n);
             entries.push_back({name, 0, at}); nfunc++; continue;
         }

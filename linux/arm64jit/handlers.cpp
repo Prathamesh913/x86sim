@@ -8,6 +8,8 @@
 #include <map>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
+#include <asm/prctl.h>
 
 namespace a64 {
 
@@ -101,7 +103,7 @@ static u64 reserve_low(u64 len) {
     }
     return 0;
 }
-static u64 reserve_aligned(u64 size, u64 mask) {
+u64 reserve_aligned(u64 size, u64 mask) {
     u64 align = (mask | 0x3fff) + 1;
     u64 r = reserve_low(size + align);
     if (!r) return 0;
@@ -176,6 +178,34 @@ static void h_msg_overwrite(GuestThread &t, u32 i) {
     t.set_x(0, (u32)r.rax);
 }
 
+// Generic >8-argument functions: the 9th+ arguments are packed by natural size/alignment on the Apple arm64 stack
+// (each 8-byte slot on SysV). Sizes are given for each stack argument (manyargs audit, ARM64-PLAN stage 2).
+template <int... Sz> static void h_stack_args(GuestThread &t, u32 i) {
+    u64 ints[16]; load_regs(t, ints);
+    u64 off = 0, sp = t.sp(); int k = 8;
+    auto take = [&](int sz) {
+        off = (off + sz - 1) & ~(u64)(sz - 1);
+        ints[k++] = sz == 8 ? GuestThread::rd<u64>(sp + off) : sz == 4 ? GuestThread::rd<uint32_t>(sp + off) : GuestThread::rd<uint16_t>(sp + off);
+        off += sz;
+    };
+    (take(Sz), ...);
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    t.set_x(0, r.rax);
+}
+// Structs over 16 bytes by value: arm64 passes a pointer, SysV copies the struct onto the stack.
+// task_register_dyld_shared_cache_image_info(task, dyld_kernel_image_info_t (40 B), bool, bool)
+static void h_dyld_cache_info(GuestThread &t, u32 i) {
+    u64 ints[16] = {t.x(0), t.x(2), t.x(3), 0, 0, 0};
+    memcpy(&ints[6], (void *)t.x(1), 40);
+    u64 fps[8] = {}; NRet r;
+    a64_ncall(g_thunks[i].native, ints, fps, &r);
+    t.set_x(0, (u32)r.rax);
+}
+
+// libSystem's initializer calls this first, before __malloc_init: the cache is mapped, nothing has allocated yet.
+static void h_libkernel_init(GuestThread &t, u32) { native_malloc_install(); t.set_x(0, 0); }
+
 void print_stats();
 static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends here
     print_stats();
@@ -203,7 +233,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
     if (auto it = renamed.find(n); it != renamed.end()) { *native_name = it->second; return h_generic; }
     static const std::map<std::string, Handler> special = {
         {"____chkstk_darwin", h_noop}, {"_thread_chkstk_darwin", h_noop},
-        {"___libkernel_init", h_zero}, {"___libkernel_platform_init", h_zero}, {"___libkernel_voucher_init", h_zero},
+        {"___libkernel_init", h_libkernel_init}, {"___libkernel_platform_init", h_zero}, {"___libkernel_voucher_init", h_zero},
         {"___libkernel_init_after_boot_tasks", h_zero}, {"___libplatform_init", h_zero}, {"___pthread_init", h_zero},
         {"___pthread_late_init", h_zero}, {"_mach_init", h_zero}, {"__pthread_yield_to_enqueuer_4dispatch", h_zero},
         {"__pthread_mutex_enable_legacy_mode", h_zero}, {"_pthread_prefer_alternate_cluster_self", h_zero},
@@ -220,7 +250,13 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
         {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
         {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite},
-        {"__exit", h_exit},
+        {"__exit", h_exit}, {"___exit", h_exit},
+        {"_exception_raise_state", h_stack_args<8>}, {"_exception_raise_state_identity", h_stack_args<4, 8, 8>},
+        {"_host_swap_exception_ports", h_stack_args<8, 8>}, {"_task_swap_exception_ports", h_stack_args<8, 8>},
+        {"_thread_swap_exception_ports", h_stack_args<8, 8>}, {"_kext_request", h_stack_args<8>},
+        {"_mach_msg_overwrite_trap", h_stack_args<4>}, {"_task_register_dyld_shared_cache_image_info", h_dyld_cache_info},
+        // security_token_t (8 B) + audit_token_t (32 B) by value: not used by the simulator, Darling has no host_security
+        {"_host_security_create_task_token", h_missing}, {"_host_security_set_task_token", h_missing},
         {"__simple_dprintf", h_simple_dprintf}, {"__simple_vdprintf", h_simple_vdprintf},
         {"__simple_sprintf", h_simple_sprintf}, {"__simple_vsprintf", h_simple_vsprintf},
         {"__simple_esprintf", h_simple_esprintf}, {"__simple_vesprintf", h_simple_vesprintf},
@@ -236,10 +272,46 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
 
 // ---- setjmp family as guest code -----------------------------------------------------------------------------------
 // jmp_buf (ours, private to these functions): x19-x28, x29, x30, sp, d8-d15. The signal mask is not saved.
+// pthread_getspecific/setspecific: guest code on the native TSD (guest tpidrro_el0 = Darling's x86_64 TSD base, see
+// jit.cpp). setspecific stores directly when libpthread's bookkeeping needs no update (key in [10, max_tsd_key]);
+// otherwise it takes the thunk. max_tsd_key is at TSD base - 148 in Darling's x86_64 struct pthread_s (tsd at +224).
+static bool tsd_layout_ok() {
+    static int ok = -1;
+    if (ok < 0) {
+        unsigned long gs = 0;
+        syscall(SYS_arch_prctl, ARCH_GET_GS, &gs);
+        static auto *self = (u64 (*)())dsym("pthread_self");
+        ok = gs && self && *(u64 *)gs == self() && self() == gs - 224;
+        if (!ok) logf("TSD layout unexpected: pthread_getspecific/setspecific stay thunks");
+    }
+    return ok;
+}
 bool is_guest_code_export(const std::string &n) {
+    if (n == "_pthread_getspecific" || n == "_pthread_setspecific") return tsd_layout_ok();
     return n == "_setjmp" || n == "__setjmp" || n == "_sigsetjmp" || n == "_longjmp" || n == "__longjmp" || n == "_siglongjmp";
 }
-size_t emit_guest_code(const std::string &n, uint32_t *o) {
+size_t emit_guest_code(const std::string &n, uint32_t *o, u32 slow) {
+    if (n == "_pthread_getspecific") {
+        static const uint32_t c[] = {0xD53BD068, 0xF8607900, 0xD65F03C0};  // mrs x8, tpidrro_el0; ldr x0, [x8, x0, lsl #3]; ret
+        memcpy(o, c, sizeof c);
+        return 3;
+    }
+    if (n == "_pthread_setspecific") {
+        static const uint32_t c[] = {
+            0xD53BD068,  // mrs x8, tpidrro_el0
+            0x7856C109,  // ldurh w9, [x8, #-148]   (max_tsd_key)
+            0xEB09001F,  // cmp x0, x9
+            0x540000C8,  // b.hi slow (+6 insns)
+            0xF100281F,  // cmp x0, #10
+            0x54000083,  // b.lo slow (+4)
+            0xF8207901,  // str x1, [x8, x0, lsl #3]
+            0x52800000,  // mov w0, #0
+            0xD65F03C0,  // ret
+        };
+        memcpy(o, c, sizeof c);
+        emit_stub(o + 9, slow);  // slow: svc #slow; ret
+        return 11;
+    }
     static const uint32_t setjmp_code[] = {
         0xA9005013,  // stp x19, x20, [x0]
         0xA9015815,  // stp x21, x22, [x0, #16]

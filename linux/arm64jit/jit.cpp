@@ -93,10 +93,14 @@ bool GuestThread::MemoryWriteExclusive128(u64 a, Dynarmic::A64::Vector v, Dynarm
     return __atomic_compare_exchange_n((unsigned __int128 *)a, &ev, nv, false, 5, 5);
 }
 
+bool g_count_thunks = getenv("X86CODE_A64_STATS") != nullptr;
+u64 g_thunk_counts[0x10000];
+
 void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     svc_count++;
     if (swi >= g_thunks.size()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
+    if (g_count_thunks) __atomic_fetch_add(&g_thunk_counts[swi], 1, __ATOMIC_RELAXED);
     if (g_trace) logf("-> %s(%#lx, %#lx, %#lx)", g_thunks[swi].name.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
     g_thunks[swi].fn(*this, swi);
     if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
