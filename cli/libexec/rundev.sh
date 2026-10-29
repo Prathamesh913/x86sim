@@ -32,6 +32,10 @@ rm -rf $D/data/var/log/*.log $D/data/Library/Preferences/com.x86code*.plist
 # x86Code: syncdefaultsd (com.apple.syncdefaultsd, the iCloud key-value store) and amsaccountsd (AppleMediaServices'
 # accounts) trapped in CloudKit until Darling's proc_pidinfo(PROC_PIDPATHINFO) returned 0 like XNU: cloudd took every
 # client for dead and answered container requests with (nil, nil) (FINDINGS 3.13). Both run on a Mac's simulator.
+# x86Code: nanoregistryd (the paired-watch registry; runs on a Mac's simulator): without it locationd's start hung in
+# -[NRPairedDeviceRegistry initWithBoost:disconnected:] (a synchronous wait for the registry) on a queue its other
+# services wait behind, and its com.apple.locationd.simulation listener never took a connection: simctl location
+# requests were lost (FINDINGS 3.17)
 # x86Code: com.x86code.openurl (host/openurl/openurl) serves cli/libexec/simtouch.py openurl <url>
 # x86Code: com.x86code.fpsim2host (host/fpsim2host) stands in for the Mac host's FileProvider service
 # (com.apple.FileProvider.sim2host: open by id, openat/mkdirat/... for File Provider extensions; FINDINGS 3.13)
@@ -87,7 +91,7 @@ X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py $D com.apple.cfprefsd.xpc.da
 	com.apple.searchd com.apple.corespotlightservice com.apple.dasd com.apple.contactsd com.apple.assistant_cdmd \
 	com.apple.mobileassetd com.apple.biomed com.apple.parsecd com.apple.pasteboard.pasted com.apple.bird com.apple.swcd \
 	com.apple.intelligenceplatformd com.apple.textunderstandingd com.apple.syncdefaultsd com.apple.amsaccountsd \
-	com.apple.revisiond com.apple.installcoordinationd com.apple.suggestd \
+	com.apple.revisiond com.apple.installcoordinationd com.apple.suggestd com.apple.nanoregistryd \
 	com.x86code.prefs=tests/probes/prefs com.x86code.openurl=host/openurl/openurl \
 	"com.x86code.fpsim2host=host/fpsim2host/fpsim2host|mach:com.apple.FileProvider.sim2host" \
 	"com.x86code.fseventsd=host/fseventsd/fseventsd|mach:com.apple.FSEvents" "$@" >/dev/null
