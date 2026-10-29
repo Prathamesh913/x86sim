@@ -145,6 +145,10 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
             c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
         }
+        // X86CODE_A64_FASTDISPATCH=0: drop FastDispatch only (keep other SAFE-independent opts).
+        if (getenv("X86CODE_A64_FASTDISPATCH") && atoi(getenv("X86CODE_A64_FASTDISPATCH")) == 0) {
+            c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
+        }
         c.recompile_on_fastmem_failure = false;
         c.recompile_on_exclusive_fastmem_failure = false;
         // Per process (reserved; only emitted pages are resident). Stage 2's per-thread 8 MB is too small here.
@@ -227,8 +231,22 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
     bool *outer_done = done;
     done = &finished;
     depth++;
+    // X86CODE_A64_EXEC_LOCK=1: one process-wide mutex around every Run (bisect: cache/linking race vs
+    // per-thread state leak). Shared-mode only; huge slowdown, for experiments.
+    static std::mutex *exec_lock = []() -> std::mutex * {
+        if (!(getenv("X86CODE_A64_EXEC_LOCK") && atoi(getenv("X86CODE_A64_EXEC_LOCK")) == 1)) return nullptr;
+        return new std::mutex;
+    }();
     if (g_step && depth == 1) while (!finished) jit->Step();
-    else while (!finished) { jit->Run(); if (sig_pending.load(std::memory_order_relaxed)) deliver_signals(*this); }
+    else while (!finished) {
+        if (exec_lock) {
+            std::lock_guard<std::mutex> g(*exec_lock);
+            jit->Run();
+        } else {
+            jit->Run();
+        }
+        if (sig_pending.load(std::memory_order_relaxed)) deliver_signals(*this);
+    }
     depth--;
     done = outer_done;
     NRet r{jit->GetRegister(0), jit->GetRegister(1), jit->GetVector(0)[0], jit->GetVector(1)[0]};
@@ -371,10 +389,26 @@ void GuestThread::InstructionCacheOperationRaised(Dynarmic::A64::InstructionCach
     // no-op; per-thread 8 MB caches masked that by evacuating on full, but the shared cache never frees.
     using Op = Dynarmic::A64::InstructionCacheOperation;
     if (!jit) return;
+    static const bool iclog = getenv("X86CODE_A64_ICLOG") != nullptr;
+    static const bool ivau_clear = getenv("X86CODE_A64_IVAU_CLEAR") && atoi(getenv("X86CODE_A64_IVAU_CLEAR")) == 1;
+    if (iclog) {
+        const char *name = "?";
+        switch (op) {
+        case Op::InvalidateByVAToPoU: name = "IVAU"; break;
+        case Op::InvalidateAllToPoU: name = "IALLU"; break;
+        case Op::InvalidateAllToPoUInnerSharable: name = "IALLUIS"; break;
+        }
+        logf("IC %s value=%#lx", name, (unsigned long)value);
+    }
     switch (op) {
     case Op::InvalidateByVAToPoU:
-        // One cache line; invalidate a 64-byte window covering the VA.
-        jit->InvalidateCacheRange(value & ~u64(63), 64);
+        // X86CODE_A64_IVAU_CLEAR=1: treat every line invalidate as a full ClearCache (bisect SMC races).
+        if (ivau_clear) {
+            jit->ClearCache();
+        } else {
+            // One cache line; invalidate a 64-byte window covering the VA.
+            jit->InvalidateCacheRange(value & ~u64(63), 64);
+        }
         break;
     case Op::InvalidateAllToPoU:
     case Op::InvalidateAllToPoUInnerSharable:
