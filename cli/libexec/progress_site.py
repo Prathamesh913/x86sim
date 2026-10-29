@@ -115,7 +115,7 @@ ul{padding-left:20px}li{margin:4px 0}.log li{font-size:13px;color:#bbb;list-styl
 </style></head><body><main>
 <h1>%(title)s</h1><p class="sub">%(summary)s</p>
 <div class="now"><b>Working on now:</b> %(now)s</div>
-<h2>Live</h2><video id="v" controls autoplay muted playsinline></video>
+<h2>Live</h2><video id="v" poster="live.jpg" controls autoplay muted playsinline></video>
 <p class="cap">Live H.264 stream (~1-2 s behind). Test boots come and go, so the screen may hold the last frame. Last frame %(seq)s.</p>
 <h2>Where it stands</h2><div class="mt">%(metrics)s</div>
 <h2>Stages</h2>%(stages)s
