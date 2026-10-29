@@ -286,3 +286,97 @@ with Darling's simulator-mode kernel paths. Before booting launchd_sim: native m
 feel), async signal deferral, the >8-arg/struct-by-value audit, and Mach exception/crash reporting at guest PCs. Then
 start launchd_sim in the a64prefix with `sim.env` pointed at the 27.0 runtime and port the host shims (simfb, simhid,
 metalhostd: they are loaded into sim processes and must become arm64 or be thunked like libsystem).
+
+## Stage 2 results (2026-10-29)
+
+**Result: the iOS 27.0 (24A434) home screen renders** (docs/screens/arm64/03-home-screen.png): launchd_sim,
+the core daemons, backboardd (window server, simfb display, simhid input), SpringBoard and PosterBoard, every process
+an arm64 iOS-simulator binary under libarm64jit, software rendering, iPhone 17 (iPhone18,3, 1206x2622) device type.
+About 7 minutes from `cli/libexec/arm64/boot-a64.sh` to the home screen; the stack stays around 5-5.5 GB, close to the
+6 GB budget.
+
+Boot: `SUDO_PASS=... SECS=60 A64_KEEP=1 X86CODE_A64_CODECACHE_MB=8 cli/libexec/arm64/boot-a64.sh`, viewer
+`SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring cli/libexec/simview.py var/device-a64/data/framebuffer.bgra 3`.
+Separate prefix ($X86SIM_SCRATCH/a64prefix), device (var/device-a64), state (var/run-a64) and frame ring; it stops only
+its own container's launchers (found by command line) and never runs killsim.sh, mtlvk, mdns or jetsam.
+
+### Prerequisites (1a-1e)
+- **Native malloc (1a).** Every libsystem_malloc export in the mapped cache becomes a thunk when `__libkernel_init`
+  runs (libSystem's initializer calls it before `__malloc_init`). 4-byte tail-call exports (`free`, `vfree`,
+  `realloc`, `malloc_type_free`, ...) are followed to their internal targets. Backing store is `gheap.cpp`, a size-class
+  allocator over the guest VM range below 64 GB: Darling's own malloc returns 0x7f.. addresses and Swift/ObjC pack flag
+  bits above bit 36 (Swift's `_StringGuts.grow` crashed on them). Zones are guest-side `malloc_zone_t`s with svc stubs.
+  `pthread_getspecific`/`setspecific` are guest code.
+
+  objcswift (best of 3, ms): | test | M1 | stage 1 | stage 2 |
+  |---|---:|---:|---:|
+  | objc alloc/release 2M | 40.7 | 645.3 | 265-273 (6.6x M1) |
+  | ARC list 2M nodes | 92.6 | 887.1 | 286-294 (3.1x M1) |
+  | msgSend 20M | 53.1 | 134.0 | 133-137 |
+  | existential / Dictionary | 28.8 / 20.4 | 61.0 / 42.7 | 60 / 43 |
+
+  ObjC retain/release stay guest code (inline isa CAS; a native path would need the isa layout).
+- **Signals (1b).** `__sigaction` and iOS 27's `__platform_sigaction` install one native handler that records the
+  signal and halts the thread's Jit; `GuestThread::call()` delivers at the block boundary with an arm64 Darwin
+  ucontext/mcontext64 on the guest stack, sa_mask applied, and resumes from the (possibly modified) context
+  (tests/arm64/signals.c).
+- **>8 args / by-value structs (1c).** From the audit list: packed stack arguments for exception_raise_state(_identity),
+  *_swap_exception_ports, kext_request, mach_msg_overwrite_trap; `task_register_dyld_shared_cache_image_info` copies
+  its 40-byte struct to the SysV stack; host_security_* are missing. mach_timespec_t/mach_right_* fit a register.
+- **Blocks (1d).** None of the three host libraries' exports takes a block (Haiku audit,
+  $X86SIM_SCRATCH/a64s2/block_exports.txt). thread_get_state arm64 flavors and ucontext calls are still not handled.
+- **libobjc read-only faults (1e).** dynarmic implemented acquire loads (LDAR/LDAPR) as `lock xadd 0`, a write cycle:
+  every acquire load from `__DATA_CONST` (constant CFStrings, objc data) faulted and went through the fastmem fallback.
+  Ordered reads up to 64 bits are now plain loads (ordered writes are xchg, so STLR->LDAR order holds).
+
+### Translation and boundary bugs found by the boot
+- dynarmic: FEAT_FP16 scalar arithmetic/compares/fcsel (via binary32); FP16 *vector* (fmla/fmul by element, three
+  same, conversions; ~70k instructions in the cache, RenderBox/CoreImage) run in `fp16.cpp` from the interpreter
+  fallback (tests/arm64/fp16v.c hash identical to the M1); constant propagation no longer folds ops with pseudo-ops
+  (`ands x, y, #-1` asserted in IdentityRemovalPass); 64K-entry fast-dispatch table (was 16 MB per thread).
+- TBI: slow-path memory callbacks drop the top byte (Swift `_StringObject` pointers with discriminator bits).
+- Guest TSD is private (tpidrro_el0 -> own array): Darling's native libobjc/libdispatch TSD destructors freed guest
+  values at thread exit (SIGABRT in every daemon). Reserved slots 1-9 (special reply port, QoS, MIG reply, ...) are
+  copied across at every guest/native transition (dispatch's sync IPC got MACH_RCV_INVALID_NOTIFY otherwise).
+- pthread_exit: guest threads start in our wrapper and unwind to it (`__builtin_longjmp`; glibc's fortified longjmp and
+  Darling's pthread_exit aborted); the main thread parks (dispatch_main). Exited threads free their GuestThread
+  through a native TSD destructor (each leaked ~20 MB before).
+- Hint instructions (YIELD/WFE) continue; mldr's Linux exe path is turned into the Darwin path (CFBundleGetMainBundle
+  was NULL); the guest-VM cursor stays 16K-aligned (an unaligned cursor made every later mmap EINVAL: lsd's database
+  build failed); special handlers without a native function are "missing" instead of calling NULL.
+- Darling: darlingserver `task_info` answers unknown flavors KERN_INVALID_ARGUMENT instead of aborting the server;
+  libsystem_kernel caps arm64 processes at 24 workqueue threads (launchd_sim grew to 66 threads).
+
+### Shims (stage 2 item 3)
+| shim | decision | why |
+|---|---|---|
+| simshim (interposers) | arm64 Mach-O (build/mac-build-arm64-shims.sh) | it interposes guest frameworks' functions |
+| SimFramebuffer (simfb) | arm64 Mach-O, own ring /dev/shm/x86code-a64-simfb.ring, 1206x2622, `SFBDisplayGetDeviceName` added | loaded by backboardd, calls guest CF/IOSurface; the Linux futex wake is `svc #0xfffe` (libarm64jit's Linux-syscall escape) |
+| SimulatorHID (simhid) | arm64 Mach-O | loaded by backboardd, guest IOKit/Foundation |
+| iosurfaced, metalhostd, fpsim2host, netconfig, openurl, fseventsd | not built yet; mksimdevice leaves jobs without an arm64 build out (IOSurface emulated in process, software rendering) | they are simulator processes too: arm64 builds next |
+| libkqueue_sim | not needed | the guest's libsystem_kernel *is* Darling's, behind the thunks |
+
+Host-side Linux daemons (mtlvk, mdnsresponder, simview/simstream) are unchanged.
+
+### 27.0 interface changes (item 4)
+SFBDisplayGetDeviceName is in simfb. Metal (new useInternalResidencySet(s):, genericAddressSpaceDispatchInfo, removed
+set*GlobalConstants*/supportsFP8), NearbyInteraction and UniversalHID are not done: the boot renders in software.
+
+### Gaps
+1. Memory: each thread has its own Jit (code cache + metadata, ~10-30 MB); processes cost 100-450 MB, the boot runs at
+   5-5.5 GB of 6 GB. The lean job set (no chronod widgets, no FileProvider, no CloudKit/accounts daemons) and
+   `X86CODE_A64_CODECACHE_MB=8` keep it inside the budget.
+2. Speed: ~7 min to the home screen; lsd's database build and SpringBoard's first layout dominate.
+3. Intermittent crashes not yet understood: backboardd SIGSEGV calling NULL from a libsystem_kernel thunk (once),
+   SpringBoard SIGSEGV in UserNotificationsServer on a freed object (once, before the TSD fixes), lsd SIGABRT in binary
+   plist parsing (before the VM cursor fix). Each process's log: /private/var/tmp/x86code-a64/<exe>.<pid>.log in the
+   prefix.
+4. No Metal, no iosurfaced/metalhostd/fpsim2host arm64 builds, no time zone link (status bar shows UTC), process names
+   in launchd's logs are "exe".
+5. thread_get_state arm64 flavors, ucontext functions, Mach exception reporting at guest PCs; guest TSD destructors
+   don't run at thread exit.
+
+### Stage 3 should start with
+Shared translations across a process's threads (one code cache + block map per process, per-thread register state):
+it is both the memory problem (per-thread duplicate code/metadata) and a large part of the speed problem (every new
+thread re-translates libdispatch/objc/CF). Then arm64 builds of iosurfaced/metalhostd and the 27.0 Metal selectors.
