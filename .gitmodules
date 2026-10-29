@@ -8,4 +8,5 @@
 	branch = x86code
 [submodule "external/dynarmic"]
 	path = external/dynarmic
-	url = https://github.com/azahar-emu/dynarmic
+	url = git@github.com:designgears/dynarmic.git
+	branch = x86code
