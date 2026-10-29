@@ -380,6 +380,26 @@ static bool gpu_done_upto(uint64_t target) {
 	for (size_t i = 0; i < gpu_noutstanding; i++) if (gpu_outstanding[i] <= target) return false;
 	return true;
 }
+// x86Code: scanout at the display's refresh. CA's SimDisplay does not wait for the swap callback (finished_update is
+// the replaced buffer's seed), so presents came whenever CA rendered: up to ~94 a second while dragging, unevenly
+// spaced. A present whose GPU work is done now waits for the next refresh slot after the previous publish (a display
+// shows a frame at vsync); a newer ready present replaces one still waiting (counted as superseded). Frames that come
+// slower than the refresh are published at once. SIMFB_HZ (default 60) sets the rate, 0 publishes immediately.
+static IOSurfaceRef vs_s;
+static SFBSwapchainRef vs_sc;
+static bool vs_armed;
+static uint64_t vs_last_ns, vs_period_ns;
+static void vsync_fire(void) {   // on dump_q
+	pthread_mutex_lock(&gpu_lock);
+	IOSurfaceRef s = vs_s; SFBSwapchainRef sc = vs_sc;
+	vs_s = NULL; vs_sc = NULL; vs_armed = false;
+	uint64_t now = now_ns();
+	// keep the slot grid while frames keep coming; start a new one after a pause
+	vs_last_ns = (now - vs_last_ns < 2 * vs_period_ns) ? vs_last_ns + vs_period_ns : now;
+	if (vs_last_ns > now) vs_last_ns = now;
+	pthread_mutex_unlock(&gpu_lock);
+	if (s) { dump(sc, s); CFRelease(s); CFRelease(sc); }
+}
 static void present_fire_locked(size_t i) {   // gpu_lock held: copy waiting present i (and drop it from the queue)
 	SFBSwapchainRef sc = present[i].sc;
 	IOSurfaceRef s = present[i].s;
@@ -388,7 +408,20 @@ static void present_fire_locked(size_t i) {   // gpu_lock held: copy waiting pre
 	memmove(&present[i], &present[i + 1], (npresent - i - 1) * sizeof(present[0]));
 	npresent--;
 	stat_frames++;
-	dispatch_async(dump_q, ^{ dump(sc, s); CFRelease(s); CFRelease(sc); });
+	if (!vs_period_ns) {
+		const char* hz = getenv("SIMFB_HZ");
+		double f = hz ? atof(hz) : 60;
+		vs_period_ns = f > 0 ? (uint64_t)(1e9 / f) : 1;
+	}
+	if (vs_period_ns <= 1) { dispatch_async(dump_q, ^{ dump(sc, s); CFRelease(s); CFRelease(sc); }); return; }
+	if (vs_s) { CFRelease(vs_s); CFRelease(vs_sc); st_superseded++; }
+	vs_s = s; vs_sc = sc;
+	if (!vs_armed) {
+		vs_armed = true;
+		uint64_t now = now_ns(), next = vs_last_ns + vs_period_ns;
+		if (next <= now) dispatch_async(dump_q, ^{ vsync_fire(); });
+		else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(next - now)), dump_q, ^{ vsync_fire(); });
+	}
 }
 static void present_fire_ready_locked(void) {   // in order: the oldest first, stop at the first not ready
 	while (npresent && gpu_done_upto(present[0].target)) present_fire_locked(0);
