@@ -7,7 +7,8 @@ answer is the log line "result <id> <json>" in <data>/var/log/x86code-openurl.lo
   launch [--console|--console-pty] [--stdout=P] [--stderr=P] [-w|--wait-for-debugger] [--terminate-running-process]
          [--oslog] [--env K=V]... <bundle id> [args...]
          as `simctl launch`; SIMCTL_CHILD_<NAME>=value in our environment becomes NAME=value in the app's.
-         --console streams the app's stdout/stderr here until Ctrl-C (or --console-secs N) or the app exits.
+         --console streams the app's stdout/stderr here until Ctrl-C (or --console-secs N) or the app exits;
+         --console-pty does it through a pseudo-terminal (the app's stdout/stderr are a tty, as with simctl).
          --oslog: the app's os_log messages go to <data>/var/log/oslog.<executable>.<pid>.log (x86sim log stream)
   terminate <bundle id>
   get_app_container <bundle id> [app|data|groups|<group id>]
@@ -18,7 +19,7 @@ answer is the log line "result <id> <json>" in <data>/var/log/x86code-openurl.lo
   log stream [--app <bundle id>] [--process NAME] [--match TEXT]
   io screenshot [out.png] | io recordVideo [--codec h264|hevc] [--secs N] [--fps N] <out.mp4>
 """
-import json, os, shutil, signal, subprocess, sys, time, uuid
+import json, os, shutil, signal, subprocess, sys, time, tty, uuid
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 import x86config  # noqa: E402
 
@@ -167,8 +168,10 @@ def cmd_launch(a):
     secs = None
     while a and a[0].startswith("-"):
         x = a.pop(0)
-        if x in ("--console", "--console-pty"):
+        if x == "--console":
             console = True
+        elif x == "--console-pty":
+            console = "pty"
         elif x.startswith("--console-secs"):
             secs = float(x.split("=", 1)[1] if "=" in x else a.pop(0))
         elif x.startswith("--stdout="):
@@ -199,7 +202,14 @@ def cmd_launch(a):
     if oslog:
         o["env"].update(oslog_env())
     outs = {}
-    if console:
+    if console == "pty":
+        # x86Code: as simctl --console-pty: the app's stdout and stderr are a pseudo-terminal (isatty, line-buffered
+        # stdio). A Linux pty's slave, opened by path through the container's view of the Linux root.
+        master, slave = os.openpty()
+        tty.setraw(slave)
+        name = os.ttyname(slave)
+        o["stdout"] = o["stderr"] = x86config.get("X86SIM_DVIEW") + name
+    elif console:
         # x86Code: simctl --console hands the app a pty / pipe; FrontBoard here takes file paths (as the Bridge's
         # __StandardOutPath), so the app writes files in the device's tmp and we follow them
         d = os.path.join(DATA, "tmp/x86code-console")
@@ -216,10 +226,37 @@ def cmd_launch(a):
     if o.get("waitForDebugger"):
         print("x86sim: %s waits for a debugger (pid %s); see README: Debugging" % (o["bundle"], r.get("pid")),
               file=sys.stderr)
-    if console:
+    if console == "pty":
+        pid = r.get("pid", -1)
+        relay_pty(master, slave, until=time.monotonic() + secs if secs else None,
+                  stop=(lambda: not app_running(pid)) if pid and pid > 0 else None)
+    elif console:
         pid = r.get("pid", -1)
         follow(outs, until=time.monotonic() + secs if secs else None,
                stop=(lambda: not app_running(pid)) if pid and pid > 0 else None)
+
+
+def relay_pty(master, slave, until=None, stop=None):
+    """Copy what the app writes to the pty to our stdout until Ctrl-C, `until`, or stop() (the app exited)."""
+    import select
+    os.close(slave)  # the app holds its own
+    last = 0.0
+    try:
+        while until is None or time.monotonic() < until:
+            r, _, _ = select.select([master], [], [], 0.5)
+            if r:
+                try:
+                    b = os.read(master, 65536)
+                except OSError:  # EIO: no process has the slave open any more
+                    break
+                sys.stdout.buffer.write(b)
+                sys.stdout.flush()
+            elif stop and time.monotonic() - last > 2:
+                last = time.monotonic()
+                if stop():
+                    break
+    except KeyboardInterrupt:
+        pass
 
 
 def cmd_terminate(a):

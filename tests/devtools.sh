@@ -27,11 +27,13 @@ step "launch: arguments" "$(ok grep -q 'devtools: args -one two' "$O/console.out
 step "launch: SIMCTL_CHILD_ environment" "$(ok grep -q 'X86_HELLO=world' "$O/console.out")"
 step "launch --console: stdout" "$(ok grep -q 'devtools: tick 3' "$O/console.out")"
 step "launch --console: stderr" "$(ok grep -q 'devtools: stderr tick 3' "$O/console.err")"
+timeout 40 "$S" launch --console-pty --console-secs 6 --terminate-running-process $ID > "$O/console-pty.out" 2>&1
+step "launch --console-pty: a tty, output here" "$(grep -q 'devtools: stdout tty true' "$O/console-pty.out" && grep -q 'devtools: stderr tick 2' "$O/console-pty.out" && echo PASS || echo FAIL)"
 pid=$("$S" pidof $ID 2>/dev/null)
 step "pidof" "$([ -n "$pid" ] && echo PASS || echo FAIL)"
 
 # push: the app shows it in the foreground (willPresent) -> console line
-timeout 40 "$S" launch --console --console-secs 12 $ID > "$O/push.out" 2>&1 &
+timeout 40 "$S" launch --console --console-secs 12 --terminate-running-process $ID > "$O/push.out" 2>&1 &
 sleep 4
 printf '{"Simulator Target Bundle":"%s","aps":{"alert":{"title":"x86sim test","body":"push %s"}}}\n' $ID $$ > "$O/push.json"
 "$S" push "$O/push.json" > "$O/push.txt" 2>&1
@@ -41,7 +43,7 @@ step "push (delivered to the app)" "$(ok grep -q "notification x86sim test / pus
 
 # location: set (one point, repeated every second), start (route between two waypoints ~550 m apart at 100 m/s,
 # an update per second: positions strictly between them), list (the runtime's scenarios), clear
-timeout 60 "$S" launch --console --console-secs 30 $ID > "$O/location.out" 2>&1 &
+timeout 60 "$S" launch --console --console-secs 30 --terminate-running-process $ID > "$O/location.out" 2>&1 &
 sleep 4
 "$S" location set 37.3349,-122.0090 > "$O/location.txt" 2>&1
 sleep 5
@@ -83,9 +85,12 @@ step "addmedia (Photos library $before -> $after)" "$([ "$after" -gt "$before" ]
 # debug: LLDB through debugserver in the container, breakpoint in the app, symbolic backtrace
 if command -v lldb > /dev/null && [ -x "$X/host/debugserver/debugserver" ]; then
 	timeout 240 "$S" debug --launch --port 12399 $ID -- -b -o 'breakpoint set -n "$s8DevTools14ViewControllerC11viewDidLoadyyF"' \
-		-o continue -o 'bt 4' -o kill > "$O/debug.txt" 2>&1
+		-o continue -o 'bt 4' -o 'expr -l objc -O -- (id)[UIApplication sharedApplication]' \
+		-o 'expr -l objc -- int $s = 0; for (int i = 0; i < 10; i++) $s += i; $s' -o kill > "$O/debug.txt" 2>&1
 	step "debug: breakpoint hit" "$(ok grep -q 'stop reason = breakpoint 1' "$O/debug.txt")"
 	step "debug: backtrace into UIKitCore" "$(ok grep -q 'UIKitCore`-\[UIViewController' "$O/debug.txt")"
+	step "debug: po (ObjC call in the app)" "$(ok grep -q '^<UIApplication: 0x' "$O/debug.txt")"
+	step "debug: expression with a loop (JIT)" "$(ok grep -q '(int) $[0-9]* = 45' "$O/debug.txt")"
 else
 	echo "debug                                        skipped (no lldb or host/debugserver/debugserver)"
 fi

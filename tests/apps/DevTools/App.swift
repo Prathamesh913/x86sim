@@ -21,6 +21,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
         say("args \(CommandLine.arguments.dropFirst().joined(separator: " "))")
         say("env X86_HELLO=\(ProcessInfo.processInfo.environment["X86_HELLO"] ?? "(unset)")")
         say("pid \(getpid())")
+        say("stdout tty \(isatty(1) != 0)")
         let c = UNUserNotificationCenter.current()
         c.delegate = self
         c.requestAuthorization(options: [.alert, .sound, .badge]) { ok, err in say("notifications authorized \(ok) \(err.map { "\($0)" } ?? "")") }

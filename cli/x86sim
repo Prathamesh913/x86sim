@@ -44,9 +44,10 @@ Display and input
 Apps (as xcrun simctl install/uninstall/launch)
   install PATH.app     install an iOS-simulator app (x86_64) through installd; it gets a container and an icon
   uninstall BUNDLEID   remove an installed app
-  launch [--console] [-w|--wait-for-debugger] [--terminate-running-process] [--oslog] [--env K=V] BUNDLEID [args...]
+  launch [--console|--console-pty] [-w|--wait-for-debugger] [--terminate-running-process] [--oslog] [--env K=V] BUNDLEID [args...]
                        open an app through FrontBoard with arguments and environment (SIMCTL_CHILD_NAME=value in
-                       our environment -> NAME=value); --console streams its stdout/stderr here (simctl.py)
+                       our environment -> NAME=value); --console streams its stdout/stderr here (files), --console-pty
+                       through a pty (the app sees a terminal) (simctl.py)
   terminate BUNDLEID   stop a running app (FBSSystemService, as simctl terminate)
   get_app_container BUNDLEID [app|data|groups|GROUPID]
                        Linux path of the app's bundle / data container / app-group containers
