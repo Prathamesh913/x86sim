@@ -9,11 +9,19 @@
 // - large blocks: their own 16K-aligned mapping, sizes in a locked map.
 // A chunk table (one byte per MB of the guest range) gives malloc_size in O(1). Pointers the heap does not own fall
 // back to Darling's malloc (blocks that native code allocated and the guest frees).
+// Speed 8: a scavenger thread (every 5 s) sorts each class's global free list and gives back (MADV_DONTNEED) the whole
+// pages that free blocks cover; those blocks move to a side list kept in host memory (their headers would re-touch
+// the pages), and refill hands them out after the free list. X86CODE_A64_GHEAP_SCAVENGE=0 turns it off.
 #include "a64.h"
 #include <cerrno>
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <unistd.h>
+#include <algorithm>
+#include <string>
 #include <unordered_map>
+#include <vector>
 #include <sys/mman.h>
 
 namespace a64 {
@@ -37,10 +45,15 @@ struct Global {
     std::mutex mu;
     FreeBlock *free = nullptr;
     u64 carve = 0, carve_end = 0;  // current chunk
+    u64 chunks = 0, nfree = 0;     // stats (memlog): chunks carved, blocks on the global list
+    std::vector<u64> released;     // free blocks whose pages were given back (no header written)
+    u64 scavenged_at = 0;          // nfree after the last scavenge (skip a class until it grows)
 } g_global[kClasses];
+std::atomic<u64> g_released_bytes{0};
 
 std::mutex g_large_mu;
 std::unordered_map<u64, u64> g_large;  // address -> mapped size
+u64 g_large_bytes;
 
 struct Native {
     void (*free)(void *);
@@ -50,9 +63,20 @@ struct Native {
 struct Cache {
     FreeBlock *head[kClasses] = {};
     uint32_t count[kClasses] = {};
+    Cache *next = nullptr, **prev = nullptr;  // all thread caches (stats)
+    Cache();
     ~Cache();
 };
+std::mutex g_caches_mu;
+Cache *g_caches;
+Cache::Cache() {
+    std::lock_guard l(g_caches_mu);
+    next = g_caches; prev = &g_caches;
+    if (g_caches) g_caches->prev = &next;
+    g_caches = this;
+}
 thread_local Cache t_cache;
+void start_scavenger();
 
 uint32_t limit_for(int c) {  // cached blocks per class: about 64 KB, at least 8, at most 512
     uint32_t n = 65536 / g_class_size[c];
@@ -76,7 +100,12 @@ FreeBlock *refill(int c, uint32_t want, uint32_t *got) {
     Global &g = g_global[c];
     std::lock_guard l(g.mu);
     FreeBlock *head = nullptr; uint32_t n = 0;
-    while (n < want && g.free) { FreeBlock *b = g.free; g.free = b->next; b->next = head; head = b; n++; }
+    while (n < want && g.free) { FreeBlock *b = g.free; g.free = b->next; b->next = head; head = b; n++; g.nfree--; }
+    while (n < want && !g.released.empty()) {
+        auto *b = (FreeBlock *)g.released.back(); g.released.pop_back();
+        g_released_bytes -= g_class_size[c];
+        b->next = head; head = b; n++;
+    }
     u64 sz = g_class_size[c];
     while (n < want) {
         if (g.carve + sz > g.carve_end) {
@@ -86,7 +115,8 @@ FreeBlock *refill(int c, uint32_t want, uint32_t *got) {
                 break;
             }
             g_chunk_class[(a - kLo) / kChunk] = (uint8_t)(c + 1);
-            g.carve = a; g.carve_end = a + kChunk;
+            g.carve = a; g.carve_end = a + kChunk; g.chunks++;
+            start_scavenger();
         }
         auto *b = (FreeBlock *)g.carve; g.carve += sz;
         b->next = head; head = b; n++;
@@ -102,9 +132,51 @@ void flush(int c, uint32_t keep) {
     FreeBlock *tail = list; while (tail->next) tail = tail->next;
     Global &g = g_global[c];
     std::lock_guard l(g.mu);
-    tail->next = g.free; g.free = list;
+    tail->next = g.free; g.free = list; g.nfree += n;
 }
-Cache::~Cache() { for (int c = 0; c < kClasses; c++) flush(c, 0); }
+Cache::~Cache() {
+    for (int c = 0; c < kClasses; c++) flush(c, 0);
+    std::lock_guard l(g_caches_mu);
+    *prev = next;
+    if (next) next->prev = prev;
+}
+
+// Gives back the pages of class c's global free list that lie wholly inside runs of adjacent free blocks.
+void scavenge(int c) {
+    Global &g = g_global[c];
+    const u64 sz = g_class_size[c];
+    std::lock_guard l(g.mu);
+    if (g.nfree * sz < (256u << 10) || g.nfree < g.scavenged_at + g.scavenged_at / 4) return;
+    std::vector<u64> v; v.reserve(g.nfree);
+    for (FreeBlock *b = g.free; b; b = b->next) v.push_back((u64)b);
+    std::sort(v.begin(), v.end());
+    FreeBlock *keep = nullptr; u64 nkeep = 0;
+    auto put = [&](u64 a) { auto *b = (FreeBlock *)a; b->next = keep; keep = b; nkeep++; };
+    for (size_t i = 0; i < v.size();) {
+        size_t j = i + 1;
+        while (j < v.size() && v[j] == v[j - 1] + sz) j++;
+        const u64 s = v[i], e = v[j - 1] + sz, ps = (s + 0xfff) & ~0xfffull, pe = e & ~0xfffull;
+        if (pe > ps) {
+            madvise((void *)ps, pe - ps, MADV_DONTNEED);
+            for (size_t k = i; k < j; k++) {
+                if (v[k] + sz > ps && v[k] < pe) { g.released.push_back(v[k]); g_released_bytes += sz; }
+                else put(v[k]);  // its header page stays: rewrite the list link below
+            }
+        } else {
+            for (size_t k = i; k < j; k++) put(v[k]);
+        }
+        i = j;
+    }
+    // put() relinked in reverse address order: magic words are untouched, the links are rewritten
+    g.free = keep; g.nfree = nkeep; g.scavenged_at = nkeep;
+}
+void start_scavenger() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        if (const char *e = getenv("X86CODE_A64_GHEAP_SCAVENGE"); e && *e == '0') return;
+        std::thread([] { for (;;) { sleep(5); for (int c = 0; c < kClasses; c++) scavenge(c); } }).detach();
+    });
+}
 
 inline int class_of_ptr(u64 p) {
     if (p < kLo || p >= kHi) return -1;
@@ -132,7 +204,7 @@ void *large_alloc(size_t size, size_t align) {
         return nullptr;
     }
     std::lock_guard l(g_large_mu);
-    g_large[a] = len;
+    g_large[a] = len; g_large_bytes += len;
     return (void *)a;
 }
 
@@ -200,7 +272,7 @@ void gh_free(void *p) {
         {
             std::lock_guard l(g_large_mu);
             auto it = g_large.find((u64)p);
-            if (it != g_large.end()) { len = it->second; g_large.erase(it); }
+            if (it != g_large.end()) { len = it->second; g_large.erase(it); g_large_bytes -= len; }
         }
         if (len) munmap(p, len);
         else logf("gheap: free(%p): not a heap block (ignored)", p);
@@ -219,6 +291,32 @@ void *gh_realloc(void *p, size_t size) {
     memcpy(q, p, old < size ? old : size);
     gh_free(p);
     return q;
+}
+// memlog line: small chunks carved / blocks on the global free lists (thread caches not counted) / large blocks, MB
+void gheap_stats() {
+    u64 chunks = 0, freeb = 0; std::string top;
+    std::vector<std::pair<u64, int>> v;
+    for (int c = 0; c < kClasses; c++) {
+        std::lock_guard l(g_global[c].mu);
+        chunks += g_global[c].chunks; freeb += g_global[c].nfree * g_class_size[c];
+        if (g_global[c].chunks) v.push_back({g_global[c].chunks, c});
+    }
+    std::sort(v.rbegin(), v.rend());
+    for (size_t k = 0; k < v.size() && k < 8; k++) {
+        const Global &g = g_global[v[k].second];
+        char b[64]; snprintf(b, sizeof b, " %u:%lu/%.1f", g_class_size[v[k].second], (unsigned long)g.chunks, g.nfree * g_class_size[v[k].second] / 1048576.0);
+        top += b;
+    }
+    u64 lb, ln, cached = 0; int nc = 0;
+    { std::lock_guard l(g_large_mu); lb = g_large_bytes; ln = g_large.size(); }
+    {
+        std::lock_guard l(g_caches_mu);
+        for (Cache *k = g_caches; k; k = k->next, nc++)
+            for (int c = 0; c < kClasses; c++) cached += (u64)k->count[c] * g_class_size[c];
+    }
+    logf("memlog: gheap small %lu MB carved, %.1f MB on free lists (%.1f MB released), %.1f MB in %d thread caches; "
+         "large %.1f MB in %lu; classes size:MB/freeMB%s", (unsigned long)chunks, freeb / 1048576.0,
+         g_released_bytes.load() / 1048576.0, cached / 1048576.0, nc, lb / 1048576.0, (unsigned long)ln, top.c_str());
 }
 size_t gh_good_size(size_t size) {
     if (size <= kMaxSmall) return g_class_size[g_class_of[(size + 15) >> 4]];

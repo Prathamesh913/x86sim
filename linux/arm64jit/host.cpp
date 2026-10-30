@@ -467,6 +467,7 @@ static void hook_native_abort() {
 }
 // Forward decl: jit.cpp logs SharedStats (block count / code bytes) when a GuestThread exists.
 void memlog_shared_stats();
+void gheap_stats();
 
 // One-shot glibc + anon RSS line (also used by the periodic MEMLOG thread and SIGUSR1).
 static void memlog_once() {
@@ -487,6 +488,7 @@ static void memlog_once() {
     logf("memlog: anon %ld MB, glibc arena %zu MB (in use %zu MB, mmapped %zu MB in %zu blocks, free %zu MB)", anon / 1024,
          mi.arena >> 20, mi.uordblks >> 20, mi.hblkhd >> 20, mi.hblks, mi.fordblks >> 20);
     memlog_shared_stats();
+    gheap_stats();
 }
 static void on_usr1(int, siginfo_t *, void *) { memlog_once(); }
 // X86CODE_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS.
