@@ -532,7 +532,9 @@ void logf(const char *fmt, ...) {
     if (write(2, "arm64host: ", 11) < 0 || write(2, buf, n) < 0) {}
     // X86CODE_A64_LOG=<Darwin dir>: also append to <dir>/<exe>.<pid>.log (simulator jobs' stderr is often gone)
     // (opened for every line: daemons close all fds at start, a kept fd would end up in another file)
-    static std::string path;
+    // a char array, not std::string: lines logged during exit (after static destructors) went to a file named by
+    // the freed string's bytes in the cwd
+    static char path[512];
     static bool init;
     if (!init) {
         init = true;
@@ -540,17 +542,15 @@ void logf(const char *fmt, ...) {
             static auto *dmkdir = (int (*)(const char *, int))dsym("mkdir");
             const char *exe = getenv("X86CODE_A64_EXE");
             const char *b = exe ? strrchr(exe, '/') : nullptr;
-            char p[512];
             if (dmkdir) dmkdir(dir, 0777);
-            snprintf(p, sizeof p, "%s/%s.%d.log", dir, b ? b + 1 : "guest", (int)getpid());
-            path = p;
+            snprintf(path, sizeof path, "%s/%s.%d.log", dir, b ? b + 1 : "guest", (int)getpid());
         }
     }
-    if (!path.empty() && !g_non_darling_thread) {  // Darling's open/write abort on a thread Darling does not know
+    if (path[0] && !g_non_darling_thread) {  // Darling's open/write abort on a thread Darling does not know
         static auto *dopen = (int (*)(const char *, int, ...))dsym("open");
         static auto *dwrite = (long (*)(int, const void *, size_t))dsym("write");
         static auto *dclose = (int (*)(int))dsym("close");
-        int fd = dopen ? dopen(path.c_str(), 0x1000209 /* O_WRONLY|O_APPEND|O_CREAT|O_CLOEXEC */, 0644) : -1;
+        int fd = dopen ? dopen(path, 0x1000209 /* O_WRONLY|O_APPEND|O_CREAT|O_CLOEXEC */, 0644) : -1;
         if (fd >= 0) { dwrite(fd, buf, n); dclose(fd); }
     }
 }
