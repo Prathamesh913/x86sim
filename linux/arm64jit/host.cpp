@@ -681,6 +681,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
 
 
     GuestThread &t = GuestThread::self();
+    gsample_start(&t);
     install_fault_report();
     double t_setup = ms_since(g_t0);
     svc_bench(t);

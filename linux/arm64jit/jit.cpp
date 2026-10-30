@@ -70,10 +70,24 @@ static void destroy_guest_thread(void *p) {
         t_self = nullptr; t_owner.t = nullptr; delete t;
     }
 }
-// X86CODE_A64_GSAMPLE=<exe name> (debug): a host thread samples the process's first guest thread every 5 ms (last
+// X86CODE_A64_GSAMPLE=<exe name> (debug): a host thread samples the process's main guest thread (from dyld_sim start) every 5 ms (last
 // block PC, LR and 6 frame-pointer frames, read with process_vm_readv) and logs the 15 most frequent stacks every 10 s.
 // For "busy but nothing visible" loops that perf cannot attribute (JIT frames have no host unwind info).
-static void gsample_start(GuestThread *t) {
+// X86CODE_A64_GSAMPLE_ALL=1: every guest thread of the process is sampled, and only samples running guest code (not
+// in a thunk) count: the busy worker thread instead of an idle main thread.
+static std::mutex g_gs_mu;
+static std::vector<GuestThread *> g_gs_threads;
+static bool g_gs_all;
+static void gsample_register(GuestThread *t) {
+    if (!g_gs_all) return;
+    std::lock_guard l(g_gs_mu); g_gs_threads.push_back(t);
+}
+void gsample_forget(GuestThread *t) {
+    if (!g_gs_all) return;
+    std::lock_guard l(g_gs_mu);
+    g_gs_threads.erase(std::remove(g_gs_threads.begin(), g_gs_threads.end(), t), g_gs_threads.end());
+}
+void gsample_start(GuestThread *t) {
     const char *want = getenv("X86CODE_A64_GSAMPLE"), *exe = getenv("X86CODE_A64_EXE");
     if (!want || !exe) return;
     const char *b = strrchr(exe, '/');
@@ -81,7 +95,9 @@ static void gsample_start(GuestThread *t) {
     sigset_t all, old;
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &old);
-    std::thread([t] {
+    g_gs_all = getenv("X86CODE_A64_GSAMPLE_ALL") && atoi(getenv("X86CODE_A64_GSAMPLE_ALL")) == 1;
+    if (g_gs_all) gsample_register(t);
+    std::thread([t]() mutable {
         g_non_darling_thread = true;
         auto rd = [](u64 a) -> u64 {
             u64 v = 0;
@@ -95,10 +111,36 @@ static void gsample_start(GuestThread *t) {
         const char *sk = getenv("X86CODE_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
         const u64 skip = sk ? strtoull(sk, nullptr, 16) : 0;
         const int depth = getenv("X86CODE_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86CODE_A64_GSAMPLE_DEPTH")) : 6;
+        // logf skips the per-process log on this (non-Darling) thread: X86CODE_A64_GSAMPLE_OUT=<Linux path> writes
+        // <path>.<pid> with glibc instead (a job's stderr is often gone)
+        FILE *out = nullptr;
+        if (const char *o = getenv("X86CODE_A64_GSAMPLE_OUT"))
+            out = fopen((std::string(o) + "." + std::to_string(getpid())).c_str(), "a");
+        timespec ts0; clock_gettime(CLOCK_MONOTONIC, &ts0);
+        auto emit = [out, ts0](const char *line) {
+            if (!out) { logf("%s", line); return; }
+            timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            fprintf(out, "%.2f %s\n", (ts.tv_sec - ts0.tv_sec) + (ts.tv_nsec - ts0.tv_nsec) / 1e9, line);
+            fflush(out);
+        };
         for (;;) {
             usleep(5000);
+            std::unique_lock<std::mutex> lk(g_gs_mu, std::defer_lock);
+            if (g_gs_all) {  // one sample: a thread in guest code, round robin from a random start
+                lk.lock();
+                GuestThread *pick = nullptr;
+                const size_t m = g_gs_threads.size();
+                for (size_t k = 0, r = m ? (size_t)random() % m : 0; k < m && !pick; k++) {
+                    GuestThread *c = g_gs_threads[(r + k) % m];
+                    if (c->jit && c->in_thunk < 0) pick = c;
+                }
+                if (!pick) continue;
+                t = pick;
+            }
             if (!t->jit) continue;
-            std::vector<u64> st{t->jit->GetPC(), t->x(30)};
+            // a native call in progress is recorded as its thunk index (high marker) in front of the guest pc
+            const int32_t th = t->in_thunk;
+            std::vector<u64> st{th >= 0 ? 0xF000000000000000ull | (u32)th : 0, t->jit->GetPC(), t->x(30)};
             if (skip && st[0] == skip) continue;
             u64 fp = t->x(29);
             for (int k = 0; k < depth && fp > 0x10000 && !(fp & 7); k++) {
@@ -114,19 +156,24 @@ static void gsample_start(GuestThread *t) {
             std::vector<std::pair<u32, const std::vector<u64> *>> top;
             for (auto &[k, v] : counts) top.push_back({v, &k});
             std::sort(top.begin(), top.end(), [](auto &a, auto &b) { return a.first > b.first; });
-            logf("gsample: %u samples", n);
+            { char l[64]; snprintf(l, sizeof l, "gsample: %u samples", n); emit(l); }
             for (size_t i = 0; i < top.size() && i < 15; i++) {
                 char line[1024];
                 int o = snprintf(line, sizeof line, "gsample %4u:", top[i].first);
-                for (u64 a : *top[i].second) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " %#lx", (unsigned long)a);
-                logf("%s", line);
+                for (u64 a : *top[i].second) {
+                    if (a >> 60 == 0xF) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " [%s]", g_thunks[a & 0xffffffff].name.c_str());
+                    else if (a) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " %#lx", (unsigned long)a);
+                }
+                emit(line);
             }
             counts.clear();
             // inclusive: every frame address with the samples it appears in (attribute to images offline)
             std::vector<std::pair<u32, u64>> inc;
             for (auto &[a, v] : incl) inc.push_back({v, a});
             std::sort(inc.rbegin(), inc.rend());
-            for (size_t i = 0; i < inc.size() && i < 80; i++) logf("gsample incl %u %#lx", inc[i].first, (unsigned long)inc[i].second);
+            for (size_t i = 0; i < inc.size() && i < 80; i++) {
+                char l[64]; snprintf(l, sizeof l, "gsample incl %u %#lx", inc[i].first, (unsigned long)inc[i].second); emit(l);
+            }
             incl.clear();
         }
     }).detach();
@@ -136,8 +183,7 @@ static void gsample_start(GuestThread *t) {
 GuestThread &GuestThread::self() {
     if (!t_self) {
         t_owner.t = new GuestThread(); t_self = t_owner.t;
-        static std::once_flag sample_once;
-        std::call_once(sample_once, [] { gsample_start(t_self); });
+        gsample_register(t_self);
         static unsigned long key = [] {
             unsigned long k = 0;
             auto *create = (int (*)(unsigned long *, void (*)(void *)))dsym("pthread_key_create");
@@ -171,6 +217,7 @@ std::optional<uint32_t> swift_timebase_read_code(u64 a) {
     static const bool ok = [] {
         const char *e = getenv("X86CODE_A64_SWIFT_TIMEBASE");
         if (e && atoi(e) == 0) return false;
+        if (timebase_apple()) return false;  // the guest's timebase is 125/3: the inlined conversion is right
         // cmp x8, x9 ; b.lo (x*3 first) ; ... and the join branch both conversions take (b -> 0x1c156d3bc)
         const bool match = GuestThread::rd<uint32_t>(kSwiftDeadlineConv) == 0xeb09011fu &&
                            GuestThread::rd<uint32_t>(kSwiftDeadlineConv + 4) == 0x54000663u &&
@@ -319,7 +366,7 @@ GuestThread::GuestThread() {
     c.fastmem_exclusive_access = true;
     c.enable_cycle_counting = false;
     c.wall_clock_cntpct = true;
-    c.cntfrq_el0 = 1000000000;           // the counter counts ns, like Darling's mach_absolute_time (timebase 1/1)
+    c.cntfrq_el0 = timebase_apple() ? 24000000 : 1000000000;  // ns like Darling's mach time (1/1), or 24 MHz (125/3)
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
     // Hybrid svc;ret (frontend): a thunk block ends in FastDispatchHint instead of PopRSBHint. With RSB off
@@ -347,7 +394,7 @@ void GuestThread::reset_after_unwind() {
     (void)jit.release();
     jit = make_jit(cfg);
 }
-GuestThread::~GuestThread() { g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
+GuestThread::~GuestThread() { gsample_forget(this); g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
 
 NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int nfps) {
     struct Saved {
@@ -612,7 +659,8 @@ void GuestThread::ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) {
 
 u64 GuestThread::GetCNTPCT() {
     timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000000000ull + ts.tv_nsec;
+    const u64 ns = ts.tv_sec * 1000000000ull + ts.tv_nsec;
+    return timebase_apple() ? tb_ns_to_ticks(ns) : ns;
 }
 
 bool g_trace;

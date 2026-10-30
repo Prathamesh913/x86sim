@@ -404,6 +404,89 @@ static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends h
     ((void (*)(int))g_thunks[i].native)((int)t.x(0));
 }
 
+// ---- guest timebase (Speed 10) ---------------------------------------------------------------------------------------
+// X86CODE_A64_TIMEBASE=apple: the guest sees Apple silicon's timebase (125/3, a 24 MHz counter) instead of Darling's
+// 1/1 (mach time in ns). Code compiled for arm64 inlines 125/3 in places (libswift_Concurrency's deadline conversion,
+// libdispatch's dispatch_time_to_nsecs/_from_nsec), so with 1/1 those deadlines were ~41x off. Values cross at the
+// thunks: returned mach times are scaled down (ns * 3 / 125), mach-time arguments up (ticks * 125 / 3) before Darling
+// sees them (mach_wait_until, mk_timer_arm*, EVFILT_TIMER with NOTE_MACHTIME). CNTVCT_EL0 counts at 24 MHz (jit.cpp).
+bool timebase_apple() {
+    static const bool on = [] { const char *e = getenv("X86CODE_A64_TIMEBASE"); return e && strcmp(e, "apple") == 0; }();
+    return on;
+}
+u64 tb_ns_to_ticks(u64 ns) { return (u64)((unsigned __int128)ns * 3 / 125); }
+static u64 tb_ticks_to_ns(u64 t) {
+    const unsigned __int128 ns = (unsigned __int128)t * 125 / 3;
+    return ns > ~0ull ? ~0ull : (u64)ns;
+}
+static void h_tb_ret(GuestThread &t, u32 i) { h_generic(t, i); t.set_x(0, tb_ns_to_ticks(t.x(0))); }
+static void h_tb_info(GuestThread &t, u32) {  // mach_timebase_info(_trap)(mach_timebase_info_t)
+    if (auto *p = (uint32_t *)t.x(0)) { p[0] = 125; p[1] = 3; }
+    t.set_x(0, 0);
+}
+static void h_tb_get_times(GuestThread &t, u32 i) {  // mach_get_times(u64 *abs, u64 *cont, timespec *)
+    u64 *a = (u64 *)t.x(0), *c = (u64 *)t.x(1);
+    h_generic(t, i);
+    if (a) *a = tb_ns_to_ticks(*a);
+    if (c) *c = tb_ns_to_ticks(*c);
+}
+template <int Arg> static void h_tb_out(GuestThread &t, u32 i) {  // a u64* result (mk_timer_cancel's result_time)
+    u64 *p = (u64 *)t.x(Arg);
+    h_generic(t, i);
+    if (p && t.x(0) == 0) *p = tb_ns_to_ticks(*p);
+}
+template <int... Args> static void h_tb_in(GuestThread &t, u32 i) {  // mach-time arguments
+    ((t.set_x(Args, tb_ticks_to_ns(t.x(Args)))), ...);
+    h_generic(t, i);
+}
+// EVFILT_TIMER with NOTE_MACHTIME: data (and the NOTE_LEEWAY leeway in ext[1]) are mach ticks. The changelist is
+// copied (callers may reuse theirs). Layouts are the same on both architectures.
+template <size_t Size, size_t FflagsOff, size_t DataOff, int ExtLeewayOff>
+static void h_tb_kevent(GuestThread &t, u32 i) {
+    constexpr int16_t kTimer = -7;
+    constexpr uint32_t kMachTime = 0x100, kLeeway = 0x10;
+    const int n = (int)t.x(2);
+    const uint8_t *cl = (const uint8_t *)t.x(1);
+    bool any = false;
+    for (int k = 0; cl && k < n && !any; k++) {
+        int16_t f; uint32_t ff;
+        memcpy(&f, cl + k * Size + 8, 2); memcpy(&ff, cl + k * Size + FflagsOff, 4);
+        any = f == kTimer && (ff & kMachTime);
+    }
+    if (!any) return h_generic(t, i);
+    std::vector<uint8_t> copy(cl, cl + (size_t)n * Size);
+    for (int k = 0; k < n; k++) {
+        uint8_t *e = copy.data() + k * Size;
+        int16_t f; uint32_t ff;
+        memcpy(&f, e + 8, 2); memcpy(&ff, e + FflagsOff, 4);
+        if (f != kTimer || !(ff & kMachTime)) continue;
+        int64_t d; memcpy(&d, e + DataOff, 8);
+        if (d > 0) { d = (int64_t)std::min<u64>(tb_ticks_to_ns((u64)d), (u64)INT64_MAX); memcpy(e + DataOff, &d, 8); }
+        if (ExtLeewayOff >= 0 && (ff & kLeeway)) {
+            u64 l; memcpy(&l, e + ExtLeewayOff, 8); l = tb_ticks_to_ns(l); memcpy(e + ExtLeewayOff, &l, 8);
+        }
+    }
+    t.set_x(1, (u64)copy.data());
+    h_generic(t, i);
+}
+static Handler timebase_handler(const std::string &n) {
+    if (!timebase_apple()) return nullptr;
+    // struct kevent (32 B): fflags +12, data +16. kevent64_s (48 B): fflags +12, data +16, ext[1] +40.
+    // kevent_qos_s (64 B): qos +12, udata +16, fflags +24, xflags +28, data +32, ext[1] +48.
+    static const std::map<std::string, Handler> m = {
+        {"_mach_absolute_time", h_tb_ret}, {"_mach_absolute_time_kernel", h_tb_ret}, {"_mach_continuous_time", h_tb_ret},
+        {"_mach_continuous_time_kernel", h_tb_ret}, {"_mach_approximate_time", h_tb_ret},
+        {"_mach_continuous_approximate_time", h_tb_ret}, {"_kdebug_timestamp", h_tb_ret},
+        {"_mach_timebase_info", h_tb_info}, {"_mach_timebase_info_trap", h_tb_info}, {"_mach_get_times", h_tb_get_times},
+        {"_mk_timer_cancel", h_tb_out<1>}, {"_mach_wait_until", h_tb_in<0>}, {"_mk_timer_arm", h_tb_in<1>},
+        {"_mk_timer_arm_leeway", h_tb_in<2, 3>},
+        {"_kevent", h_tb_kevent<32, 12, 16, -1>}, {"_kevent64", h_tb_kevent<48, 12, 16, 40>},
+        {"_kevent_qos", h_tb_kevent<64, 24, 32, 48>}, {"_kevent_id", h_tb_kevent<64, 24, 32, 48>},
+    };
+    auto it = m.find(n);
+    return it == m.end() ? nullptr : it->second;
+}
+
 // Special handlers that don't use g_thunks[i].native (everything else does)
 bool special_needs_native(const std::string &n) {
     static const char *own[] = {"___libkernel_init", "_pthread_create_with_workgroup_np", "__simple_dprintf", "__simple_vdprintf",
@@ -420,6 +503,11 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_guarded_open_dprotected_np", 6}, {"_panic", 1},
     };
     if (auto it = variadic.find(n); it != variadic.end()) { *nfixed = it->second; return h_variadic; }
+    if (Handler h = timebase_handler(n)) {
+        if (n == "_mach_absolute_time_kernel") *native_name = "mach_absolute_time";
+        if (n == "_mach_continuous_time_kernel") *native_name = "mach_continuous_time";
+        return h;
+    }
     // Darling (x86_64) keeps the 32-bit-inode structs under the plain names; arm64 only has the 64-bit ones.
     static const std::map<std::string, const char *> renamed = {
         {"_stat", "stat$INODE64"}, {"_fstat", "fstat$INODE64"}, {"_lstat", "lstat$INODE64"}, {"_fstatat", "fstatat$INODE64"},
@@ -479,10 +567,15 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
 bool is_guest_code_export(const std::string &n) {
     if (is_guest_libc_export(n)) return true;
     if (n == "_pthread_getspecific" || n == "_pthread_setspecific" || n == "__pthread_setspecific_static") return true;
+    if (n == "_mach_absolute_time" && timebase_apple()) return true;
     return n == "_setjmp" || n == "__setjmp" || n == "_sigsetjmp" || n == "_longjmp" || n == "__longjmp" || n == "_siglongjmp";
 }
 size_t emit_guest_code(const std::string &n, uint32_t *o, u32 slow) {
     if (is_guest_libc_export(n)) return emit_guest_libc(n, o, slow);
+    if (n == "_mach_absolute_time") {  // 125/3 timebase: the counter is mach time (no svc round trip)
+        o[0] = 0xD53BE020; o[1] = 0xD65F03C0;  // mrs x0, cntpct_el0; ret
+        return 2;
+    }
     if (n == "_pthread_getspecific") {
         static const uint32_t c[] = {0xD53BD068, 0xF8607900, 0xD65F03C0};  // mrs x8, tpidrro_el0; ldr x0, [x8, x0, lsl #3]; ret
         memcpy(o, c, sizeof c);

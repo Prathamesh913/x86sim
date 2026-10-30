@@ -139,6 +139,10 @@ size_t emit_guest_libc(const std::string &n, uint32_t *o, u32 slow);  // dyldsim
 uint32_t thunk_count();                // acquire-load of published thunk count (see add_thunk)
 
 // Generic handlers: integer/pointer/fp arguments straight through (x0-x7 -> rdi..r9 + stack, d0-d7 -> xmm0-7).
+bool timebase_apple();       // X86CODE_A64_TIMEBASE=apple: guest mach time at 24 MHz (handlers.cpp)
+u64 tb_ns_to_ticks(u64 ns);
+void gsample_start(GuestThread *t);
+void gsample_forget(GuestThread *t);  // X86CODE_A64_GSAMPLE (jit.cpp)
 void h_generic(GuestThread &t, u32 i);
 void h_generic_bool(GuestThread &t, u32 i);  // bool result: zero-extend al
 void h_variadic(GuestThread &t, u32 i);      // fixed args in registers, the rest from guest stack slots

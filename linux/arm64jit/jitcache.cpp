@@ -48,7 +48,7 @@ constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
 // Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
 constexpr u64 kBuildId = 0x00000013ull;  // Speed 6: compact metadata, mapped AOT image
-// kBuildId (bits 0-15), code-shaping env flags (16-17), libarm64jit build-id hash (32-63). The load base is no longer
+// kBuildId (bits 0-15), code-shaping env flags (16-18), libarm64jit build-id hash (32-63). The load base is no longer
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kBuildId;
 std::string g_key, g_aot_path;
@@ -159,6 +159,7 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     const u32 h = self_hash();
     if (!h) { g_uuid_ok = false; logf("jitcache: no build-id in libarm64jit.so; cache off"); return; }
     g_build = kBuildId | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
+              (u64)timebase_apple() << 18 |  // CNTFRQ and the Swift deadline patch are in the code
               (u64)h << 32;
     char bh[24];
     snprintf(bh, sizeof bh, "%016llx", (unsigned long long)g_build);
