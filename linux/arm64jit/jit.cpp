@@ -432,6 +432,11 @@ void GuestThread::ExceptionRaised(u64 pc, Dynarmic::A64::Exception e) {
     if (e == E::Yield || e == E::WaitForEvent || e == E::WaitForInterrupt) { sched_yield(); return; }
     if (e == E::SendEvent || e == E::SendEventLocal) return;
     uint32_t insn = rd<uint32_t>(pc);
+    // FEAT_FP16 scalar GPR<->half (SCVTF/UCVTF h,w): dynarmic raises UnallocatedEncoding; interpret and continue.
+    if (e == E::UnallocatedEncoding && fp16_interpret(*this, insn)) {
+        jit->SetPC(pc + 4);
+        return;
+    }
     // brk #0xf... (Swift/clang traps), udf: report like a crash with the guest registers.
     logf("guest exception %d at pc %#lx %s (insn %08x) lr %#lx sp %#lx", (int)e, (unsigned long)pc, where(pc).c_str(), insn,
          (unsigned long)x(30), (unsigned long)sp());

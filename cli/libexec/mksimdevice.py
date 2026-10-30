@@ -230,9 +230,12 @@ def main():
             if os.environ.get(k):
                 menv[k] = os.environ[k]
         with open(os.path.join(daemons, "com.x86code.metalhostd.plist"), "wb") as f:
+            # RunAtLoad: under the A64 JIT, on-demand spawn+warmup of metalhostd is slow enough that
+            # CoreAnimation can time out waiting for com.apple.metal.simulator.*; start it at boot.
             plistlib.dump({"Label": "com.x86code.metalhostd",
                            "ProgramArguments": ["/.." * depth + darling(host_path("host/metalhostd/metalhostd"))],
                            "MachServices": {n: True for n in names}, "EnvironmentVariables": menv,
+                           "RunAtLoad": True, "KeepAlive": True,
                            "StandardOutPath": log, "StandardErrorPath": log}, f)
 
     # x86Code: cross-process IOSurfaces (host/iosurfaced): iosurfaced serves com.apple.IOSurface.Remote (what

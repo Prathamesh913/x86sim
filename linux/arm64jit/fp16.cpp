@@ -219,6 +219,27 @@ bool fp16_interpret(GuestThread &t, u32 insn) {
         j.SetVector(Rd, {acc, 0});
         return true;
     }
+    // Scalar integer -> FP16 (SCVTF/UCVTF Hd, Wn/Xn). dynarmic raises UnallocatedEncoding for
+    // type=half (`fltsize == 16` early-out in SCVTF_float_int / UCVTF_float_int). Encoding:
+    // sf 0 0 0 1 1 1 1 0 | ftype=11 | 1 | rmode=00 | opcode=010/011 | 000000 | Rn | Rd
+    // → 0x1EE20000 (SCVTF) / 0x1EE30000 (UCVTF); sf=1 → 0x9EE2/9EE3. Seen as 1ee20184
+    // (scvtf h4,w12) from Metal/RenderBox on iOS 27. Mask clears sf and opcode LSB (U).
+    if ((insn & 0x7FFEFC00) == 0x1EE20000) {
+        const int rmode_opcode = (insn >> 16) & 0x3f;  // bit21|rmode|opcode → 100010 / 100011
+        if (rmode_opcode == 0b100010 || rmode_opcode == 0b100011) {
+            const int sf = (insn >> 31) & 1;
+            const bool is_unsigned = rmode_opcode & 1;
+            const u64 ival = j.GetRegister(Rn);
+            float f;
+            if (is_unsigned) f = sf ? (float)ival : (float)(uint32_t)ival;
+            else f = sf ? (float)(int64_t)ival : (float)(int32_t)ival;
+            uint16_t h = f2h(f);
+            V v = j.GetVector(Rd);
+            v[0] = (v[0] & ~0xffffull) | h;
+            j.SetVector(Rd, v);
+            return true;
+        }
+    }
     return false;
 }
 
