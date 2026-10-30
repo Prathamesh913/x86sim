@@ -1,3 +1,4 @@
+#include <sys/personality.h>
 #include <algorithm>
 #include <malloc.h>
 #include <thread>
@@ -558,6 +559,12 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     if (const char *e = getenv("X86CODE_A64_EXE")) exe = e;
     else if (argc > 1) { exe = argv[1]; argv++; argc--; }
     else { fprintf(stderr, "usage: arm64host <arm64 iOS-simulator executable> [args...]\n"); return 2; }
+    // Speed 6: launchd_sim turns ASLR off for the processes it spawns (personality is inherited across fork/exec;
+    // only the simulator's jobs, not the host). Same library and code cache address in every process -> they share
+    // one relocated AOT image. X86CODE_A64_NOASLR=0 keeps ASLR.
+    if (const char *b = strrchr(exe.c_str(), '/'); !strcmp(b ? b + 1 : exe.c_str(), "launchd_sim") &&
+                                                    !(getenv("X86CODE_A64_NOASLR") && atoi(getenv("X86CODE_A64_NOASLR")) == 0))
+        personality(personality(0xffffffff) | ADDR_NO_RANDOMIZE);
     // X86CODE_A64_SLIM_PARK=substr[,substr]: park matching executables before dyld/JIT so SpringBoard's
     // RunningBoard assertions stay satisfied (process alive) without translating Spotlight/WidgetRenderer
     // (~0.5–1.5 GB PSS each). Replaces the kill-every-5s slim-reaper thrash.

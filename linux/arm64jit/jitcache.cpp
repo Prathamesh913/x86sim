@@ -47,8 +47,9 @@ namespace {
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
 // Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
-constexpr u64 kBuildId = 0x00000012ull;  // Speed 5: 256K FastDispatch table, LDP high half first, linked AOT blocks (A64JC06)
-// kBuildId (bits 0-15), code-shaping env flags (16-17), libarm64jit build-id / load base hash (32-63).
+constexpr u64 kBuildId = 0x00000013ull;  // Speed 6: compact metadata, mapped AOT image
+// kBuildId (bits 0-15), code-shaping env flags (16-17), libarm64jit build-id hash (32-63). The load base is no longer
+// part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kBuildId;
 std::string g_key, g_aot_path;
 bool g_aot_eligible = false;
@@ -89,7 +90,6 @@ u32 self_hash() {
                 n = desc + ((nh->n_descsz + 3) & ~3u);
             }
         }
-        if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) mix((const uint8_t *)&info->dlpi_addr, 8);
         return 1;
     }, &c);
     return c.found ? c.h : 0;
@@ -160,7 +160,10 @@ void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
     if (stat(path.c_str(), &st) != 0) return;
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    size_t n = Dynarmic::A64::Jit::LoadPersistentCache(shared, path, g_uuid, g_build, kCacheLo, kCacheHi);
+    // Speed 6: the AOT image's code is mapped from a relocated copy shared by every process with the same layout
+    // (X86CODE_A64_AOT_SHARE=0: private copy as before).
+    const bool share = &path == &g_aot_path && !(getenv("X86CODE_A64_AOT_SHARE") && atoi(getenv("X86CODE_A64_AOT_SHARE")) == 0);
+    size_t n = Dynarmic::A64::Jit::LoadPersistentCache(shared, path, g_uuid, g_build, kCacheLo, kCacheHi, share);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     if (n)
         logf("jitcache: loaded %zu blocks from %s (%.1f MB, %.0f ms)", n, path.c_str(), st.st_size / 1048576.0,

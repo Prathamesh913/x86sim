@@ -2,6 +2,9 @@
 // Native code may call back into guest code on the same thread (qsort comparators, pthread_once, TSD destructors...):
 // call() then runs a nested Jit::Run (re-entrant in our dynarmic fork) on a stack frame 128 bytes below the guest's
 // current SP and restores the full guest state afterwards.
+#include <dlfcn.h>
+#include <new>
+#include <sys/personality.h>
 #include "a64.h"
 #include <atomic>
 #include <algorithm>
@@ -119,11 +122,36 @@ static bool shared_translations() {
     return on;
 }
 
+// Speed 6 (shared AOT image): translated code embeds the code cache address, the FastDispatch table (mapped after the
+// code cache), the callbacks object and the inline objc counters. All of them sit at fixed addresses so the relocated
+// image is byte-identical in every process: the code cache at kNoAslrCodeBase when ASLR is off (launchd_sim's
+// children; the library's own address still differs by executable), else 1 GB below this library (rel32 reach to it
+// < 2 GB), and the rest in a fixed data page 2 MB below the code cache.
+constexpr u64 kNoAslrCodeBase = 0x7fffa0000000ull;
+static u64 code_cache_base() {
+    static const u64 base = []() -> u64 {
+        if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) return kNoAslrCodeBase;
+        Dl_info di{};
+        return dladdr((void *)&code_cache_base, &di) && di.dli_fbase ? ((u64)di.dli_fbase - (1ull << 30)) & ~0xfffffull : 0;
+    }();
+    return base;
+}
+FixedData &fixed_data() {
+    static FixedData *fd = [] {
+        void *p = MAP_FAILED;
+        if (const u64 b = code_cache_base())
+            p = mmap((void *)(b - 0x200000), sizeof(FixedData), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (p == MAP_FAILED) p = mmap(nullptr, sizeof(FixedData), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        return new (p) FixedData();
+    }();
+    return *fd;
+}
+
 static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmic::A64::UserConfig &thread_cfg) {
     static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> code = [&] {
-        static Forward fwd;
+        static_assert(sizeof(Forward) <= sizeof(FixedData::callbacks));
         Dynarmic::A64::UserConfig c = thread_cfg;
-        c.callbacks = &fwd;
+        c.callbacks = new (fixed_data().callbacks) Forward;
         c.shared_translations = true;
         c.tpidr_el0 = nullptr; c.tpidrro_el0 = nullptr;
         // Shared BlockLinking uses atomic 8-byte patch heads (see EmitSharedPatchSite). Required for
@@ -155,6 +183,7 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         int mb = getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256;
         if (mb > 0 && mb < 64) mb = 256;
         c.code_cache_size = (size_t)mb << 20;
+        if (const u64 b = code_cache_base()) Dynarmic::A64::Jit::SetCodeCacheAddress(b);
         auto sc = Dynarmic::A64::Jit::MakeSharedCode(c);
         jitcache_set_shared(sc);
         jitcache_try_load(*sc);

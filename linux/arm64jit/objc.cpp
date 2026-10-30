@@ -35,8 +35,6 @@ bool g_svc_native = false;
 
 std::atomic<u64> g_hits{0}, g_misses{0}, g_nils{0}, g_taggeds{0};
 // Plain u64 for lock-inc from emitted x86 (inline path).
-alignas(8) u64 g_inline_hits = 0;
-alignas(8) u64 g_inline_misses = 0;
 
 static bool is_tagged(u64 obj) {
     return (int64_t)obj < 0;
@@ -230,8 +228,8 @@ void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {
     c.inline_objc_msgsend = g_msgsend;
     c.inline_objc_uncached = g_uncached;
     c.inline_objc_tagged = g_tagged;
-    c.inline_objc_hit_counter = &g_inline_hits;
-    c.inline_objc_miss_counter = &g_inline_misses;
+    c.inline_objc_hit_counter = &fixed_data().objc_hits;
+    c.inline_objc_miss_counter = &fixed_data().objc_misses;
 }
 
 void native_objc_stats() {
@@ -241,7 +239,7 @@ void native_objc_stats() {
              (unsigned long long)g_nils.load(), (unsigned long long)g_taggeds.load());
     } else if (g_inline) {
         logf("native objc (inline): hits %llu misses %llu msgsend %#lx",
-             (unsigned long long)g_inline_hits, (unsigned long long)g_inline_misses,
+             (unsigned long long)fixed_data().objc_hits, (unsigned long long)fixed_data().objc_misses,
              (unsigned long)g_msgsend);
     }
 }
