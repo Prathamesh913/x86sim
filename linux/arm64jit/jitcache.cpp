@@ -110,6 +110,10 @@ bool aot_eligible(const std::string &exe) {
     // Speed 9: metalhostd is back on the image. Its Speed 8 NULL reads (MTLSimImplementation+0x218c/+0x1f6c) were not
     // the image: the logs show them in runs without it too. A command on a connection whose init found no
     // application context (NULL MTLSimApplicationContext*); host/metalhostd now cancels such connections.
+    // Speed 9: not launchd_sim. Its libarm64jit lands elsewhere, so its prelude matches the image's only by chance
+    // (near/far host calls); when it did, it built a layout of its own: a private 234 MB .map file, +60 MB PSS and
+    // a 3 s slower start for the process every other one waits on.
+    if (base == "launchd_sim") return false;
     // Speed 7: every process that can map the image shared (ASLR off: launchd_sim's children). With lazy metadata a
     // daemon pays ~1 MB for it and its shared-cache code becomes shared pages. Elsewhere: apps and backboardd.
     if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) return true;
