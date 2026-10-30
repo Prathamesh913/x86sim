@@ -1,73 +1,84 @@
-# x86code: the iOS simulator on Linux
+# x86code
 
-x86code runs Apple's **iOS 27 simulator runtime** on **x86-64 Linux**, with no Mac at runtime. Apple ships iOS 27's
-simulator for arm64 only, so every iOS process runs its unmodified arm64 code through an **embedded JIT**
-([dynarmic](https://github.com/azahar-emu/dynarmic), our fork) inside [Darling](https://github.com/darlinghq/darling),
-which we extended for the iOS simulator. System calls cross into native x86 code; graphics, input and networking go to
-native Linux services. Core Animation renders on the host GPU through Metal → Vulkan.
+**Run Apple's iOS Simulator on a regular Linux PC. No Mac required.**
+
+x86code boots the real iOS 27 simulator, Apple's own unmodified system, on an everyday x86-64 Linux machine. You get
+the home screen, apps like Settings, and touch input, rendered on your own graphics card.
 
 <p>
-<img src="docs/screens/arm64/32-speed1c-gpu-home.png" width="220" alt="iOS 27 home screen on the GPU">
-<img src="docs/screens/arm64/33-speed2-settings-gpu.png" width="220" alt="iOS 27 Settings on the GPU">
+<img src="docs/screens/arm64/32-speed1c-gpu-home.png" width="220" alt="iOS 27 home screen">
+<img src="docs/screens/arm64/33-speed2-settings-gpu.png" width="220" alt="iOS 27 Settings">
 </p>
 
-The project is experimental. [docs/notebook/ARM64-PLAN.md](docs/notebook/ARM64-PLAN.md) has the arm64 design, stage
-results and measurements; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the host services;
-[docs/WORKAROUNDS.md](docs/WORKAROUNDS.md) lists what is faked or approximated; [docs/notebook/FINDINGS.md](docs/notebook/FINDINGS.md)
-is the full lab notebook.
+> **Early days.** It works, but it's slow and memory-hungry right now: about three minutes to boot and half a minute
+> to open an app. Making it fast is what we're working on now.
 
-## Status (iOS 27.0, build 24A434, iPhone 17)
+## Where things stand
 
 | | |
 |---|---|
-| Boot | launchd_sim → daemons → backboardd → SpringBoard home screen, every process translated, ~3 min |
-| Rendering | Core Animation on Metal → Vulkan (RTX 5090), including iOS 27's glass dock and search |
-| Input | Touch and gestures through our SimulatorHID stand-in |
-| Apps | Settings opens and scrolls (~50 fps, touch-to-frame ~23 ms); cold launch ~30 s |
-| Idle | ~1% of one core for the whole simulator |
-| Memory | ~3.6 GB real (PSS); the goal is under 1 GB |
-| Not yet | Wallpaper (PosterBoard), widgets and Files are left out to save memory; fast launches; installing your own apps on iOS 27 |
+| ✅ Boots to the home screen | about 3 minutes |
+| ✅ Graphics on your GPU | Metal → Vulkan, including iOS 27's glass dock and search bar |
+| ✅ Touch and gestures | click and drag in the viewer window |
+| ✅ Apps open and scroll | Settings scrolls at ~50 fps; opening an app takes ~30 s |
+| ✅ Quiet when idle | about 1% of one CPU core |
+| 🚧 Memory | about 3.6 GB today; the goal is under 1 GB |
+| 🚧 Not yet | wallpaper, widgets, Files, and installing your own apps on iOS 27 |
 
-### How it works
+## How it works
 
-- **Darling's loader** hands arm64 Mach-O programs to `arm64host` + `libarm64jit` (`host/arm64host`, `linux/arm64jit`),
-  which runs Apple's own `dyld_sim` against the iOS 27 shared cache under dynarmic (`external/dynarmic`).
-- iOS 27 makes no system calls itself: `libsystem_kernel`, `libsystem_platform` and `libsystem_pthread` come from the
-  host. Ours are stubs generated from the cache whose exports call **native x86** Darling code (Mach traps, BSD calls,
-  darlingserver). malloc runs natively too.
-- One **shared translation cache** per process, with block linking; signals are delivered at block boundaries.
-- The host services from the iOS 26.5 work (framebuffer, SimulatorHID, IOSurface, Metal host, mtlvk) are reused:
-  native Linux pieces unchanged, sim-side pieces rebuilt for arm64.
-- Next: native hot paths inline in translated code (objc_msgSend, retain/release), a persistent translation cache,
-  then ahead-of-time translation of the whole shared cache (Rosetta-style), and the memory diet.
+Apple only ships the iOS 27 simulator for Apple-silicon (arm64) Macs. A Linux PC speaks x86-64, so x86code
+**translates iOS's arm64 code to x86-64 on the fly**, a bit like Rosetta 2 in reverse.
 
-### Quick start (iOS 27)
+- **[Darling](https://github.com/darlinghq/darling)** provides the macOS-style system underneath: processes, Mach
+  messaging and the file system. We extended it for the iOS simulator.
+- **[dynarmic](https://github.com/azahar-emu/dynarmic)**, a fast arm64 translator from the emulator world, runs each iOS
+  process. Our fork adds the instructions iOS needs and shares translated code across a process's threads.
+- **System calls skip translation.** iOS 27 never talks to the kernel directly. It goes through three system libraries,
+  and ours hand those calls straight to native x86 code.
+- **Graphics, touch and networking** go to small native Linux services. Metal drawing becomes Vulkan on your GPU.
 
-After the common setup below (submodules, Darling, mtlvk, the Mac-built binaries with `build/mac-build-arm64-shims.sh`,
-and the iOS 27.0 runtime extracted to `runtimes/ios-27.0-24A434-arm64/` with `tools/runtime/extract-runtime.py`):
+On the way to "feels native":
+1. Native fast paths for the busiest iOS functions.
+2. Keeping translated code between launches.
+3. Translating all of iOS's system libraries ahead of time, once.
+
+The design and every measurement are in [docs/notebook/ARM64-PLAN.md](docs/notebook/ARM64-PLAN.md).
+
+## Try it
+
+Do the one-time setup below first: submodules, Darling, the GPU service, the Mac-built helper binaries
+(`build/mac-build-arm64-shims.sh`), and the iOS 27.0 runtime extracted to `runtimes/ios-27.0-24A434-arm64/`. Then:
 
 ```sh
-X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh     # boot; A64_JOBS=slim|std|full picks the services
+# boot iOS 27 (uses the GPU; A64_JOBS=slim|std|full picks how much of iOS starts)
+X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh
+
+# open the viewer window; the mouse is your finger
 DISPLAY=:0 SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring \
-  SIMHID_SOCKET=$PWD/var/device-a64/data/simhid.sock cli/libexec/simview.py   # window: mouse = touch
-tests/arm64/run.sh <path>/objcswift.sim                          # JIT tests (Mac-built, tests/arm64): hello, bench, threads, objcswift, icstress
+  SIMHID_SOCKET=$PWD/var/device-a64/data/simhid.sock cli/libexec/simview.py
 ```
 
-The boot runs in its own Darling prefix, device and frame ring, inside a systemd scope with a disk and memory cap
-(`cli/libexec/limited.sh`).
+It runs in its own sandboxed container, with caps on disk and memory use so it can't bog down your PC.
 
-### iOS 26.5 on x86_64 (frozen)
+## Also in here: iOS 26.5, natively
 
-The project first ran Apple's last **x86_64** simulator runtime, iOS 26.5 (23F73), natively under Darling, with no
-JIT. That path is feature-complete for its runtime (apps, Safari, Maps, News, your own apps, simctl-like tooling,
-LLDB, ~27 s boots, 60 fps) and is kept working but frozen. Most of the sections below (`x86sim` commands, debugging,
-the status list) describe it.
+Before iOS 27, the project ran Apple's last x86-64 simulator, **iOS 26.5**, directly with no translation needed. That
+version is much further along: Safari, Maps, News, your own apps, simctl-style tools, LLDB debugging, 27-second boots
+and smooth 60 fps. It still works and is frozen as-is. Most of the command reference below (`x86sim …`) is for it.
 
 <p>
-<img src="docs/screens/84-x86sim-boot-home.png" width="160" alt="home screen">
+<img src="docs/screens/84-x86sim-boot-home.png" width="160" alt="iOS 26.5 home screen">
 <img src="docs/screens/58-safari-wikipedia.png" width="160" alt="Safari">
 <img src="docs/screens/64-news-today.png" width="160" alt="News">
 </p>
+
+## More reading
+
+- [ARM64-PLAN.md](docs/notebook/ARM64-PLAN.md): the iOS 27 design, stage by stage, with measurements
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit together
+- [WORKAROUNDS.md](docs/WORKAROUNDS.md): what's faked or approximated, honestly
+- [FINDINGS.md](docs/notebook/FINDINGS.md): the full lab notebook
 
 ## Requirements
 
