@@ -415,6 +415,11 @@ bool timebase_apple() {
     return on;
 }
 u64 tb_ns_to_ticks(u64 ns) { return (u64)((unsigned __int128)ns * 3 / 125); }
+static bool tb_debug() {  // X86CODE_A64_TB_DEBUG=1: log the first 40 converted values per process
+    static std::atomic<int> n{0};
+    static const bool on = getenv("X86CODE_A64_TB_DEBUG") != nullptr;
+    return on && n.fetch_add(1) < 40;
+}
 static u64 tb_ticks_to_ns(u64 t) {
     const unsigned __int128 ns = (unsigned __int128)t * 125 / 3;
     return ns > ~0ull ? ~0ull : (u64)ns;
@@ -436,6 +441,7 @@ template <int Arg> static void h_tb_out(GuestThread &t, u32 i) {  // a u64* resu
     if (p && t.x(0) == 0) *p = tb_ns_to_ticks(*p);
 }
 template <int... Args> static void h_tb_in(GuestThread &t, u32 i) {  // mach-time arguments
+    if (tb_debug()) logf("tb: %s x%d %#lx", g_thunks[i].name.c_str(), (int)(sizeof...(Args)), (unsigned long)t.x(0));
     ((t.set_x(Args, tb_ticks_to_ns(t.x(Args)))), ...);
     h_generic(t, i);
 }
@@ -452,6 +458,10 @@ static void h_tb_kevent(GuestThread &t, u32 i) {
         int16_t f; uint32_t ff;
         memcpy(&f, cl + k * Size + 8, 2); memcpy(&ff, cl + k * Size + FflagsOff, 4);
         any = f == kTimer && (ff & kMachTime);
+        if (f == kTimer && !any && tb_debug()) {
+            int64_t d; memcpy(&d, cl + k * Size + DataOff, 8);
+            logf("tb: %s timer without NOTE_MACHTIME fflags %#x data %ld", g_thunks[i].name.c_str(), ff, (long)d);
+        }
     }
     if (!any) return h_generic(t, i);
     std::vector<uint8_t> copy(cl, cl + (size_t)n * Size);
@@ -461,6 +471,11 @@ static void h_tb_kevent(GuestThread &t, u32 i) {
         memcpy(&f, e + 8, 2); memcpy(&ff, e + FflagsOff, 4);
         if (f != kTimer || !(ff & kMachTime)) continue;
         int64_t d; memcpy(&d, e + DataOff, 8);
+        if (tb_debug()) {
+            uint16_t fl; memcpy(&fl, e + 10, 2);
+            logf("tb: %s ident %#lx flags %#x fflags %#x data %ld now %lu", g_thunks[i].name.c_str(), (unsigned long)*(u64 *)e, fl, ff, (long)d,
+                 (unsigned long)tb_ns_to_ticks(GuestThread::self().GetCNTPCT() * 125 / 3));
+        }
         if (d > 0) { d = (int64_t)std::min<u64>(tb_ticks_to_ns((u64)d), (u64)INT64_MAX); memcpy(e + DataOff, &d, 8); }
         if (ExtLeewayOff >= 0 && (ff & kLeeway)) {
             u64 l; memcpy(&l, e + ExtLeewayOff, 8); l = tb_ticks_to_ns(l); memcpy(e + ExtLeewayOff, &l, 8);
@@ -472,7 +487,7 @@ static void h_tb_kevent(GuestThread &t, u32 i) {
 static Handler timebase_handler(const std::string &n) {
     if (!timebase_apple()) return nullptr;
     // struct kevent (32 B): fflags +12, data +16. kevent64_s (48 B): fflags +12, data +16, ext[1] +40.
-    // kevent_qos_s (64 B): qos +12, udata +16, fflags +24, xflags +28, data +32, ext[1] +48.
+    // kevent_qos_s (72 B): qos +12, udata +16, fflags +24, xflags +28, data +32, ext[4] +40 (leeway ext[1] +48).
     static const std::map<std::string, Handler> m = {
         {"_mach_absolute_time", h_tb_ret}, {"_mach_absolute_time_kernel", h_tb_ret}, {"_mach_continuous_time", h_tb_ret},
         {"_mach_continuous_time_kernel", h_tb_ret}, {"_mach_approximate_time", h_tb_ret},
@@ -481,7 +496,7 @@ static Handler timebase_handler(const std::string &n) {
         {"_mk_timer_cancel", h_tb_out<1>}, {"_mach_wait_until", h_tb_in<0>}, {"_mk_timer_arm", h_tb_in<1>},
         {"_mk_timer_arm_leeway", h_tb_in<2, 3>},
         {"_kevent", h_tb_kevent<32, 12, 16, -1>}, {"_kevent64", h_tb_kevent<48, 12, 16, 40>},
-        {"_kevent_qos", h_tb_kevent<64, 24, 32, 48>}, {"_kevent_id", h_tb_kevent<64, 24, 32, 48>},
+        {"_kevent_qos", h_tb_kevent<72, 24, 32, 48>}, {"_kevent_id", h_tb_kevent<72, 24, 32, 48>},
     };
     auto it = m.find(n);
     return it == m.end() ? nullptr : it->second;

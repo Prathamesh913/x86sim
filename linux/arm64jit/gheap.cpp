@@ -63,6 +63,7 @@ struct Native {
 struct Cache {
     FreeBlock *head[kClasses] = {};
     uint32_t count[kClasses] = {};
+    uint8_t fills[kClasses] = {};  // refills so far (the batch doubles from 1 block)
     Cache *next = nullptr, **prev = nullptr;  // all thread caches (stats)
     Cache();
     ~Cache();
@@ -189,7 +190,11 @@ void *small_alloc(int c) {
     FreeBlock *b = tc.head[c];
     if (__builtin_expect(!b, 0)) {
         uint32_t got;
-        b = refill(c, limit_for(c) / 2 + 1, &got);
+        // Speed 10: the batch starts at one block and doubles per refill up to about 16 KB (it was always ~16 KB:
+        // a thread that used a class once kept the rest touched and idle, up to 64 KB for the 32 KB class)
+        const uint32_t full = limit_for(c) / 2 + 1, want = std::min<uint32_t>(full, 1u << tc.fills[c]);
+        if (want < full) tc.fills[c]++;
+        b = refill(c, want, &got);
         if (!b) return nullptr;
         tc.head[c] = b; tc.count[c] = got;
     }

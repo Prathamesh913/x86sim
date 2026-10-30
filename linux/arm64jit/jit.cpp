@@ -74,10 +74,10 @@ static void destroy_guest_thread(void *p) {
 // block PC, LR and 6 frame-pointer frames, read with process_vm_readv) and logs the 15 most frequent stacks every 10 s.
 // For "busy but nothing visible" loops that perf cannot attribute (JIT frames have no host unwind info).
 // X86CODE_A64_GSAMPLE_ALL=1: every guest thread of the process is sampled, and only samples running guest code (not
-// in a thunk) count: the busy worker thread instead of an idle main thread.
+// in a thunk) count: the busy worker thread instead of an idle main thread. =2: blocked threads too (lock holders).
 static std::mutex g_gs_mu;
 static std::vector<GuestThread *> g_gs_threads;
-static bool g_gs_all;
+static int g_gs_all;  // 1: threads in guest code; 2: every thread (also blocked in a thunk: lock holders)
 static void gsample_register(GuestThread *t) {
     if (!g_gs_all) return;
     std::lock_guard l(g_gs_mu); g_gs_threads.push_back(t);
@@ -95,7 +95,7 @@ void gsample_start(GuestThread *t) {
     sigset_t all, old;
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &old);
-    g_gs_all = getenv("X86CODE_A64_GSAMPLE_ALL") && atoi(getenv("X86CODE_A64_GSAMPLE_ALL")) == 1;
+    g_gs_all = getenv("X86CODE_A64_GSAMPLE_ALL") ? atoi(getenv("X86CODE_A64_GSAMPLE_ALL")) : 0;
     if (g_gs_all) gsample_register(t);
     std::thread([t]() mutable {
         g_non_darling_thread = true;
@@ -132,7 +132,7 @@ void gsample_start(GuestThread *t) {
                 const size_t m = g_gs_threads.size();
                 for (size_t k = 0, r = m ? (size_t)random() % m : 0; k < m && !pick; k++) {
                     GuestThread *c = g_gs_threads[(r + k) % m];
-                    if (c->jit && c->in_thunk < 0) pick = c;
+                    if (c->jit && (c->in_thunk < 0 || g_gs_all == 2)) pick = c;
                 }
                 if (!pick) continue;
                 t = pick;
