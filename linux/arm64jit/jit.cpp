@@ -298,6 +298,7 @@ void memlog_shared_stats() {
          (unsigned long long)st.blocks, (unsigned long long)st.guest_instructions,
          st.code_bytes / 1048576.0, st.translate_ns / 1e9,
          (unsigned long long)st.lookups, g_live_threads.load());
+    logf("memlog: maps (MB) %s", Dynarmic::A64::Jit::GetMemoryReport(*shared_code(GuestThread::self().cfg)).c_str());
     native_objc_stats();
     jitcache_save_if_shared();
 }
