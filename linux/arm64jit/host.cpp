@@ -670,8 +670,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     u64 args[9] = {(u64)argc, gargv, genvp, gapple, main_exe.mh, dyld.mh, dyld.slide, helpers, (u64)&glue};
     u64 main_fn = t.call(dyld.entry, args, 9).rax;
     g_stub_guard_armed = true;  // stub dylibs are mapped now: refuse later unmaps of them (handlers.cpp)
-    if (getenv("X86CODE_A64_STATS"))
-        logf("stubs %.1f ms, setup %.1f ms, dyld_sim prepare done at %.1f ms; thunk calls %lu", t_stubs, t_setup, ms_since(g_t0),
+    logf("stubs %.1f ms, setup %.1f ms, dyld_sim prepare done at %.1f ms; thunk calls %lu", t_stubs, t_setup, ms_since(g_t0),
              (unsigned long)t.svc_count);
     if (!main_fn) die("_dyld_sim_prepare returned no main");
     return (int)t.call(main_fn, {(u64)argc, gargv, genvp, gapple});
