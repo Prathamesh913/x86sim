@@ -406,6 +406,8 @@ void print_stats() {
     for (u32 i = 0, n = thunk_count(); i < n; i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});
     std::sort(v.rbegin(), v.rend());
     for (size_t k = 0; k < v.size() && k < 12; k++) logf("  %10lu %s", (unsigned long)v[k].first, g_thunks[v[k].second].name.c_str());
+    native_objc_stats();
+    jitcache_save_if_shared();
 }
 
 }  // namespace a64
@@ -511,6 +513,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     }
     native_malloc_prepare(cache);
     native_objc_prepare(cache);
+    jitcache_prepare(cache);
     read_const_mappings(cache);
     double t_stubs = ms_since(g_t0);
 

@@ -1,10 +1,11 @@
-// libarm64jit: native objc_msgSend cache lookup.
+// libarm64jit: objc_msgSend fast paths.
 //
-// Guest arm64 objc_msgSend (libobjcMsgSend.dylib in the dyld shared cache) is a tight
-// cache probe: every ObjC call pays JIT translate+execute for ~15 instructions. Replace
-// the entry with an svc stub; on a cache hit SetPC to the IMP (tail-call). Miss / tagged /
-// nil fall back to the remaining guest code (entry bytes overwritten; slow paths live past
-// the stub).
+// Two modes (in preference order):
+//   1. Inline x86 probe in dynarmic (default): when a block at _objc_msgSend is translated,
+//      EmitInlineObjCMsgSend emits the cache lookup in x86 and FastDispatches to the IMP.
+//      No CallSVC, no HostCall spill. X86CODE_A64_INLINE_OBJC=0 disables.
+//   2. Legacy svc stub (X86CODE_A64_NATIVE_OBJC=1): patch entry to svc; host C++ probe;
+//      SetPC(IMP). Kept for comparison; slower than guest A64 (~1.8×) because of the boundary.
 //
 // Layout verified against iOS 27.0 sim cache (dyld_sim_shared_cache_arm64):
 //   isa mask 0x7ffffffffffff8; cache at class+0x10; HIGH_16_BIG_ADDRS (mask<<48 | buckets);
@@ -29,17 +30,18 @@ constexpr u64 kTaggedGetClass = 0x1c0093870ull;  // past b.eq nil inside NilOrTa
 u64 g_msgsend = kDefaultMsgSend;
 u64 g_uncached = kDefaultUncached;
 u64 g_tagged = kTaggedGetClass;
-bool g_enabled = false;
+bool g_inline = false;
+bool g_svc_native = false;
 
 std::atomic<u64> g_hits{0}, g_misses{0}, g_nils{0}, g_taggeds{0};
+// Plain u64 for lock-inc from emitted x86 (inline path).
+alignas(8) u64 g_inline_hits = 0;
+alignas(8) u64 g_inline_misses = 0;
 
 static bool is_tagged(u64 obj) {
-    // MSB set ⇒ tagged (sim: looks negative); nil is 0 and already handled.
     return (int64_t)obj < 0;
 }
 
-// Probe the method cache. Returns real IMP, or 0 on miss.
-// Mirrors CacheLookup in iOS 27 sim libobjcMsgSend (post-index ldp #-16, then wrap).
 static u64 cache_lookup(u64 cls, u64 sel) {
     u64 mask_and_buckets = GuestThread::rd<u64>(cls + kCacheOffset);
     u64 buckets = mask_and_buckets & kBucketsMask;
@@ -53,13 +55,12 @@ static u64 cache_lookup(u64 cls, u64 sel) {
     for (;;) {
         u64 stored_imp = GuestThread::rd<u64>(cur);
         u64 bsel = GuestThread::rd<u64>(cur + 8);
-        cur -= 16;  // post-index
-        if (bsel == sel) return stored_imp ^ cls;  // cached as imp^class
+        cur -= 16;
+        if (bsel == sel) return stored_imp ^ cls;
         if (bsel == 0) return 0;
         if (cur >= buckets) continue;
         break;
     }
-    // Wrap to last bucket; stop once we pass the first probed slot.
     cur = buckets + ((u64)mask << 4);
     for (;;) {
         u64 stored_imp = GuestThread::rd<u64>(cur);
@@ -84,13 +85,11 @@ void h_objc_msgSend(GuestThread &t, u32) {
         t.set_d(1, 0);
         t.set_d(2, 0);
         t.set_d(3, 0);
-        // Leave PC at stub+4 (ret) → return to caller.
         return;
     }
 
     if (is_tagged(obj)) {
         g_taggeds.fetch_add(1, std::memory_order_relaxed);
-        // Guest NilOrTagged body past the nil b.eq: loads tagged class, then cache lookup.
         t.jit->SetPC(g_tagged);
         return;
     }
@@ -105,7 +104,6 @@ void h_objc_msgSend(GuestThread &t, u32) {
     }
 
     g_misses.fetch_add(1, std::memory_order_relaxed);
-    // Match CacheLookup miss ABI: x15 = class, x16 = class (uncached may set bit 2).
     t.set_x(15, cls);
     t.set_x(16, cls);
     t.jit->SetPC(g_uncached);
@@ -114,14 +112,9 @@ void h_objc_msgSend(GuestThread &t, u32) {
 }  // namespace
 
 void native_objc_prepare(const std::string &cache_path) {
-    // Opt-in: the svc boundary around a 15-instruction cache probe is slower than
-    // running those instructions under the JIT (objcswift msgSend ~537 ms native
-    // vs ~291 ms guest). Keep the path for experiments / a future inlined emit.
-    // X86CODE_A64_NATIVE_OBJC=1 enables; X86CODE_A64_GUEST_OBJC=1 forces guest.
+    // X86CODE_A64_GUEST_OBJC=1: leave guest A64 msgSend alone (baseline).
     const char *guest = getenv("X86CODE_A64_GUEST_OBJC");
     if (guest && *guest == '1') return;
-    const char *on = getenv("X86CODE_A64_NATIVE_OBJC");
-    if (!on || *on != '1') return;
 
     u64 text_lo = 0, text_hi = 0;
     std::vector<u64> addrs;
@@ -136,37 +129,65 @@ void native_objc_prepare(const std::string &cache_path) {
              (unsigned long)g_msgsend, (unsigned long)g_uncached);
         return;
     }
-    // Tagged path offset is fixed relative to msgSend in this cache build (NilOrTagged).
     g_tagged = g_msgsend + (kTaggedGetClass - kDefaultMsgSend);
-    g_enabled = true;
+
+    // Default: inline x86 probe. Opt out with INLINE_OBJC=0; legacy svc with NATIVE_OBJC=1.
+    const char *inline_env = getenv("X86CODE_A64_INLINE_OBJC");
+    const char *native_env = getenv("X86CODE_A64_NATIVE_OBJC");
+    if (native_env && *native_env == '1') {
+        g_svc_native = true;
+        g_inline = false;
+    } else if (!inline_env || *inline_env != '0') {
+        g_inline = true;
+        g_svc_native = false;
+    }
 }
 
 void native_objc_install() {
-    if (!g_enabled) return;
-    static bool done;
-    if (done) return;
-    done = true;
-
-    u64 addr = g_msgsend;
-    u64 page = addr & ~0xfffull;
-    u64 len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
-    if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) {
-        logf("native objc: mprotect %#lx failed", (unsigned long)page);
-        g_enabled = false;
+    if (g_svc_native) {
+        static bool done;
+        if (done) return;
+        done = true;
+        u64 addr = g_msgsend;
+        u64 page = addr & ~0xfffull;
+        u64 len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
+        if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) {
+            logf("native objc: mprotect %#lx failed", (unsigned long)page);
+            g_svc_native = false;
+            return;
+        }
+        emit_stub((uint32_t *)addr, add_thunk("_objc_msgSend", h_objc_msgSend));
+        mprotect((void *)page, len, PROT_READ | PROT_EXEC);
+        if (getenv("X86CODE_A64_STATS"))
+            logf("native objc: patched _objc_msgSend at %#lx (svc path; uncached %#lx)",
+                 (unsigned long)addr, (unsigned long)g_uncached);
         return;
     }
-    emit_stub((uint32_t *)addr, add_thunk("_objc_msgSend", h_objc_msgSend));
-    mprotect((void *)page, len, PROT_READ | PROT_EXEC);
-    if (getenv("X86CODE_A64_STATS"))
-        logf("native objc: patched _objc_msgSend at %#lx (uncached %#lx)",
-             (unsigned long)addr, (unsigned long)g_uncached);
+    // Inline path: addresses are wired into each Jit's UserConfig in GuestThread().
+    if (g_inline && getenv("X86CODE_A64_STATS"))
+        logf("native objc: inline x86 probe at %#lx (uncached %#lx tagged %#lx)",
+             (unsigned long)g_msgsend, (unsigned long)g_uncached, (unsigned long)g_tagged);
+}
+
+void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {
+    if (!g_inline) return;
+    c.inline_objc_msgsend = g_msgsend;
+    c.inline_objc_uncached = g_uncached;
+    c.inline_objc_tagged = g_tagged;
+    c.inline_objc_hit_counter = &g_inline_hits;
+    c.inline_objc_miss_counter = &g_inline_misses;
 }
 
 void native_objc_stats() {
-    if (!g_enabled) return;
-    logf("native objc: hits %llu misses %llu nils %llu tagged %llu",
-         (unsigned long long)g_hits.load(), (unsigned long long)g_misses.load(),
-         (unsigned long long)g_nils.load(), (unsigned long long)g_taggeds.load());
+    if (g_svc_native) {
+        logf("native objc (svc): hits %llu misses %llu nils %llu tagged %llu",
+             (unsigned long long)g_hits.load(), (unsigned long long)g_misses.load(),
+             (unsigned long long)g_nils.load(), (unsigned long long)g_taggeds.load());
+    } else if (g_inline) {
+        logf("native objc (inline): hits %llu misses %llu msgsend %#lx",
+             (unsigned long long)g_inline_hits, (unsigned long long)g_inline_misses,
+             (unsigned long)g_msgsend);
+    }
 }
 
 }  // namespace a64
