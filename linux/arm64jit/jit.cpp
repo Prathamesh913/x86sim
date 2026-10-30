@@ -89,7 +89,9 @@ static void gsample_start(GuestThread *t) {
             return syscall(SYS_process_vm_readv, getpid(), &lo, 1, &re, 1, 0) == 8 ? v : 0;
         };
         std::map<std::vector<u64>, u32> counts;
+        std::map<u64, u32> incl;
         u32 n = 0;
+        const u32 period = getenv("X86CODE_A64_GSAMPLE_PERIOD") ? atoi(getenv("X86CODE_A64_GSAMPLE_PERIOD")) : 2000;
         const char *sk = getenv("X86CODE_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
         const u64 skip = sk ? strtoull(sk, nullptr, 16) : 0;
         const int depth = getenv("X86CODE_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86CODE_A64_GSAMPLE_DEPTH")) : 6;
@@ -106,7 +108,9 @@ static void gsample_start(GuestThread *t) {
                 fp = next;
             }
             counts[st]++;
-            if (++n % 2000) continue;
+            for (size_t i = 0; i < st.size(); i++)
+                if (std::find(st.begin(), st.begin() + i, st[i]) == st.begin() + i) incl[st[i]]++;
+            if (++n % period) continue;
             std::vector<std::pair<u32, const std::vector<u64> *>> top;
             for (auto &[k, v] : counts) top.push_back({v, &k});
             std::sort(top.begin(), top.end(), [](auto &a, auto &b) { return a.first > b.first; });
@@ -118,6 +122,12 @@ static void gsample_start(GuestThread *t) {
                 logf("%s", line);
             }
             counts.clear();
+            // inclusive: every frame address with the samples it appears in (attribute to images offline)
+            std::vector<std::pair<u32, u64>> inc;
+            for (auto &[a, v] : incl) inc.push_back({v, a});
+            std::sort(inc.rbegin(), inc.rend());
+            for (size_t i = 0; i < inc.size() && i < 80; i++) logf("gsample incl %u %#lx", inc[i].first, (unsigned long)inc[i].second);
+            incl.clear();
         }
     }).detach();
     pthread_sigmask(SIG_SETMASK, &old, nullptr);

@@ -141,6 +141,24 @@ def strip(obj):
 		return {k: strip(v) for k, v in obj.items()}
 	return obj
 
+# Speed 9: a fresh device has no IconState yet, so SpringBoard wrote its default layout on the first boot, with the
+# Maps and Calendar widgets (two blank white tiles: no chronod / WidgetRenderer). Seed the same layout without widgets.
+seed = os.path.join(d, "IconState.plist")
+if not os.path.exists(seed):
+	import uuid
+	u = lambda: str(uuid.uuid4()).upper()
+	utilities = {"defaultDisplayName": "Utilities", "displayName": "Utilities", "listType": "folder",
+		"iconLists": [["com.apple.shortcuts", "com.apple.Passwords"]], "listUniqueIdentifiers": [u()], "uniqueIdentifier": u()}
+	layout = {"buttonBar": ["com.apple.mobilesafari", "com.apple.MobileSMS"], "defaultDisplayName": "Folder", "displayName": "Folder",
+		"iconLists": [["com.apple.mobilecal", "com.apple.mobileslideshow", "com.apple.Maps", "com.apple.news", "com.apple.Health",
+			"com.apple.Passbook", "com.apple.SiriApp", "com.apple.Preferences"],
+			["com.apple.Fitness", "com.apple.Bridge", "com.apple.reminders", "com.apple.DocumentsApp", "com.apple.Preview", utilities,
+			"com.apple.MobileAddressBook"]],
+		"ignored": ["com.apple.TVRemoteApp"], "listUniqueIdentifiers": [u(), u()], "today": [], "uniqueIdentifier": u()}
+	with open(seed, "wb") as f:
+		plistlib.dump(layout, f)
+	print("  seeded a widget-free IconState.plist (fresh device)", flush=True)
+
 for name in ("IconState.plist", "DesiredIconState.plist"):
 	path = os.path.join(d, name)
 	if not os.path.exists(path):
