@@ -749,7 +749,7 @@ through. MTLCompiler moved out of the dyld cache onto disk as `Metal.framework/X
   metalhostd builds CA pipelines; simfb presents wait on GPU (`ready_at_submit=0`). Screenshot
   `docs/screens/arm64/31-speed1b-gpu-home.png` (black wallpaper — no PosterBoard; same as software leave-running).
 
-### Metrics
+### Metrics (Speed 1b — **content/PNG invalid**; timing numbers superseded by Speed 1c)
 | | Software baseline | CA Metal (Speed 1b) |
 |---|---|---|
 | Scroll fps while moving | ~40 | ~24 (CA-paced ~42 ms) |
@@ -762,10 +762,10 @@ through. MTLCompiler moved out of the dyld cache onto disk as `Metal.framework/X
 
 Probe GPU clear ~100 ms first CB; 100 CBs ~35–42 ms once the device is up. Scroll GPU wait age ~2–6 ms (CA late).
 
-### Gaps after Speed 1b
-1. Home content still black wallpaper (PosterBoard out for memory); icons not clearly visible on GPU path.
-2. Idle SpringBoard ~160% of a core while GPU-presenting — investigate spin / display link.
-3. Scroll fps 24 vs software 40 — CA pacing under JIT; GPU itself is fast (age 2–6 ms).
+### Gaps after Speed 1b (historical; see Speed 1c)
+1. Home PNG looked corrupt — **was screenshot stride**, fixed in Speed 1c.
+2. Idle SpringBoard ~160% — **gone** in Speed 1c idle (few frames, SB ~2%).
+3. Scroll fps 24 — superseded by Speed 1c page-swipe ~49 fps.
 4. metal2vulkan: no AIR changes required for iOS 27 probe/CA shaders used so far.
 
 ### Commits
@@ -777,3 +777,46 @@ Probe GPU clear ~100 ms first CB; 100 CBs ~35–42 ms once the device is up. Scr
 - `11cc869` arm64 iosurfaced/metalhostd/mtlprobe Mach-Os
 - `801df25` docs/progress Speed 1b + GPU home milestone entry
 - `ad88b07` force-add SW + GPU home screenshots (`30` / `31`)
+
+
+### Speed 1c (same day): stride truth + correct GPU home
+- **Root cause of "corrupt" 31-speed1b-gpu-home.png:** screenshot/save bug, not GPU write. The ring and
+  IOSurface use bytesPerRow **4864** (64-byte aligned) for width 1206 (tight row = 4824). Decoding with
+  `width*4` shifts every row by 40 bytes → thin diagonal lines. Live ring pixels were always correct
+  (pad bytes zero; correct-stride slope 0).
+- **x86 1179-wide:** tight 4716 vs align64 4736 (pad 20). Shared stride code that always takes
+  `bytesPerRow` / ring stride stays correct for both widths; do not assume `width*4`.
+- **Fixes / probes:**
+  - `cli/libexec/fb2png.py`: refuse buffers shorter than `stride*h`; always pass real stride into Pillow;
+    print tight vs stride.
+  - `linux/mtlvk` `selftest()`: 1206×900 BGRA IOSurface (bpr 4864), VRAM-proxy clear red, verify every
+    texel + that the 40-byte pad stays 0xCD.
+  - `tests/metal/mtlprobe.m` (+ arm64 rebuild): 1206×64 IOSurface create/render/pad-clobber check.
+  - `tests/metal/test_fb2png_stride.py`: synthetic padded frame; wrong decode slope≈10; fb2png exit 2 on short buffer.
+- **Content:** correctly-strided GPU home matches stage3 software (mean abs diff ~3.2; colorful icons,
+  labels, dock, status bar). Side-by-side: scratch `speed1c-sw-vs-gpu.png`; docs
+  `32-speed1c-gpu-home.png` + `32-speed1c-sw-home-ref.png` (stage3 slim-park). Missing-content fear was
+  the bad PNG + dark wallpaper; icons were present.
+- **Idle SpringBoard spin:** gone on this boot. Idle ~4–5 frames / 8–12 s; SpringBoard ~2% (Speed 1b had
+  continuous ~24 fps present + SB ~160%). Continuous idle presents were an artifact of that boot's CA
+  display-link behavior, not required for a correct home.
+- **Fresh metrics (home page-swipe; Settings launch went black this round):**
+
+| | Software baseline | CA Metal (Speed 1c, page-swipe) |
+|---|---|---|
+| Scroll/swipe fps while moving | ~40 | **~49** (p50 frame 16.7 ms) |
+| Frame time p50 | 25 ms | **16.7 ms** |
+| Touch→frame latency p50 / max | ~247 / ~950 ms | **~86 / ~435 ms** (19 samples) |
+| backboardd CPU while moving | ~102% | **~23%** |
+| SpringBoard CPU while moving | ~13% | ~74% (CA under JIT) |
+| Idle: frames / 12 s | few | **few (~4)** |
+| Idle: SpringBoard | ~1% | **~2%** (was 160% in Speed 1b — invalid) |
+
+Vertical rubber-band on home: sparse frames, p50 16.7 ms when present. GPU wait age still a few ms.
+
+### Gaps after Speed 1c
+1. PosterBoard wallpaper still out (memory); home is black wallpaper with correct icons.
+2. Settings/app launch went black this round — openurl job missing on a64 leave-running; use icon tap / fix openurl for list-scroll metrics.
+3. Raise list-scroll confidence once a scrollable app opens; page-swipe already beats software fps.
+4. cloudd+diagnosticd still eat idle CPU (~70%+20%); unrelated to Metal present path.
+

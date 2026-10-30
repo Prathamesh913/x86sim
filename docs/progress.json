@@ -1,7 +1,7 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Speed 1b: CA on Metal\u2192Vulkan on arm64. MTLCompilerService works (extract on-disk Metal from dyld cache); iosurfaced CFRunLoopRun fixes the post-swapchain hang. mtlprobe 43/0; backboardd GPU presents (ready_at_submit=0). Scroll: touch\u2192frame p50 24 ms (was 247), backboardd 10% (was 102%); scroll fps 24 (was 40, CA-paced). Black wallpaper (no PosterBoard). Leave-running: GPU home on :0.",
+  "now": "Speed 1c: GPU home is CORRECT. The Speed 1b 'corrupt diagonal' PNG was a wrong-stride screenshot save (tight w*4 on a 4864-pitch ring), not a GPU write bug. Hardened fb2png + mtlvk 1206-wide VRAM stride selftest + arm64 mtlprobe. Correct GPU home matches software (mean abs diff ~3.2). Idle SpringBoard spin gone (~2% / few frames; was 160% @24fps). Page-swipe ~49 fps p50 16.7 ms, latency p50 ~86 ms, backboardd ~23%. Leave-running: GPU home on :0.",
   "metrics": [
     [
       "Boot to home screen",
@@ -29,19 +29,19 @@
       "was kill-every-5s reaper; RunningBoard UIKitApplication"
     ],
     [
-      "Idle CPU (home, parked)",
-      "~1.3% of one core",
-      "was ~1.9 cores; cloudd+diagnosticd in MIN"
+      "Idle CPU (GPU home)",
+      "SpringBoard ~2%; few frames / 12 s",
+      "Speed 1b's 160%@24fps was from continuous present; fixed/gone"
     ],
     [
       "Rendering",
-      "Metal\u2192Vulkan (CA / backboardd on RTX 5090)",
-      "mtlprobe 43 PASS; scroll latency p50 24 ms; bbd 10% CPU"
+      "Metal\u2192Vulkan CA home CORRECT",
+      "stride screenshot bug fixed; page-swipe ~49 fps; latency p50 ~86 ms"
     ],
     [
       "Device",
       "iPhone 17 (1206x2622)",
-      "iOS 27.0 (24A434)"
+      "iOS 27.0 (24A434); ring stride 4864 (tight 4824)"
     ]
   ],
   "stages": [
@@ -72,8 +72,9 @@
     }
   ],
   "issues": [
+    "Scroll list (Settings) not opened this round (black launch); page-swipe used for continuous CA metrics",
+    "Wallpaper (PosterBoard) still out for memory; home is black wallpaper with correct colorful icons",
     "CA Metal home is black wallpaper (no PosterBoard); icons faint/missing vs software \u2014 GPU composites at ~24 fps",
-    "Idle SpringBoard ~160% of a core while GPU-presenting (~24 fps continuous); investigate spin",
     "Memory: ~3.56 GB real vs 1 GB goal \u2014 anon_host_jit_meta still 46% of PSS across processes; SB largest VMA now 288 MB",
     "Cold boot with park+strip: recent boots reached full home; more reps to call reliable",
     "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory",
@@ -81,8 +82,12 @@
   ],
   "milestones": [
     [
+      "32-speed1c-gpu-home.png",
+      "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
+    ],
+    [
       "31-speed1b-gpu-home.png",
-      "Speed 1b: first CA Metal\u2192Vulkan frames on arm64 (RTX 5090); black wallpaper, GPU presents"
+      "INVALID (Speed 1c): diagonal artifact from fb2png/Pillow decoding with width*4 instead of ring stride 4864. Metrics from that round are untrustworthy for content; see 32-speed1c-gpu-home.png."
     ],
     [
       "15-stage3-compact-maps-home.png",
