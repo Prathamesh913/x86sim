@@ -708,3 +708,45 @@ Verified: Settings tap launches `com.apple.Preferences` with no new null-display
 5. Persistent on-disk translation cache; trim the early shared boot spin.
 6. Guest TLS destructors on every exit path.
 7. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.
+
+## Speed 1: Metal on the GPU (2026-10-29)
+
+Goal: CoreAnimation / apps via Metal→Vulkan on the RTX 5090 on the arm64 path.
+
+### Per-component
+| Piece | Decision |
+|---|---|
+| mtlvk (linux/mtlvk) | native x86_64 Linux, unchanged; per-boot socket `var/run-a64/mtlvk.sock` |
+| iosurfaced | arm64 Mach-O under JIT (`host/iosurfaced/arm64/`) |
+| metalhostd + vkmtl | arm64 Mach-O under JIT (`host/metalhostd/arm64/`); heavy work in mtlvk |
+| mtlprobe | arm64 (`tests/metal/arm64/`) |
+| simshim / simfb / simhid | already arm64 |
+
+### iOS 27 Metal interface
+vkmtl stubs: `supportsPVRTC`, `supportsRGBTextureBuffers`, `supportsTextureMultifetch`, `supportsMXU*`,
+`useInternalResidencySet(s):`, `genericAddressSpaceDispatchInfo`, `compressionMetadata`, `forwardProgressUsage`,
+`recommendedPersistentThreadgroupsPerGrid…`. Removed client selectors (`set*GlobalConstants*`, `supportsFP8`) fall
+through. MTLCompiler moved out of the dyld cache onto disk as `Metal.framework/XPCServices/MTLCompilerService.xpc`.
+
+### What works
+- `MTLCreateSystemDefaultDevice` → MTLSimDriver → metalhostd → mtlvk → RTX 5090 (~2.7 s cold).
+- Buffers, textures (replace/getBytes), private render targets, GPU clear + blit readback, fillBuffer, shared events,
+  100 command buffers in order (~35–40 ms).
+- Fixes that unblocked the hang: FEAT_FP16 `SCVTF/UCVTF Hd,Wn` interpret (`1ee20184`); metalhostd `CFRunLoopRun`
+  instead of `dispatch_main` parking; simshim skips `enable_sim2host` for metal (+ null name when `X86CODE_METAL_IN_SIM`).
+
+### Gap (blocks CA Metal / probe pipelines)
+`MTLCompilerService` multi-instance spawn. Without a LaunchDaemon, lookup is "No such process" (no XPC stub on A64
+min boots — Metal.framework binary lives only in the shared cache; on-disk tree has XPCServices only). A plain
+LaunchDaemon for the same label makes `create copy of service: 137`. x86 26.5 gets a stub from `xpc_bundle` and
+spawns UUID instances. Need a working multi-instance / xpc_bundle registration path for the on-disk `.xpc`, then
+re-run probe pipelines and `X86CODE_METAL=backboardd`.
+
+### Metrics
+Software baseline (before): see scratch `speed1-sw-*.txt` (~3 min boot, software frames). Metal UI after: not yet
+(no shader pipelines). Probe GPU clear ~100 ms first CB; 100 CBs ~35 ms once the device is up.
+
+### Commits
+- `dff59a5` scaffolding (iOS 27 selectors, arm64 shims, mtlvk boot)
+- `dddbffd` FP16 SCVTF/UCVTF + metalhostd RunAtLoad
+- `3fce907` CFRunLoop + sim2host null-name / METAL_IN_SIM

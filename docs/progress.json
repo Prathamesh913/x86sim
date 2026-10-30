@@ -1,7 +1,7 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Arm64 touch fixed: HID displayUUID=x86Code-main-display + sync DispatchEvent; Settings tap launches Preferences. Stage 3 compact maps still in; JIT-metadata diet deferred. Next: SPEED (Metal\u2192Vulkan, native hot paths, AOT shared cache).",
+  "now": "Speed 1 partial: arm64 Metal\u2192Vulkan device path works (mtlprobe: clear/blit/events on RTX 5090). Pipelines blocked on MTLCompilerService multi-instance spawn. FP16 SCVTF + metalhostd CFRunLoop + sim2host fixes landed. Software home still the leave-running default until CA Metal.",
   "metrics": [
     [
       "Boot to home screen",
@@ -35,8 +35,8 @@
     ],
     [
       "Rendering",
-      "software",
-      "Metal \u2192 Vulkan not yet on arm64"
+      "software (Metal device OK; pipelines blocked on MTLCompilerService)",
+      "mtlprobe GPU clear/blit on RTX 5090; CA Metal next"
     ],
     [
       "Device",
@@ -72,10 +72,10 @@
     }
   ],
   "issues": [
+    "Metal pipelines: MTLCompilerService multi-instance create-copy fails / no stub on A64 (device+clear/blit work)",
     "Memory: ~3.56 GB real vs 1 GB goal \u2014 anon_host_jit_meta still 46% of PSS across processes; SB largest VMA now 288 MB",
     "Cold boot with park+strip: recent boots reached full home; more reps to call reliable",
     "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory",
-    "No Metal yet: black wallpaper, software rendering",
     "Profiling/memory-log switches can crash launchd_sim early in boot"
   ],
   "milestones": [
