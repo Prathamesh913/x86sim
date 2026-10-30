@@ -53,6 +53,7 @@ constexpr u64 kBuildId = 0x00000013ull;  // Speed 6: compact metadata, mapped AO
 u64 g_build = kBuildId;
 std::string g_key, g_aot_path;
 bool g_aot_eligible = false;
+bool g_aot_loaded = false;
 
 uint8_t g_uuid[16]{};
 bool g_uuid_ok = false;
@@ -106,11 +107,9 @@ bool aot_eligible(const std::string &exe) {
         if (list == ",all,") return (personality(0xffffffff) & ADDR_NO_RANDOMIZE) != 0;
         return list.find("," + base + ",") != std::string::npos;
     }
-    // Speed 8: not metalhostd (our Metal shim, one per app). With the image it took a guest NULL read now and then
-    // (Speed 6 aot1; Speed 8 2 of ~20 boots): a callee-saved register (MTLSimApplicationContext's `this`) comes back
-    // zero from libxpc's xpc_dictionary_get_data/create_reply (MTLSimImplementation+0x1f6c/+0x218c). Never without
-    // the image. Root cause open; X86CODE_A64_AOT_PROCS=all still includes it.
-    if (base == "metalhostd") return false;
+    // Speed 9: metalhostd is back on the image. Its Speed 8 NULL reads (MTLSimImplementation+0x218c/+0x1f6c) were not
+    // the image: the logs show them in runs without it too. A command on a connection whose init found no
+    // application context (NULL MTLSimApplicationContext*); host/metalhostd now cancels such connections.
     // Speed 7: every process that can map the image shared (ASLR off: launchd_sim's children). With lazy metadata a
     // daemon pays ~1 MB for it and its shared-cache code becomes shared pages. Elsewhere: apps and backboardd.
     if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) return true;
@@ -182,6 +181,7 @@ void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
     const bool share = &path == &g_aot_path && !(getenv("X86CODE_A64_AOT_SHARE") && atoi(getenv("X86CODE_A64_AOT_SHARE")) == 0);
     size_t n = Dynarmic::A64::Jit::LoadPersistentCache(shared, path, g_uuid, g_build, kCacheLo, kCacheHi, share);
     clock_gettime(CLOCK_MONOTONIC, &t1);
+    g_aot_loaded = n && &path == &g_aot_path;
     if (n)
         logf("jitcache: loaded %zu blocks from %s (%.1f MB, %.0f ms)", n, path.c_str(), st.st_size / 1048576.0,
              (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
@@ -217,12 +217,18 @@ void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string
 constexpr u64 kMinNewBlocks = 5000;
 std::atomic<u64> g_saved_blocks{0};
 
+// Speed 9: not in a process that loaded the AOT image (X86CODE_A64_AOT_AUTOSAVE=1 to keep it, for training .bins). Its
+// .bin is never read back while the image exists, yet every such process wrote one of ~240 MB (the image's blocks
+// registered so far): ~6.5 GB per boot.
 static bool autosave_on() {
     const char *e = getenv("X86CODE_A64_JITCACHE_AUTOSAVE");
+    const char *a = getenv("X86CODE_A64_AOT_AUTOSAVE");
+    if (g_aot_loaded && !(a && atoi(a) == 1)) return false;
     return !(e && atoi(e) == 0) && !(getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) &&
            !getenv("X86CODE_A64_AOT_BUILD");
 }
 static void save_if_grown(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
+    if (!autosave_on()) return;  // the image is loaded after the saver thread starts
     const u64 n = Dynarmic::A64::Jit::GetSharedStats(sc).blocks;
     if (n < g_saved_blocks.load() + kMinNewBlocks) return;
     timespec t0, t1;

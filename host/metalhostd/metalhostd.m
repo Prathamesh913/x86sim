@@ -30,6 +30,37 @@ extern int VKMTLRebind(const char* image_name_part, void* real, void* ours);
 
 #define RT_MTLSIMIMPL "/System/Library/PrivateFrameworks/MTLSimImplementation.framework/MTLSimImplementation"
 
+#if defined(__arm64__)
+// x86Code (Speed 9, arm64 runtime only; the frozen x86 path is not built with this): iOS 27's MTLSimImplementation
+// keeps a per-connection context { u32; dispatch_queue_t; shared_ptr<MTLSimApplicationContext> } and sets the app
+// pointer (+0x10) only in the connection's init message ("connectionType"). A secondary connection's init names its
+// primary's "processRef"; when MTLSimGlobalContext has no application for it, the pointer stays NULL and the next
+// command (deleteObject, newObjectCommand_DEPRECATED, ...) reads through it: metalhostd SIGSEGV (guest NULL read at
+// MTLSimImplementation+0x218c / +0x1f6c) and every client loses Metal. Instead such a connection is cancelled (the
+// client sees XPC_ERROR_CONNECTION_INVALID) and logged.
+extern pid_t x86_xpc_connection_get_pid(xpc_connection_t c) __asm__("_xpc_connection_get_pid");
+static void (*real_set_event_handler)(xpc_connection_t, xpc_handler_t);
+static void guarded_set_event_handler(xpc_connection_t c, xpc_handler_t h) {
+	xpc_handler_t hc = Block_copy(h);  // MRC: kept for the connection's lifetime
+	real_set_event_handler(c, ^(xpc_object_t e) {
+		if (xpc_get_type(e) != XPC_TYPE_DICTIONARY) { hc(e); return; }
+		xpc_connection_t r = xpc_dictionary_get_remote_connection(e);
+		void** ctx = r ? (void**)xpc_connection_get_context(r) : NULL;
+		const bool init = xpc_dictionary_get_value(e, "connectionType") != NULL;
+		if (ctx && !ctx[2] && !init) {
+			fprintf(stderr, "metalhostd: pid %d messageType %llu on a connection without an application context: cancelled\n",
+				x86_xpc_connection_get_pid(r), xpc_dictionary_get_uint64(e, "messageType"));
+			xpc_connection_cancel(r);
+			return;
+		}
+		hc(e);
+		if (init && ctx && !ctx[2])
+			fprintf(stderr, "metalhostd: pid %d init (connectionType %lld, processRef %llu) found no application\n",
+				x86_xpc_connection_get_pid(r), xpc_dictionary_get_int64(e, "connectionType"), xpc_dictionary_get_uint64(e, "processRef"));
+	});
+}
+#endif
+
 int main(int argc, char** argv) {
 	(void)argc; (void)argv;
 	setvbuf(stderr, NULL, _IOLBF, 0);
@@ -48,6 +79,11 @@ int main(int argc, char** argv) {
 			n += VKMTLRebind(images[i], real_all, (void*)VKMTLCopyAllDevices);
 		}
 		fprintf(stderr, "metalhostd: %d device entry points rebound\n", n);
+#if defined(__arm64__)
+		real_set_event_handler = dlsym(RTLD_DEFAULT, "xpc_connection_set_event_handler");
+		fprintf(stderr, "metalhostd: %d connection handler guards\n",
+			VKMTLRebind("MTLSimImplementation", real_set_event_handler, (void*)guarded_set_event_handler));
+#endif
 
 		id<MTLDevice> dev = VKMTLCreateSystemDefaultDevice();
 		if (!dev) {
