@@ -78,9 +78,10 @@ Cache::Cache() {
 thread_local Cache t_cache;
 void start_scavenger();
 
-uint32_t limit_for(int c) {  // cached blocks per class: about 64 KB, at least 8, at most 512
-    uint32_t n = 65536 / g_class_size[c];
-    return n < 8 ? 8 : n > 512 ? 512 : n;
+uint32_t limit_for(int c) {  // cached blocks per class: about 32 KB, at least 2, at most 256
+    // (Speed 8: was 64 KB / at least 8, so the 13 classes of 8-32 KB held up to 1.5 MB per thread)
+    uint32_t n = 32768 / g_class_size[c];
+    return n < 2 ? 2 : n > 256 ? 256 : n;
 }
 
 void init_classes() {
