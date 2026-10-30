@@ -1,12 +1,12 @@
 [submodule "external/darling"]
 	path = external/darling
-	url = git@github.com:designgears/darling.git
+	url = git@github.com:x86code/darling.git
 	branch = x86code
 [submodule "external/metal2vulkan"]
 	path = external/metal2vulkan
-	url = git@github.com:designgears/metal2vulkan.git
+	url = git@github.com:x86code/metal2vulkan.git
 	branch = x86code
 [submodule "external/dynarmic"]
 	path = external/dynarmic
-	url = git@github.com:designgears/dynarmic.git
+	url = git@github.com:x86code/dynarmic.git
 	branch = x86code
