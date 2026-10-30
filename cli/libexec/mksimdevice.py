@@ -241,7 +241,10 @@ def main():
         # (moved out of the dyld cache). launchd_sim discovers it as a multi-instance Application XPC
         # service (same as iOS 26.5 on x86). Do NOT install a single-instance LaunchDaemon for the
         # same label: that makes "create copy of service" fail with error 137 and every pipeline dies.
-        # If create-copy fails on A64, fix that path instead of masking with a non-instance job.
+        # A64: Metal.framework's executable is cache-only; without an on-disk Metal binary, xpc_bundle
+        # cannot resolve the framework and MTLCompiler lookups are "No such process" (error 3).
+        # cli/libexec/arm64/ensure-metal-framework.sh extracts Metal from the dyld cache into the
+        # framework (runtimes/ is gitignored; never commit the binary).
 
     # x86Code: cross-process IOSurfaces (host/iosurfaced): iosurfaced serves com.apple.IOSurface.Remote (what
     # CoreSimulator's SimRenderServer does on a Mac) and IOSURFACE_REMOTE_EMULATED is not set, so every process's

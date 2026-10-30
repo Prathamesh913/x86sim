@@ -449,5 +449,10 @@ int main(int argc, char** argv) {
 	});
 	xpc_connection_resume(l);
 	fprintf(stderr, "iosurfaced: serving com.apple.IOSurface.Remote\n");
-	dispatch_main();
+	// x86Code: CFRunLoopRun keeps the main thread draining the main queue. dispatch_main's
+	// pthread_exit parks the A64 JIT main thread so XPC peer handlers never run (backboardd
+	// hangs after "simfb: swapchain" waiting for Initialize). Same fix as metalhostd.
+	fprintf(stderr, "iosurfaced: CFRunLoopRun\n");
+	CFRunLoopRun();
+	return 0;
 }

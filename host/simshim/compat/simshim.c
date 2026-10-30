@@ -304,8 +304,11 @@ static void shim_xpc_connection_enable_sim2host_4sim(xpc_connection_t c)
 	// x86Code: and FileProvider's host service, served in the simulator by host/fpsim2host
 	if (name && strcmp(name, "com.apple.FileProvider.sim2host") == 0)
 		return;
-	// x86Code: iOS 27 may enable_sim2host before set_name; in-sim metalhostd cannot take host framing.
-	if (!name && getenv("X86CODE_METAL_IN_SIM"))
+	// x86Code: iOS 27 may enable_sim2host before set_name (MTLSimDriver, and possibly IOSurface.Remote).
+	// Our stand-ins (metalhostd, iosurfaced, fpsim2host) are in-sim and cannot take host framing; a null-name
+	// enable hangs the first sync message. Skip all unnamed enables — named host-forwarded services set the
+	// name first. X86CODE_METAL_IN_SIM remains set by mksimdevice for documentation / older shims.
+	if (!name)
 		return;
 	xpc_connection_enable_sim2host_4sim(c);
 }

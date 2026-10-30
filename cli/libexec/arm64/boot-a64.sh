@@ -39,6 +39,10 @@ stop_a64_mtlvk() {
 	rm -f "$ST/mtlvk.pid" "$ST/mtlvk.sock"
 }
 if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ]; then
+	# On-disk Metal binary so xpc_bundle can find MTLCompilerService.xpc (see ensure-metal-framework.sh).
+	"$X/cli/libexec/arm64/ensure-metal-framework.sh" || {
+		echo "boot-a64: ensure-metal-framework failed; pipelines will not compile" >&2
+	}
 	MTLVK_BIN=${MTLVK:-$X86SIM_MTLVK}
 	stop_a64_mtlvk
 	export X86CODE_MTLVK_SOCKET=$ST/mtlvk.sock
