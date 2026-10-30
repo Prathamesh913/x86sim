@@ -1,7 +1,7 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Speed 1 partial: arm64 Metal\u2192Vulkan device path works (mtlprobe: clear/blit/events on RTX 5090). Pipelines blocked on MTLCompilerService multi-instance spawn. FP16 SCVTF + metalhostd CFRunLoop + sim2host fixes landed. Software home still the leave-running default until CA Metal.",
+  "now": "Speed 1b: CA on Metal\u2192Vulkan on arm64. MTLCompilerService works (extract on-disk Metal from dyld cache); iosurfaced CFRunLoopRun fixes the post-swapchain hang. mtlprobe 43/0; backboardd GPU presents (ready_at_submit=0). Scroll: touch\u2192frame p50 24 ms (was 247), backboardd 10% (was 102%); scroll fps 24 (was 40, CA-paced). Black wallpaper (no PosterBoard). Leave-running: GPU home on :0.",
   "metrics": [
     [
       "Boot to home screen",
@@ -35,8 +35,8 @@
     ],
     [
       "Rendering",
-      "software (Metal device OK; pipelines blocked on MTLCompilerService)",
-      "mtlprobe GPU clear/blit on RTX 5090; CA Metal next"
+      "Metal\u2192Vulkan (CA / backboardd on RTX 5090)",
+      "mtlprobe 43 PASS; scroll latency p50 24 ms; bbd 10% CPU"
     ],
     [
       "Device",
@@ -72,13 +72,18 @@
     }
   ],
   "issues": [
-    "Metal pipelines: MTLCompilerService multi-instance create-copy fails / no stub on A64 (device+clear/blit work)",
+    "CA Metal home is black wallpaper (no PosterBoard); icons faint/missing vs software \u2014 GPU composites at ~24 fps",
+    "Idle SpringBoard ~160% of a core while GPU-presenting (~24 fps continuous); investigate spin",
     "Memory: ~3.56 GB real vs 1 GB goal \u2014 anon_host_jit_meta still 46% of PSS across processes; SB largest VMA now 288 MB",
     "Cold boot with park+strip: recent boots reached full home; more reps to call reliable",
     "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory",
     "Profiling/memory-log switches can crash launchd_sim early in boot"
   ],
   "milestones": [
+    [
+      "31-speed1b-gpu-home.png",
+      "Speed 1b: first CA Metal\u2192Vulkan frames on arm64 (RTX 5090); black wallpaper, GPU presents"
+    ],
     [
       "15-stage3-compact-maps-home.png",
       "Stage 3: compact patch+fastmem maps \u2014 SB 1.4\u21921.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"

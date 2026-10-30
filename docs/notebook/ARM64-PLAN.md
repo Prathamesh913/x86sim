@@ -734,19 +734,44 @@ through. MTLCompiler moved out of the dyld cache onto disk as `Metal.framework/X
   100 command buffers in order (~35–40 ms).
 - Fixes that unblocked the hang: FEAT_FP16 `SCVTF/UCVTF Hd,Wn` interpret (`1ee20184`); metalhostd `CFRunLoopRun`
   instead of `dispatch_main` parking; simshim skips `enable_sim2host` for metal (+ null name when `X86CODE_METAL_IN_SIM`).
+- **Speed 1b:** compute/render pipelines + `newLibraryWithSource` (43/0); real iosurfaced; CA Metal presents on GPU.
 
-### Gap (blocks CA Metal / probe pipelines)
-`MTLCompilerService` multi-instance spawn. Without a LaunchDaemon, lookup is "No such process" (no XPC stub on A64
-min boots — Metal.framework binary lives only in the shared cache; on-disk tree has XPCServices only). A plain
-LaunchDaemon for the same label makes `create copy of service: 137`. x86 26.5 gets a stub from `xpc_bundle` and
-spawns UUID instances. Need a working multi-instance / xpc_bundle registration path for the on-disk `.xpc`, then
-re-run probe pipelines and `X86CODE_METAL=backboardd`.
+### Speed 1b (same day): MTLCompiler + iosurfaced + CA Metal
+- **MTLCompilerService:** iOS 27's `Metal.framework` executable is cache-only; without an on-disk `Metal` binary,
+  `xpc_bundle` cannot resolve `XPCServices/MTLCompilerService.xpc` and lookups fail with error 3. Fix:
+  `cli/libexec/arm64/ensure-metal-framework.sh` extracts Metal from the dyld cache into the framework (`runtimes/`
+  gitignored). Do **not** install a LaunchDaemon for the label (create-copy 137). Probe then: **43 PASS / 0 FAIL**
+  (compute + render pipelines, `newLibraryWithSource`, AIR→SPIR-V via mtlvk). Cold first pipeline ~4 s under JIT.
+- **iosurfaced hang:** `dispatch_main` parks the A64 JIT main thread so XPC handlers never run; backboardd stuck
+  after `simfb: swapchain`. Same fix as metalhostd: `CFRunLoopRun`. Software + real IOSurface publishes frames.
+  simshim now skips **all** null-name `enable_sim2host` (iOS 27 enable-before-set_name).
+- **CA Metal:** `X86CODE_METAL=backboardd` + `X86CODE_IOSURFACE=1`. MTLCompilerService UUID instances spawn;
+  metalhostd builds CA pipelines; simfb presents wait on GPU (`ready_at_submit=0`). Screenshot
+  `docs/screens/arm64/31-speed1b-gpu-home.png` (black wallpaper — no PosterBoard; same as software leave-running).
 
 ### Metrics
-Software baseline (before): see scratch `speed1-sw-*.txt` (~3 min boot, software frames). Metal UI after: not yet
-(no shader pipelines). Probe GPU clear ~100 ms first CB; 100 CBs ~35 ms once the device is up.
+| | Software baseline | CA Metal (Speed 1b) |
+|---|---|---|
+| Scroll fps while moving | ~40 | ~24 (CA-paced ~42 ms) |
+| Frame time p50 | 25 ms | 41.7 ms |
+| Touch→frame latency p50 / max | ~247 / ~950 ms | **23.6 / 44.1 ms** |
+| backboardd CPU while scrolling | ~102% | **~10%** |
+| Total CPU while scrolling | ~123% | **~25%** |
+| Idle: frames / 12 s | few | 293 (~24 fps continuous) |
+| Idle: backboardd | low | ~6.7%; SpringBoard ~160% (gap) |
+
+Probe GPU clear ~100 ms first CB; 100 CBs ~35–42 ms once the device is up. Scroll GPU wait age ~2–6 ms (CA late).
+
+### Gaps after Speed 1b
+1. Home content still black wallpaper (PosterBoard out for memory); icons not clearly visible on GPU path.
+2. Idle SpringBoard ~160% of a core while GPU-presenting — investigate spin / display link.
+3. Scroll fps 24 vs software 40 — CA pacing under JIT; GPU itself is fast (age 2–6 ms).
+4. metal2vulkan: no AIR changes required for iOS 27 probe/CA shaders used so far.
 
 ### Commits
 - `dff59a5` scaffolding (iOS 27 selectors, arm64 shims, mtlvk boot)
 - `dddbffd` FP16 SCVTF/UCVTF + metalhostd RunAtLoad
 - `3fce907` CFRunLoop + sim2host null-name / METAL_IN_SIM
+- `dae5b4e` docs Speed 1 + progress.json
+- `77cd92f` ensure-metal-framework + iosurfaced CFRunLoop + simshim null-name skip
+- `11cc869` arm64 iosurfaced/metalhostd/mtlprobe Mach-Os
