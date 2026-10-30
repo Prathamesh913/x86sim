@@ -33,6 +33,12 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
+#include <pthread.h>
+#include <sys/syscall.h>
+#include <sys/resource.h>
+#include <atomic>
+#include <thread>
 
 namespace a64 {
 
@@ -41,7 +47,7 @@ namespace {
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
 // Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
-constexpr u64 kBuildId = 0x00000010ull;  // Speed 5: CallFunction marks blocks non-persistable (FP/vector fallbacks)
+constexpr u64 kBuildId = 0x00000011ull;  // Speed 5: LDP high-half first (objc bucket race), linked AOT blocks (A64JC06)
 // kBuildId (bits 0-15), code-shaping env flags (16-17), libarm64jit build-id / load base hash (32-63).
 u64 g_build = kBuildId;
 std::string g_key, g_aot_path;
@@ -182,8 +188,60 @@ void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string
     logf("jitcache: saved %.1f MB to %s", bytes / 1048576.0, dst.c_str());
 }
 
+// Speed 5: the cache used to be written only on SIGUSR1 or at exit with X86CODE_A64_STATS, so normal use never warmed
+// it. Now a low-priority thread saves this process's .bin once translation has been quiet for ~20 s and at least
+// kMinNewBlocks blocks were added since the last save/load, and __exit saves under the same threshold
+// (jitcache_save_on_exit). The snapshot holds the shared lock only for the copy (no unlink; see SavePersistentCache).
+// X86CODE_A64_JITCACHE_AUTOSAVE=0 turns both off.
+constexpr u64 kMinNewBlocks = 5000;
+std::atomic<u64> g_saved_blocks{0};
+
+static bool autosave_on() {
+    const char *e = getenv("X86CODE_A64_JITCACHE_AUTOSAVE");
+    return !(e && atoi(e) == 0) && !(getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) &&
+           !getenv("X86CODE_A64_AOT_BUILD");
+}
+static void save_if_grown(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
+    const u64 n = Dynarmic::A64::Jit::GetSharedStats(sc).blocks;
+    if (n < g_saved_blocks.load() + kMinNewBlocks) return;
+    timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    jitcache_try_save(sc);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    g_saved_blocks = n;
+    logf("jitcache: %s save at %llu blocks (%.0f ms)", why, (unsigned long long)n,
+         (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
+}
+
 void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &sp) {
     g_shared = sp;
+    g_saved_blocks = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;  // what the load brought in
+    if (!g_uuid_ok || !autosave_on()) return;
+    // The thread is not a Darling thread: with signals unblocked, a process-directed signal delivered to it made
+    // mldr abort (metalhostd SIGABRT on the saver's tid). Block everything here; the guest's threads take them.
+    sigset_t all, old;
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &old);
+    std::thread([] {
+        setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 19);
+        u64 last = 0;
+        int quiet = 0;
+        for (;;) {
+            sleep(10);
+            auto sp = g_shared.lock();
+            if (!sp) return;
+            const u64 n = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;
+            quiet = n == last ? quiet + 1 : 0;
+            last = n;
+            if (quiet >= 2) save_if_grown(*sp, "idle");
+        }
+    }).detach();
+    pthread_sigmask(SIG_SETMASK, &old, nullptr);
+}
+
+void jitcache_save_on_exit() {
+    if (!autosave_on()) return;
+    if (auto sp = g_shared.lock()) save_if_grown(*sp, "exit");
 }
 
 // X86CODE_A64_AOT_BUILD=1, at the builder's exit: translate the union of every training .bin's blocks (same key)
@@ -222,8 +280,10 @@ void jitcache_aot_build(GuestThread &t) {
 }
 
 void jitcache_save_if_shared() {
-    if (auto sp = g_shared.lock())
+    if (auto sp = g_shared.lock()) {
         jitcache_try_save(*sp);
+        g_saved_blocks = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;
+    }
 }
 
 }  // namespace a64

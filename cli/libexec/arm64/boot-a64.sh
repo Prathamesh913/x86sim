@@ -65,7 +65,7 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
 	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
-	com.apple.cloudd com.apple.diagnosticd com.apple.nsurlsessiond"
+	com.apple.cloudd com.apple.diagnosticd com.apple.nsurlsessiond com.apple.appprotectiond"
 # x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No PosterBoard: it spawns a flock of
 # poster extensions (~450 MB each, 10+ processes, +5 GB) that push SHARED=0 past 13 GB before home. No chronod
 # (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
@@ -75,6 +75,8 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # in the job set, securityd busy-retries those Mach lookups (~1.9 cores idle). Those two stay
 # runnable (not parked): a parked MachServices daemon accepts the lookup then hangs clients forever.
 # nsurlsessiond: without it cloudd busy-retries getActiveSessionIdentifiers (~70% of a core + huge log).
+# appprotectiond (Speed 5): without it SpringBoard's ServerBackedClientPolicyStore retries com.apple.appprotectiond.read
+# ~5x/s for the whole boot (on-demand, EnablePressuredExit: idle cost only once looked up).
 # openurl: com.x86code.openurl (arm64 build) so simtouch.py app/openurl works on the a64 device.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd"

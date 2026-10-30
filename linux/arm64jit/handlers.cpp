@@ -1,3 +1,5 @@
+#include <unordered_map>
+#include <mutex>
 // libarm64jit: libsystem_kernel/platform/pthread exports that the generic pass-through can't serve: variadic
 // functions, function-pointer arguments (native -> guest trampolines), bool results, Darling names that differ from
 // the arm64 ones (64-bit-inode stat), the setjmp family (guest code) and the guest-side init functions (no-ops: the
@@ -157,6 +159,80 @@ u64 reserve_aligned(u64 size, u64 mask) {
     if (end > aend) munmap((void *)aend, end - aend);
     return a;
 }
+// Speed 5: guest pages are 16K, Darling's are 4K. Memory that native code maps for the guest in the host range
+// (Mach out-of-line message data, Darling's own vm_allocate) is 4K-granular, and the guest frees it in 16K pages:
+// vm_deallocate/munmap then spilled into the next mapping. When that was a libsystem stub image
+// (memfd:libsystem_*, mapped by dyld_sim; every GOT entry for libsystem points there) or another dylib, the next
+// call into it jumped to an unmapped page (Preferences/SpringBoard SIGSEGVs with guest pc in an unmapped 0x7f... page,
+// e.g. from _dispatch_set_priority_and_mach_voucher_slow -> _pthread_set_properties_self). For a host-range request,
+// a file-backed mapping that the range only runs into (it does not start inside it) is left mapped: the request is
+// trimmed to end where that mapping begins; a request starting 4K- but not 16K-aligned (never one of our 16K guest
+// allocations) is also kept inside the mapping that contains its start.
+std::atomic<bool> g_stub_guard_armed{false};  // set once dyld_sim has mapped every image (host.cpp)
+constexpr u64 kHostRangeLo = 0x100000000000ull;
+// Out-of-line memory Darling maps into a received Mach message (4K-granular, host range): its true size, so a later
+// guest deallocate in 16K pages can be clipped to it (OOL data is the main source of those regions).
+static std::unordered_map<u64, u64> g_ool;
+static std::mutex g_ool_mu;
+static void record_ool(const uint8_t *msg) {
+    uint32_t bits, size;
+    memcpy(&bits, msg, 4);
+    memcpy(&size, msg + 4, 4);
+    if (!(bits & 0x80000000u) || size < 28) return;  // MACH_MSGH_BITS_COMPLEX
+    uint32_t n;
+    memcpy(&n, msg + 24, 4);
+    const uint8_t *d = msg + 28, *end = msg + size;
+    std::lock_guard<std::mutex> l(g_ool_mu);
+    if (g_ool.size() > 65536) g_ool.clear();  // stale entries (freed some other way)
+    for (uint32_t k = 0; k < n && d + 12 <= end; k++) {
+        const uint8_t type = d[11];
+        if (type == 0) { d += 12; continue; }  // port
+        if (d + 16 > end) break;
+        u64 addr; uint32_t cnt;
+        memcpy(&addr, d, 8);
+        memcpy(&cnt, d + 12, 4);
+        const u64 bytes = type == 2 ? (u64)cnt * 4 : cnt;  // OOL ports: count names
+        if ((type == 1 || type == 2 || type == 3) && addr >= kHostRangeLo && bytes)
+            g_ool[addr] = (bytes + 0xfff) & ~0xfffull;
+        d += 16;
+    }
+}
+// End of the unmap [a, a+len) clipped at the first file-backed mapping that starts inside (a, a+len).
+static u64 clip_unmap(u64 a, u64 len) {
+    u64 end = a + len;
+    if (!g_stub_guard_armed.load(std::memory_order_relaxed) || a < kHostRangeLo || !len) return end;
+    {
+        std::lock_guard<std::mutex> l(g_ool_mu);
+        if (auto it = g_ool.find(a); it != g_ool.end()) {
+            if (it->second < len) end = a + it->second;
+            g_ool.erase(it);
+        }
+    }
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return end;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        unsigned long lo, hi, off, ino; char perms[8], dev[16]; int pos = 0;
+        if (sscanf(line, "%lx-%lx %7s %lx %15s %lu %n", &lo, &hi, perms, &off, dev, &ino, &pos) < 6) continue;
+        if (lo >= end) break;
+        const char *path = line + pos;
+        if (lo > a && lo < end && (*path == '/' || ino != 0)) { end = lo; break; }
+        // a 4K-aligned start is Darling's own 4K-granular mapping (ours are 16K-aligned): stop at its VMA's end
+        if ((a & 0x3fff) && lo <= a && a < hi && hi < end) { end = hi; break; }
+    }
+    fclose(f);
+    return end;
+}
+static bool guard_unmap(GuestThread &t, u64 a, u64 len, const char *what, u64 *new_len) {
+    const u64 end = clip_unmap(a, len);
+    *new_len = end - a;
+    if (end == a + len) return false;
+    static std::atomic<int> n{0};
+    if (n++ < 8)
+        logf("%s(%#lx, %#lx) would spill into the next file mapping at %#lx: trimmed (lr %#lx)", what, (unsigned long)a,
+             (unsigned long)len, (unsigned long)end, (unsigned long)t.x(30));
+    return true;
+}
 // kern_return_t f(task, addr *, size, mask, flags, ...rest) with rest as 64-bit native args
 static void vm_map_like(GuestThread &t, u32 i, u64 *ints, int addr_arg, int size_arg, int mask_arg, int flags_arg) {
     u64 *addrp = (u64 *)ints[addr_arg];
@@ -176,6 +252,22 @@ static void vm_map_like(GuestThread &t, u32 i, u64 *ints, int addr_arg, int size
     t.set_x(0, (u32)r.rax);
 }
 static void load_regs(GuestThread &t, u64 *ints) { for (int k = 0; k < 16; k++) ints[k] = k < 8 ? t.x(k) : 0; }
+// munmap(addr, len)
+static void h_munmap(GuestThread &t, u32 i) {
+    u64 nl;
+    if (guard_unmap(t, t.x(0), t.x(1), "munmap", &nl)) {
+        if (nl) t.set_x(1, nl); else { t.set_x(0, 0); return; }
+    }
+    h_generic(t, i);
+}
+// (mach_)vm_deallocate(task, addr, size)
+static void h_vm_deallocate(GuestThread &t, u32 i) {
+    u64 nl;
+    if (guard_unmap(t, t.x(1), t.x(2), "vm_deallocate", &nl)) {
+        if (nl) t.set_x(2, nl); else { t.set_x(0, 0); return; }
+    }
+    h_generic(t, i);
+}
 // (mach_)vm_map(task, addr*, size, mask, flags, object, offset, copy | int cur, int max, uint inherit)
 static void h_vm_map(GuestThread &t, u32 i) {
     u64 ints[16]; load_regs(t, ints);
@@ -220,6 +312,13 @@ static void h_msg_overwrite(GuestThread &t, u32 i) {
     u64 fps[8] = {}; NRet r;
     a64_ncall(g_thunks[i].native, ints, fps, &r);
     t.set_x(0, (u32)r.rax);
+    if ((u32)r.rax == 0 && (ints[1] & 2 /* MACH_RCV_MSG */)) record_ool((const uint8_t *)(ints[7] ? ints[7] : ints[0]));
+}
+// mach_msg(msg, option, send_size, rcv_size, rcv_name, timeout, notify)
+static void h_mach_msg(GuestThread &t, u32 i) {
+    const u64 msg = t.x(0), opt = t.x(1);
+    h_generic(t, i);
+    if ((u32)t.x(0) == 0 && (opt & 2 /* MACH_RCV_MSG */) && msg) record_ool((const uint8_t *)msg);
 }
 
 // Generic >8-argument functions: the 9th+ arguments are packed by natural size/alignment on the Apple arm64 stack
@@ -301,6 +400,7 @@ void print_stats();
 static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends here
     if (getenv("X86CODE_A64_AOT_BUILD")) jitcache_aot_build(t);
     print_stats();
+    jitcache_save_on_exit();
     ((void (*)(int))g_thunks[i].native)((int)t.x(0));
 }
 
@@ -349,7 +449,8 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_mach_msg_server_importance", h_callbacks<0>}, {"___sigaction", h_sigaction}, {"___platform_sigaction", h_platform_sigaction},
         {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
         {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
-        {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite},
+        {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"_munmap", h_munmap}, {"___munmap", h_munmap},
+        {"_mach_vm_deallocate", h_vm_deallocate}, {"_vm_deallocate", h_vm_deallocate}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite}, {"_mach_msg", h_mach_msg},
         {"__exit", h_exit}, {"___exit", h_exit}, {"_abort_with_payload", h_abort_with}, {"_abort_with_reason", h_abort_with}, {"_pthread_exit", h_pthread_exit}, {"___pthread_kill", h_kill_like}, {"_pthread_kill", h_kill_like},
         {"___kill", h_kill_like}, {"_kill", h_kill_like},
         {"___abort_with_payload", h_abort_with},

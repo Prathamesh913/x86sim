@@ -234,6 +234,16 @@ static bool in_const_data(u64 a) {
     for (int i = 0; i < g_nconst; i++) if (a >= g_const_lo[i] && a < g_const_hi[i]) return true;
     return false;
 }
+static unsigned long hex(const char *p, const char **end) {  // no locale/TLS (strtoul reads the locale via TLS)
+    unsigned long v = 0;
+    for (;; p++) {
+        int d = *p >= '0' && *p <= '9' ? *p - '0' : *p >= 'a' && *p <= 'f' ? *p - 'a' + 10 : -1;
+        if (d < 0) break;
+        v = v * 16 + d;
+    }
+    if (end) *end = p;
+    return v;
+}
 // Fatal-fault report: the mapping (from /proc/self/maps, read with raw syscalls into a static buffer) of an address.
 static void maps_line(u64 a, char *out, size_t n) {
     static char buf[1 << 20];
@@ -247,13 +257,14 @@ static void maps_line(u64 a, char *out, size_t n) {
     for (char *l = buf; *l;) {
         char *e = strchr(l, '\n');
         if (e) *e = 0;
-        char *q;
-        unsigned long lo = strtoul(l, &q, 16), hi = strtoul(*q == '-' ? q + 1 : q, &q, 16);
+        const char *q;
+        unsigned long lo = hex(l, &q), hi = hex(*q == '-' ? q + 1 : q, &q);
         if (a >= lo && a < hi) {
             // "lo-hi perms offset ...": report the file offset (= ELF vaddr for these libraries' segments)
             while (*q == ' ') q++;
             while (*q && *q != ' ') q++;
-            unsigned long off = strtoul(q, nullptr, 16);
+            while (*q == ' ') q++;
+            unsigned long off = hex(q, nullptr);
             const char *path = strrchr(l, ' ');
             snprintf(out, n, "%s+%#lx", path ? path + 1 : "?", (unsigned long)(a - lo + off));
             return;
@@ -281,23 +292,13 @@ static void native_backtrace(ucontext_t *ctx) {
 // Speed 5: a fault whose RIP is not in JIT code (Darling's native libsystem_malloc / kernel / pthread, libarm64jit,
 // a jump to a non-exec address) is fatal. Chaining it to Darling's sigexc handler parked the faulting thread in a
 // darlingserver sigprocess RPC forever (often holding the zone lock of the malloc that faulted), so the process hung
-// at 0% instead of crashing and being restarted by launchd_sim. Now: report (an alarm watchdog kills the process if
-// reporting itself blocks; a nested fault in the handler kills at once), then SIGKILL. X86CODE_A64_NATIVE_FAULT=chain
+// at 0% instead of crashing and being restarted by launchd_sim. Now: report (lock-free; a nested fault in the handler
+// kills at once; no SIGALRM watchdog: unblocking a pending SIGALRM killed the process mid-report), then SIGKILL. X86CODE_A64_NATIVE_FAULT=chain
 // restores the old chaining.
 static void fatal_exit(int code) {
     (void)code;
     syscall(SYS_kill, getpid(), SIGKILL);
     syscall(SYS_exit_group, 128 + code);
-}
-static void arm_fault_watchdog() {
-    struct sigaction dfl{};
-    dfl.sa_handler = SIG_DFL;
-    syscall(SYS_rt_sigaction, SIGALRM, &dfl, nullptr, 8);
-    sigset_t m;
-    sigemptyset(&m);
-    sigaddset(&m, SIGALRM);
-    syscall(SYS_rt_sigprocmask, SIG_UNBLOCK, &m, nullptr, 8);
-    alarm(5);
 }
 static void on_fault(int sig, siginfo_t *si, void *uc) {
     auto *ctx = (ucontext_t *)uc;
@@ -305,21 +306,37 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         struct sigaction *old = &g_old_segv;
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
     }
-    static thread_local int depth;
-    if (depth++) {
-        static const char m[] = "arm64host: fault inside the fault handler; killing the process\n";
-        if (write(2, m, sizeof m - 1) < 0) {}
+    // nesting guard without TLS (a Darling-created thread may have no usable glibc TLS): the tid in the handler
+    static std::atomic<long> in_handler_tid{0};
+    static std::atomic<int> nested{0};
+    const long tid = syscall(SYS_gettid);
+    if (in_handler_tid.load() == tid) {
+        if (nested++ < 2)
+            logf("fault inside the fault handler: signal %d addr %p rip %#llx; killing the process", sig, si->si_addr,
+                 (unsigned long long)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RIP]);
         fatal_exit(sig);
     }
+    long expect = 0;
+    in_handler_tid.compare_exchange_strong(expect, tid);
     const u64 rip = (u64)ctx->uc_mcontext.gregs[REG_RIP];
     static const char *nf = getenv("X86CODE_A64_NATIVE_FAULT");
     const bool fatal = !Dynarmic::Backend::IsJitCodeAddress(rip) && !(nf && !strcmp(nf, "chain"));
-    if (fatal) arm_fault_watchdog();
     char buf[256];
     int n = snprintf(buf, sizeof buf, "signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
                      (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP], (unsigned long long)ctx->uc_mcontext.gregs[REG_ERR]);
     if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = 0;
     logf("%s", buf);
+    {
+        char m[256];
+        maps_line((u64)si->si_addr, m, sizeof m);
+        logf("  fault addr in %s", m[0] ? m : "(unmapped)");
+        if (GuestThread *t = GuestThread::current()) {
+            maps_line(t->jit->GetPC(), m, sizeof m);
+            logf("  guest pc in %s", m[0] ? m : "(unmapped)");
+            maps_line(t->x(30), m, sizeof m);
+            logf("  guest lr in %s", m[0] ? m : "(unmapped)");
+        }
+    }
     if (getenv("X86CODE_A64_FAULTBYTES")) {  // debug: the faulting host instruction's first bytes
         auto *ip = (const uint8_t *)ctx->uc_mcontext.gregs[REG_RIP];
         logf("rip bytes %02x %02x %02x %02x %02x %02x", ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
@@ -335,7 +352,8 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         const u64 x20 = t->x(20), x21 = t->x(21), x0 = t->x(0);
         if (x20) {
             u32 count = 0;
-            std::memcpy(&count, reinterpret_cast<void*>(x20 + 0xc), 4);
+            struct iovec lo{&count, 4}, re{reinterpret_cast<void*>(x20 + 0xc), 4};  // x20 may be unmapped
+            if (syscall(SYS_process_vm_readv, getpid(), &lo, 1, &re, 1, 0) != 4) count = 0;
             const u64 expect = count ? (x21 + (x0 % count) * 16) : x21;
             logf("  [x20+0xc] count=%u expect_x22 %#lx (x0%%count=%lu)", count, (unsigned long)expect,
                  count ? (unsigned long)(x0 % count) : 0ul);
@@ -348,7 +366,7 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         logf("fatal native fault (rip not in JIT code): killing pid %d", (int)getpid());
         fatal_exit(sig);
     }
-    depth--;
+    if (in_handler_tid.load() == tid) in_handler_tid = 0;
     struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;
     if (old->sa_flags & SA_SIGINFO) old->sa_sigaction(sig, si, uc);
     else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) old->sa_handler(sig);
@@ -485,7 +503,9 @@ static void install_fault_report() {
     hook_native_abort();
     { struct sigaction sa{}; sa.sa_sigaction = on_abrt; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigaction(SIGABRT, &sa, nullptr); }
     struct sigaction sa{};
-    sa.sa_sigaction = on_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    // SA_NODEFER: a fault inside the report re-enters on_fault (depth guard: one log line, then kill); with SIGSEGV
+    // blocked the kernel killed the process silently and the report stopped after its first line.
+    sa.sa_sigaction = on_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigaction(SIGSEGV, &sa, &g_old_segv); sigaction(SIGBUS, &sa, &g_old_bus);
 }
 
@@ -649,6 +669,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     u64 glue = 0;
     u64 args[9] = {(u64)argc, gargv, genvp, gapple, main_exe.mh, dyld.mh, dyld.slide, helpers, (u64)&glue};
     u64 main_fn = t.call(dyld.entry, args, 9).rax;
+    g_stub_guard_armed = true;  // stub dylibs are mapped now: refuse later unmaps of them (handlers.cpp)
     if (getenv("X86CODE_A64_STATS"))
         logf("stubs %.1f ms, setup %.1f ms, dyld_sim prepare done at %.1f ms; thunk calls %lu", t_stubs, t_setup, ms_since(g_t0),
              (unsigned long)t.svc_count);
