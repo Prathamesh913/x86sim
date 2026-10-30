@@ -8,7 +8,9 @@ spent ~200 ms redrawing each 590x1278 photo image (about 5 fps).
 Mouse: click/drag = touch; Ctrl+drag = two-finger pinch around the window centre (fingers mirrored through the
 centre); Shift+drag = two-finger pan (fingers 100 px apart at device scale, moving together). Keyboard: typed keys go
 to the simulator's hardware keyboard (host/simhid). F1 or Ctrl+H = home button, F2 = lock button, F3/F4 = volume
-up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in)."""
+up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in).
+Console pane (right; SIMVIEW_CONSOLE=0 hides it): last-frame age (stall check) and the newest lines of the sim's
+logs, followed once a second. Logs: SIMVIEW_LOGS (colon-separated dirs), default the a64 and x86 device log dirs."""
 import os, threading, socket, struct, sys, time
 import gi
 # x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole frame texture for every
@@ -101,8 +103,74 @@ def on_activate(app):
     dw, dh = state["size"]
     pic.set_size_request(dw // div, dh // div)
     pic.set_can_shrink(True)
-    win.set_child(pic)
-    win.set_default_size(dw // div, dh // div)
+    console = os.environ.get("SIMVIEW_CONSOLE", "1") != "0"
+    if console:
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        pic.set_hexpand(True)
+        box.append(pic)
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side.set_size_request(560, -1)
+        status = Gtk.Label(xalign=0)
+        status.set_markup("<tt>waiting for frames</tt>")
+        side.append(status)
+        tv = Gtk.TextView(editable=False, cursor_visible=False, monospace=True, wrap_mode=Gtk.WrapMode.CHAR)
+        sw = Gtk.ScrolledWindow(vexpand=True)
+        sw.set_child(tv)
+        side.append(sw)
+        box.append(side)
+        win.set_child(box)
+        win.set_default_size(dw // div + 560, dh // div)
+        buf = tv.get_buffer()
+        root = os.path.dirname(here)
+        dirs = os.environ.get("SIMVIEW_LOGS") or ":".join([
+            os.path.join(os.path.dirname(root), "var/device-a64/data/var/log"),
+            "/home/bobby/scratch/x86code/a64prefix/private/var/tmp/x86code-a64",
+            os.path.join(x86config.data(), "var/log")])
+        offs = {}
+
+        def poll():
+            now = time.monotonic()
+            last = state.get("frame_at")
+            age = "no frame yet" if last is None else "%.0f s ago" % (now - last)
+            stalled = last is not None and now - last > 10
+            status.set_markup("<tt>frame %s, last %s%s</tt>" % (state["seq"], GLib.markup_escape_text(age),
+                              "  <span foreground='red'>STALLED?</span>" if stalled else ""))
+            new = []
+            for d in dirs.split(":"):
+                try:
+                    names = os.listdir(d)
+                except OSError:
+                    continue
+                for n in names:
+                    if not n.endswith(".log"):
+                        continue
+                    f = os.path.join(d, n)
+                    try:
+                        size = os.path.getsize(f)
+                    except OSError:
+                        continue
+                    o = offs.get(f)
+                    if o is None or size < o:   # first sight: only the tail; truncated: from the start
+                        o = max(0, size - 2048) if o is None else 0
+                    if size > o:
+                        with open(f, "rb") as fh:
+                            fh.seek(o)
+                            chunk = fh.read(min(size - o, 65536)).decode("utf-8", "replace")
+                        tag = n[:-4].replace("com.apple.", "")
+                        new += ["[%s] %s" % (tag, l) for l in chunk.splitlines() if l.strip()]
+                    offs[f] = size
+            if new:
+                buf.insert(buf.get_end_iter(), "\n".join(new[-300:]) + "\n")
+                extra = buf.get_line_count() - 2000
+                if extra > 0:
+                    buf.delete(buf.get_start_iter(), buf.get_iter_at_line(extra)[1])
+                tv.scroll_to_iter(buf.get_end_iter(), 0.0, False, 0, 1)
+            return GLib.SOURCE_CONTINUE
+
+        GLib.timeout_add_seconds(1, poll)
+    else:
+        win.set_child(pic)
+        win.set_default_size(dw // div, dh // div)
 
     def norm(x, y):
         w, h = pic.get_width() or 1, pic.get_height() or 1
@@ -165,6 +233,7 @@ def on_activate(app):
         pic.set_paintable(tex)
         state["size"] = (w, h)
         now = time.monotonic()
+        state["frame_at"] = now
         f = state["fps"] = [t for t in state["fps"] if t > now - 1.0] + [now]
         win.set_title("x86Code iOS Simulator — frame %d, %d fps" % (seq, len(f)))
         state["shown"] = state.get("shown", 0) + 1

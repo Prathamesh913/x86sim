@@ -155,10 +155,7 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         int mb = getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256;
         if (mb > 0 && mb < 64) mb = 256;
         c.code_cache_size = (size_t)mb << 20;
-        auto sc = Dynarmic::A64::Jit::MakeSharedCode(c);
-        jitcache_set_shared(sc);
-        jitcache_try_load(*sc);
-        return sc;
+        return Dynarmic::A64::Jit::MakeSharedCode(c);
     }();
     return code;
 }
@@ -192,8 +189,6 @@ GuestThread::GuestThread() {
     c.cntfrq_el0 = 1000000000;           // the counter counts ns, like Darling's mach_absolute_time (timebase 1/1)
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
-    c.fuse_svc_ret = !(getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 0);
-    native_objc_configure_jit(c);
     // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
     // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
     c.code_cache_size = (getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 16) << 20;
@@ -297,7 +292,6 @@ void memlog_shared_stats() {
          st.code_bytes / 1048576.0, st.translate_ns / 1e9,
          (unsigned long long)st.lookups, g_live_threads.load());
     native_objc_stats();
-    jitcache_save_if_shared();
 }
 
 void GuestThread::CallSVC(uint32_t swi) {
@@ -322,24 +316,11 @@ void GuestThread::CallSVC(uint32_t swi) {
         else if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
         else logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
     }
-    // X86CODE_A64_SVC_TIME=1: accumulate rdtsc around the handler body (excludes dispatcher).
-    static const bool svc_time = getenv("X86CODE_A64_SVC_TIME") != nullptr;
-    static std::atomic<u64> svc_cycles{0}, svc_timed{0};
-    u64 t0 = 0;
-    if (svc_time) t0 = __builtin_ia32_rdtsc();
     int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
     tsd_to_native();
     g_thunks[swi].fn(*this, swi);
     tsd_from_native();
     in_thunk = outer_thunk;
-    if (svc_time) {
-        u64 dt = __builtin_ia32_rdtsc() - t0;
-        u64 n = svc_timed.fetch_add(1, std::memory_order_relaxed) + 1;
-        u64 sum = svc_cycles.fetch_add(dt, std::memory_order_relaxed) + dt;
-        if ((n & 0xfffff) == 0)
-            logf("svc timing: %llu calls, avg %.1f cycles (handler+tsd only)",
-                 (unsigned long long)n, (double)sum / (double)n);
-    }
     if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
 }
 
