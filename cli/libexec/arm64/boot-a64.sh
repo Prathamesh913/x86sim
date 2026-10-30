@@ -103,6 +103,17 @@ case "${A64_JOBS:-std}" in
 	full) JOBS="$MIN $UI $FULLUI $OUR_JOBS" ;;
 	*) JOBS="$MIN $UI $OUR_JOBS" ;;
 esac
+# Speed 10: A64_CLONE_FROM=<device dir> starts a new device (no data/ yet) from a copy of that device's data/, like
+# simctl clone. A fresh device's first boot otherwise builds the LaunchServices database (lsd) while SpringBoard's icon
+# requests wait on it: ~80 s, and SpringBoard was killed and relaunched at ~90 s (home after ~5 min). The store refers
+# to the apps' data containers, so the whole data/ is copied (reflinks), without logs, run state, tmp and sockets.
+if [ -n "${A64_CLONE_FROM:-}" ] && [ ! -d "$D/data" ] && [ -d "$A64_CLONE_FROM/data/var/db/lsd" ]; then
+	mkdir -p "$D"
+	cp -a --reflink=auto "$A64_CLONE_FROM/data" "$D/data" || exit 1
+	rm -rf "$D/data/var/log" "$D/data/var/run" "$D/data/tmp" "$D/data/simhid.sock" "$D/data/framebuffer.bgra"
+	mkdir -p "$D/data/var/log" "$D/data/var/run" "$D/data/tmp"
+	echo "  cloned data/ from $A64_CLONE_FROM"
+fi
 X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
 # Speed 8: the container gets a private /dev/shm (X86CODE_PRIVATE_SHM, darlingserver): its remount no longer stacks a
 # tmpfs over the host's /dev/shm, and two devices' shm objects stay apart. The frame ring is written to
@@ -211,6 +222,7 @@ stop_prefix() {
 	fi
 }
 stop_prefix
+[ "${A64_STOP_ONLY:-0}" = 1 ] && exit 0  # Speed 10: stop this device's container only
 sleep 1
 
 # Host zone name (no darling yet). The TZ link itself must run *inside* limited.sh so it does not birth
