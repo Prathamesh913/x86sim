@@ -1080,3 +1080,35 @@ Details in round-done/speed8.md. Single runs on a shared host.
   from /dev/shm. Two instances: 3.27 GB total, B first boot to home ~3.5 min, no crashes.
 - GetBlock FastDispatch probe (X86CODE_A64_GETBLOCK_FD=1) still crashes cold boots: off. metalhostd off the AOT
   image (callee-saved register zeroed after libxpc calls with it). Settings "Time" placeholder: not addressed.
+
+## Speed 9 (2026-10-30): Swift sleeps, GetBlock probe, metalhostd, shared prelude, fresh devices
+
+Details in round-done/speed9.md. Single runs on a shared host.
+- **Swift Task.sleep returned at once.** libswift_Concurrency's dispatch executor converts deadlines from ns to mach
+  ticks with Apple silicon's timebase inlined (ns * 3 / 125, the only such site in the cache); our guest timebase is
+  1/1, so every deadline was ~40x in the past. Settings' search-field task spun Preferences' main thread (~10k
+  wakeups/s, ~90% of a core while idle). The JIT reads the two words that pick the conversion branch as
+  "mov x21, x8; b <join>" (MemoryReadCode, only if the original words match). Preferences idle 90% -> 0%, 10k -> 2
+  wakeups/s. `X86CODE_A64_SWIFT_TIMEBASE=0` off. Probes: tests/arm64/sleepprobe.swift, clockprobe.c, timerprobe.c
+  (dispatch timers, clocks and continuous deadlines were already right; DISPATCH_MONOTONICTIME is bit 63).
+- **GetBlock FastDispatch probe**: the Speed 7/8 crashes were a torn read: clang split the probe's 16-byte load into
+  two 8-byte loads (key, then code), so a concurrent refill of the same slot returned another block's code.
+  `X86CODE_A64_GETBLOCK_FD_VERIFY=1` (debug) found swapped pairs (6+ per boot, 0 after). Probe and fill are one movdqa
+  each (asm); on by default (`X86CODE_A64_GETBLOCK_FD=0` off). The image must be built with the same setting
+  (prelude size).
+- **metalhostd NULL read** was not the image (two of the three crash logs had none): a command on a connection
+  whose init found no application context (MTLSimApplicationContext* NULL). metalhostd wraps MTLSimImplementation's
+  peer handlers and cancels such a connection; metalhostd is on the image again.
+- **Memory**: the prelude (~1.8 MB written per process) is shared via a content-addressed `<aot>.prelude.<hash>`
+  (`X86CODE_A64_PRELUDE_SHARE=0` off): anon JIT code 160 -> 109 MB. Image processes no longer autosave a .bin
+  (~240 MB each, ~6.5 GB per boot, never read back; `X86CODE_A64_AOT_AUTOSAVE=1` for training). launchd_sim is off
+  the image (its prelude matched only by chance; then +60 MB and 3 s). Anon PSS without mtlvk 827 -> 755-760 MB.
+- **Fresh devices**: boot-a64 seeds a widget-free IconState.plist (SpringBoard's first-boot default had Maps and
+  Calendar widgets: blank tiles without chronod). First boot of a fresh device waits ~80 s on LaunchServices; once
+  (1 of 4) it did not recover in 4.5 min (SpringBoard main thread on the LS database lock).
+- Settings search "Time" overlap: not a bug. iOS 27's Liquid Glass search pill shows the row under it ("Screen Time"
+  and its purple icon); Xcode's iOS 27 simulator on the Mac shows the same with "StandBy".
+- Lookups (accountsd, corefollowup, profiled): fail fast on background queues, not in Preferences' main-thread
+  profile; most of their volume was the Task.sleep spin (1945 -> 118 lines). Not stubbed.
+- `X86CODE_A64_GSAMPLE=<exe>` (debug): samples one guest thread's stack every 5 ms (top stacks + inclusive frames).
+- Final: home 42 s, Settings cold 9-12 s / warm 3 s, 3 consecutive clean cold boots + Settings (fin1-3).

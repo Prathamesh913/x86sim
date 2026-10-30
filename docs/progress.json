@@ -1,12 +1,12 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 8: memory 2.74 -> 2.32 GB PSS for one sim (38 procs); second instance boots side by side (shared mtlvk, private /dev/shm): two instances 3.27 GB, marginal ~0.93 GB. Home 36 s, Settings cold 12 s / warm 3 s, zero crashes. Speed 7: memory 3.92 -> 2.70 GB PSS (SpringBoard 748->~490, Preferences 596->~300, backboardd 466->~135, daemons ~65->~28 MB each); home 37 s, Settings cold 10-16 s / warm 2-3 s, zero crashes. Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
+ "now": "Speed 9: Swift sleeps fixed (libswift_Concurrency inlined Apple-silicon timebase: every Task.sleep fired at once; Preferences idle 90% -> 0% CPU, 10k -> 2 wakeups/s), GetBlock FastDispatch probe on by default (its Speed 7/8 crashes were a torn 16-byte read), metalhostd NULL-context guard and back on the image, shared prelude (-46 MB anon), no 6.5 GB of .bin autosaves per boot, fresh devices without blank widget tiles. Home 42 s, Settings cold 9-12 s / warm 3 s, 3 consecutive clean boots. Settings search 'Time' overlap is iOS 27 Liquid Glass (matches Xcode's simulator). Speed 8: memory 2.74 -> 2.32 GB PSS for one sim (38 procs); second instance boots side by side (shared mtlvk, private /dev/shm): two instances 3.27 GB, marginal ~0.93 GB. Home 36 s, Settings cold 12 s / warm 3 s, zero crashes. Speed 7: memory 3.92 -> 2.70 GB PSS (SpringBoard 748->~490, Preferences 596->~300, backboardd 466->~135, daemons ~65->~28 MB each); home 37 s, Settings cold 10-16 s / warm 2-3 s, zero crashes. Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
-   "2.32 GB (38 procs)",
-   "Speed 7 2.74 GB; two instances 3.27 GB total (~0.93 GB marginal); goal <1 GB not met"
+   "2.33-2.40 GB (38 procs)",
+   "anon without the shared mtlvk 827 -> 755-760 MB (Speed 8 -> 9); dyld cache file pages 600-680 MB vary with host reclaim; goal <1 GB not met"
   ],
   [
    "Process crashes per cold boot + Settings",
@@ -35,8 +35,8 @@
   ],
   [
    "Idle after Settings opened",
-   "Preferences ~110%",
-   "still open; JIT + pthread_mutex churn"
+   "Preferences ~0% (2 wakeups/s)",
+   "was ~90% / 10k wakeups/s: Swift Task.sleep returned at once (Speed 9 fix)"
   ],
   [
    "Memory",
@@ -154,6 +154,18 @@
   [
    "47-speed8-instanceB-home.png",
    "Speed 8: a second sim instance at home next to the first"
+  ],
+  [
+   "48-speed9-home.png",
+   "Speed 9: home (default config, all Speed 9 defaults)"
+  ],
+  [
+   "49-speed9-settings.png",
+   "Speed 9: Settings; the search pill is Liquid Glass over the Screen Time row"
+  ],
+  [
+   "50-speed9-fresh-instance-home.png",
+   "Speed 9: a fresh second instance's first home, no blank widget tiles"
   ]
  ],
  "notes": [],
@@ -175,5 +187,15 @@
   "pss_before_gb": 3.92,
   "crashes": 0,
   "notes": "Lazy AOT metadata in a shared static index; every ASLR-off process maps the shared image (daemons ~65->~28 MB); 64K FastDispatch for daemons; native Swift conformance step (conformance 14.5%->3.5% of Preferences cold CPU). Open: Settings search 'Time' placeholder crossfade."
+ },
+ "speed9": {
+  "date": "2026-10-30",
+  "home_s": "42 (fin1-3)",
+  "settings_cold_s": "9-12",
+  "settings_warm_s": "3",
+  "pss_total_gb": 2.37,
+  "anon_without_mtlvk_mb": "755-760 (Speed 8 827)",
+  "crashes": 0,
+  "notes": "Swift timebase patch (X86CODE_A64_SWIFT_TIMEBASE), GetBlock FD probe default (X86CODE_A64_GETBLOCK_FD=0 off), metalhostd guard + on image, prelude sharing (X86CODE_A64_PRELUDE_SHARE), launchd_sim off the image, no .bin autosave with the image (X86CODE_A64_AOT_AUTOSAVE=1 for training), fresh-device IconState seed. Lookups (accounts/followup/profiled) measured: not a boot cost, not stubbed."
  }
 }
