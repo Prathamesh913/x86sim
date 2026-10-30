@@ -247,9 +247,23 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         auto *ip = (const uint8_t *)ctx->uc_mcontext.gregs[REG_RIP];
         logf("rip bytes %02x %02x %02x %02x %02x %02x", ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
     }
-    if (GuestThread *t = GuestThread::current())
+    if (GuestThread *t = GuestThread::current()) {
         logf("guest pc %#lx lr %#lx sp %#lx x0 %#lx x1 %#lx x8 %#lx", (unsigned long)t->jit->GetPC(), (unsigned long)t->x(30),
              (unsigned long)t->sp(), (unsigned long)t->x(0), (unsigned long)t->x(1), (unsigned long)t->x(8));
+        logf("  x19 %#lx x20 %#lx x21 %#lx x22 %#lx host r12 %#llx r13 %#llx",
+             (unsigned long)t->x(19), (unsigned long)t->x(20), (unsigned long)t->x(21), (unsigned long)t->x(22),
+             (unsigned long long)ctx->uc_mcontext.gregs[REG_R12],
+             (unsigned long long)ctx->uc_mcontext.gregs[REG_R13]);
+        // Hash-table probe diagnostics: count at [x20+0xc] and whether bucket math matches x22.
+        const u64 x20 = t->x(20), x21 = t->x(21), x0 = t->x(0);
+        if (x20) {
+            u32 count = 0;
+            std::memcpy(&count, reinterpret_cast<void*>(x20 + 0xc), 4);
+            const u64 expect = count ? (x21 + (x0 % count) * 16) : x21;
+            logf("  [x20+0xc] count=%u expect_x22 %#lx (x0%%count=%lu)", count, (unsigned long)expect,
+                 count ? (unsigned long)(x0 % count) : 0ul);
+        }
+    }
     if (GuestThread *t = GuestThread::current(); t && si->si_code != SEGV_ACCERR) { logf("  pc in %s, in thunk %s", where(t->jit->GetPC()).c_str(), t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-"); guest_backtrace(*t); }
     peek();
     struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;

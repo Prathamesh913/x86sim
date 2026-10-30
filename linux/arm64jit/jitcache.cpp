@@ -24,7 +24,7 @@ namespace {
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
 // Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
-constexpr u64 kBuildId = 0x00000007ull;  // default: persist non-fastmem blocks only
+constexpr u64 kBuildId = 0x0000000aull;  // excl lock/addrs from JitState (no ASLR Imm64 in ldxr/stxr)
 
 uint8_t g_uuid[16]{};
 bool g_uuid_ok = false;
