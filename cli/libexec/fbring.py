@@ -133,11 +133,14 @@ def _futex_wait(path, ino, seq, secs):
 
 
 def latest_frame():
-    """(w, h, stride, seq, pixels) from the ring, else from framebuffer.bgra; None if neither."""
+    """(w, h, stride, seq, pixels) from the ring, else from framebuffer.bgra if written in the last 10 s; None if
+    neither."""
     r = Ring().latest()
     if r:
         return r[0], r[1], r[2], r[3], r[5]
     try:
+        if time.time() - os.stat(FILE).st_mtime > 10:   # an old dump (a dead sim's, or another device's) is no frame
+            return None
         data = open(FILE, "rb").read()
         w, h, stride, seq = struct.unpack("<4I", data[:16])
         return w, h, stride, seq, data[16:16 + stride * h]

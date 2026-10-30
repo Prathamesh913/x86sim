@@ -117,7 +117,7 @@ while ff is None or ff.poll() is None:
             seq = None
             time.sleep(KEEPALIVE)
             st = os.stat(fbring.FILE)
-            if st.st_mtime_ns != mtime:
+            if st.st_mtime_ns != mtime and time.time() - st.st_mtime < 10:   # a live dump only, never an old one
                 data = open(fbring.FILE, "rb").read()
                 w, h, st_, sq = struct.unpack("<4I", data[:16])
                 if H is None:
