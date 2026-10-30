@@ -477,6 +477,13 @@ static void memlog_once() {
         while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssAnon:", 8)) anon = atol(l + 8);
         fclose(f);
     }
+    if (getenv("X86CODE_A64_STATS")) {  // Speed 6: hottest svc thunks so far (SIGUSR1; was only at exit)
+        extern u64 g_thunk_counts[0x10000];
+        std::vector<std::pair<u64, u32>> v;
+        for (u32 i = 0, n = thunk_count(); i < n; i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});
+        std::sort(v.rbegin(), v.rend());
+        for (size_t k = 0; k < v.size() && k < 25; k++) logf("memlog: thunk %10lu %s", (unsigned long)v[k].first, g_thunks[v[k].second].name.c_str());
+    }
     logf("memlog: anon %ld MB, glibc arena %zu MB (in use %zu MB, mmapped %zu MB in %zu blocks, free %zu MB)", anon / 1024,
          mi.arena >> 20, mi.uordblks >> 20, mi.hblkhd >> 20, mi.hblks, mi.fordblks >> 20);
     memlog_shared_stats();
@@ -674,6 +681,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     GuestThread &t = GuestThread::self();
     install_fault_report();
     double t_setup = ms_since(g_t0);
+    svc_bench(t);
     u64 glue = 0;
     u64 args[9] = {(u64)argc, gargv, genvp, gapple, main_exe.mh, dyld.mh, dyld.slide, helpers, (u64)&glue};
     u64 main_fn = t.call(dyld.entry, args, 9).rax;

@@ -477,10 +477,12 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
 // jmp_buf (ours, private to these functions): x19-x28, x29, x30, sp, d8-d15. The signal mask is not saved.
 // pthread_getspecific/setspecific/_pthread_setspecific_static: guest code on the guest's TSD array (jit.cpp).
 bool is_guest_code_export(const std::string &n) {
+    if (is_guest_libc_export(n)) return true;
     if (n == "_pthread_getspecific" || n == "_pthread_setspecific" || n == "__pthread_setspecific_static") return true;
     return n == "_setjmp" || n == "__setjmp" || n == "_sigsetjmp" || n == "_longjmp" || n == "__longjmp" || n == "_siglongjmp";
 }
 size_t emit_guest_code(const std::string &n, uint32_t *o, u32 slow) {
+    if (is_guest_libc_export(n)) return emit_guest_libc(n, o, slow);
     if (n == "_pthread_getspecific") {
         static const uint32_t c[] = {0xD53BD068, 0xF8607900, 0xD65F03C0};  // mrs x8, tpidrro_el0; ldr x0, [x8, x0, lsl #3]; ret
         memcpy(o, c, sizeof c);
