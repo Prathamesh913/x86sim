@@ -192,7 +192,9 @@ GuestThread::GuestThread() {
     c.cntfrq_el0 = 1000000000;           // the counter counts ns, like Darling's mach_absolute_time (timebase 1/1)
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
-    c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;  // opt-in: default OFF (seq-race / present hang)
+    // Hybrid svc;ret (frontend): a thunk block ends in FastDispatchHint instead of PopRSBHint. With RSB off
+    // (shared translations) PopRSBHint is ReturnFromRunCode, so every libsystem call left Run(). Opt-in for now.
+    c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;
     native_objc_configure_jit(c);
     // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
     // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
@@ -301,46 +303,53 @@ void memlog_shared_stats() {
 }
 
 void GuestThread::CallSVC(uint32_t swi) {
+    const u64 pc0 = jit->GetPC();  // svc+4
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
         set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));
-        return;
+    } else {
+        svc_count++;
+        if (g_profile && (svc_count & 1023) == 0) profile_tick();
+        if (swi >= thunk_count()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
+        if (g_count_thunks) __atomic_fetch_add(&g_thunk_counts[swi], 1, __ATOMIC_RELAXED);
+        if (g_trace) {
+            const std::string &nm = g_thunks[swi].name;
+            bool path = nm.find("open") != std::string::npos || nm.find("stat") != std::string::npos ||
+                        nm.find("access") != std::string::npos || nm.find("getattr") != std::string::npos ||
+                        nm.find("readlink") != std::string::npos || nm.find("realpath") != std::string::npos;
+            if (path && (nm.find("at") != std::string::npos && nm.find("stat") == std::string::npos ? true : false) && x(1) > 0x10000)
+                logf("-> %s(%#lx, \"%.200s\", %#lx)", nm.c_str(), (unsigned long)x(0), (const char *)x(1), (unsigned long)x(2));
+            else if (path && nm.find("at") != std::string::npos && nm.find("stat") == std::string::npos)
+                logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
+            else if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
+            else logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
+        }
+        // X86CODE_A64_SVC_TIME=1: accumulate rdtsc around the handler body (excludes dispatcher).
+        static const bool svc_time = getenv("X86CODE_A64_SVC_TIME") != nullptr;
+        static std::atomic<u64> svc_cycles{0}, svc_timed{0};
+        u64 t0 = 0;
+        if (svc_time) t0 = __builtin_ia32_rdtsc();
+        int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
+        tsd_to_native();
+        g_thunks[swi].fn(*this, swi);
+        tsd_from_native();
+        in_thunk = outer_thunk;
+        if (svc_time) {
+            u64 dt = __builtin_ia32_rdtsc() - t0;
+            u64 n = svc_timed.fetch_add(1, std::memory_order_relaxed) + 1;
+            u64 sum = svc_cycles.fetch_add(dt, std::memory_order_relaxed) + dt;
+            if ((n & 0xfffff) == 0)
+                logf("svc timing: %llu calls, avg %.1f cycles (handler+tsd only)",
+                     (unsigned long long)n, (double)sum / (double)n);
+        }
+        if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
     }
-    svc_count++;
-    if (g_profile && (svc_count & 1023) == 0) profile_tick();
-    if (swi >= thunk_count()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
-    if (g_count_thunks) __atomic_fetch_add(&g_thunk_counts[swi], 1, __ATOMIC_RELAXED);
-    if (g_trace) {
-        const std::string &nm = g_thunks[swi].name;
-        bool path = nm.find("open") != std::string::npos || nm.find("stat") != std::string::npos ||
-                    nm.find("access") != std::string::npos || nm.find("getattr") != std::string::npos ||
-                    nm.find("readlink") != std::string::npos || nm.find("realpath") != std::string::npos;
-        if (path && (nm.find("at") != std::string::npos && nm.find("stat") == std::string::npos ? true : false) && x(1) > 0x10000)
-            logf("-> %s(%#lx, \"%.200s\", %#lx)", nm.c_str(), (unsigned long)x(0), (const char *)x(1), (unsigned long)x(2));
-        else if (path && nm.find("at") != std::string::npos && nm.find("stat") == std::string::npos)
-            logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
-        else if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
-        else logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
-    }
-    // X86CODE_A64_SVC_TIME=1: accumulate rdtsc around the handler body (excludes dispatcher).
-    static const bool svc_time = getenv("X86CODE_A64_SVC_TIME") != nullptr;
-    static std::atomic<u64> svc_cycles{0}, svc_timed{0};
-    u64 t0 = 0;
-    if (svc_time) t0 = __builtin_ia32_rdtsc();
-    int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
-    tsd_to_native();
-    g_thunks[swi].fn(*this, swi);
-    tsd_from_native();
-    in_thunk = outer_thunk;
-    if (svc_time) {
-        u64 dt = __builtin_ia32_rdtsc() - t0;
-        u64 n = svc_timed.fetch_add(1, std::memory_order_relaxed) + 1;
-        u64 sum = svc_cycles.fetch_add(dt, std::memory_order_relaxed) + dt;
-        if ((n & 0xfffff) == 0)
-            logf("svc timing: %llu calls, avg %.1f cycles (handler+tsd only)",
-                 (unsigned long long)n, (double)sum / (double)n);
-    }
-    if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
+
+    // X86CODE_A64_SKIP_RET=1: when the handler did not redirect and the thunk is "svc; ret", return to X30 here
+    // and skip the ret block. Outermost CallSVC only (a nested one runs inside call(), which restores the PC).
+    // Reads X30 after the handler. Off by default: see ARM64-PLAN.md Speed 4.
+    static const bool skip_ret = getenv("X86CODE_A64_SKIP_RET") && atoi(getenv("X86CODE_A64_SKIP_RET")) == 1;
+    if (skip_ret && in_thunk < 0 && jit->GetPC() == pc0 && rd<u32>(pc0) == 0xD65F03C0u) jit->SetPC(x(30));
 }
 
 bool fp16_interpret(GuestThread &t, u32 insn);

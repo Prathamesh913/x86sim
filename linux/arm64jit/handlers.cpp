@@ -297,6 +297,7 @@ static void h_kill_like(GuestThread &t, u32 i) {
 
 void print_stats();
 static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends here
+    if (getenv("X86CODE_A64_AOT_BUILD")) jitcache_aot_build(t);
     print_stats();
     ((void (*)(int))g_thunks[i].native)((int)t.x(0));
 }

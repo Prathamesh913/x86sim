@@ -893,3 +893,91 @@ not continued translation. Dominates whole-sim idle once Settings has been opene
 2. Stop Preferences ~110% background spin (lock/run-loop) — dominates warm-alive.
 3. PosterBoard still out (memory).
 
+
+## Speed 4 (2026-10-30): fuse split, Stage 4 step 1 (AOT image)
+
+### fuse_svc_ret: diagnosis and flags
+- **Why Speed 3's fuse broke boot:** the x64 emitter rewrote PC=X30 after *every* CallSupervisor whose handler left
+  PC at svc+4, including svcs **not** followed by `ret` (it skipped their code). Seq race / present hang followed.
+- Under shared translations RSB is off, so the classic svc terminal `PopRSBHint` is `ReturnFromRunCode`: every
+  libsystem call leaves `Run()`. The useful part of the "hybrid" is the terminal, not skipping PushRSB (a no-op).
+- `X86CODE_A64_FUSE_SVC=1` = **hybrid** (frontend: svc;ret block ends in `FastDispatchHint`, ret block still runs).
+  `X86CODE_A64_SKIP_RET=1` = **skip-ret** (GuestThread::CallSVC sets PC=X30, read *after* the handler, outermost
+  CallSVC only, only when the next insn is `ret`). Both **default OFF**.
+- fusestress (4 threads, ms): off 57-58, hybrid 39-40, hybrid+skip-ret 20, all OK.
+- Cold boots (cleared cache, Metal all): off: home ~245 s, Settings cold 32 s / warm 5 s. Hybrid: home 158 s,
+  Settings cold 32 s, then SpringBoard SIGSEGV in libobjc lookup (garbage class cache, count=1867017839) on warm
+  reopen. Skip-ret: home 86 s, no restarts, then SpringBoard aborted on Settings open (BKS assertion below).
+  Hybrid is not faster on Settings and crashed, so it stays off.
+- **Grok's skip-ret crash (~55 s, SIGSEGV in JIT code reading a host-range guest pointer)** has the same shape as
+  the libobjc probe crash above; the skip-ret path itself (with post-handler X30) reached home cleanly. Hypothesis:
+  staying inside `Run()` longer (no exit per svc) exposes an existing shared-code/inline-objc race; next test is
+  hybrid + `X86CODE_A64_INLINE_OBJC=0`.
+
+### Cold-boot blockers found (not caused by fuse)
+1. **backboardd misses the BoardServices bootstrap deadline** for `BKHIDUISensorService` ("no listener at automatic
+   bootstrap deadline", ~11 s after start on a cold JIT). Every SpringBoard that later uses
+   `_BKSHIDUISensorOverseer` aborts (BackBoardServices brk #0 after `_connectionLock_connectToRemoteServiceIfNeeded`,
+   "we must have a remote target", pc 0x1c8e3e420). Cold boots restart SpringBoard 2-6 times, sometimes forever.
+   Speed 3's 71 s home was a warm cache (saves only happen on SIGUSR1/exit with STATS).
+2. **SpringBoard heap corruption**: write fault at Darling `libsystem_malloc` `_small_malloc_should_clear+0xc9`; the
+   fault handler then deadlocks (malloc lock), so the process hangs at 0% instead of restarting.
+3. **backboardd faults loading any persisted cache** (its own warm .bin *or* the AOT image): instruction fetch at a
+   non-exec host address right after the call at ColorSync 0x1dde82a40 (`bl` to a stub at the end of ColorSync
+   __TEXT); skipping ColorSync's range does not help, so the bad block is on the callee side (another library). This
+   blocks the obvious fix for (1): a fast backboardd from cache. Bisect with JITCACHE_SKIP_RANGE by library next.
+
+## Stage 4: AOT translation (design)
+
+Prior art (all MIT, none drop-in): Box64 DynaCache (github.com/ptitSeb/box64, docs/USAGE.md, discussion #2510:
+one cache per binary/lib keyed by file identity + dynarec option hash + host CPU features, stale blocks skipped,
+size cap with eviction, clean command); FEX-Emu code cache (FEX issue #5125, FEX-2609 `FEX_DISKCACHE`: offline
+generation, load-time validation, mapped image; shared mmap still open there); Ryujinx PPTC (RelocEntry/Symbol
+relocation of host pointers, but guest addresses stored absolute so a rebased image breaks it: we store guest
+addresses image-relative); github.com/ChrisPachulski/arm64-x86-recomp (static Mach-O lifter with rebase/bind, for
+install-time app AOT later). Box64 and FEX both drop cached blocks whose guest page gets written.
+
+Long-term shape:
+1. **System AOT**: the shared-cache hot set is translated once per runtime (setup or background job) and stored with
+   the runtime. Hot set = block PCs recorded across boots and common apps, later widened statically
+   (LC_FUNCTION_STARTS, export tries, objc method lists).
+2. **Shared mapping**: the image is mmap'd read-only `MAP_SHARED` into every iOS process instead of a private copy
+   per process (the main memory lever toward 1 GB/app). Code must be position-stable: ASLR off per process
+   (personality ADDR_NO_RANDOMIZE on the boot stack), reloc table for what still moves, and no per-process mutable
+   state in code pages: objc counters, link/patch sites, FastDispatch go through a per-process writable section
+   (indirect-branch table) addressed via a fixed register or RIP-relative slot table.
+3. **Per-app AOT at install** (`x86sim install`): app binary + its frameworks into a per-app cache keyed by the
+   binary UUID, refined from recorded blocks.
+4. **JIT fallback** for misses and runtime code (JSC); misses are recorded and feed the next build. Blocks on
+   written pages are dropped (IC IVAU / write fault), as today.
+
+File format (target, "A64AOT1"):
+- One file per **image**: each shared-cache subcache (`dyld_sim_shared_cache_arm64`, `.01`) and each app image.
+- **Key** = image UUID + codegen hash (libarm64jit ELF build-id, kBuildId, code-shaping flags) + host CPU feature
+  mask. Mismatch refuses the whole file; a `clean` command drops files whose key no longer matches.
+- **Guest addresses image-relative** (offset from the image base; the shared cache happens to be fixed at
+  0x1C0000000 but per-app images move).
+- Sections: header | block table (guest offset, flags/FPCR bits, code offset, size, guest-bytes hash) |
+  reloc table (kind, offset) | fastmem sites | constant pool | code (page-aligned, mapped R-X shared) |
+  writable-template section (copied per process).
+- Validation at load: key, then per block the guest-bytes hash on first use (cheap, lazy) so a patched page
+  falls back to the JIT; refuse any block whose relocs reference a kind the process does not have.
+- Hot-set files (`<uuid>.pcs`-style, today the descriptor tables of the `.bin` files) are **build-independent**: a
+  JIT rebuild re-generates the image from them without retraining.
+- Size cap per image with eviction (invalid first, then least recently recorded).
+
+### Step 1 (this round): what landed
+- `linux/arm64jit/jitcache.cpp`: key `<uuid>-<build>` where build = kBuildId | fuse/inline flags | FNV of
+  libarm64jit's ELF build-id (and its load base when ADDR_NO_RANDOMIZE). Per-process training files
+  `<key>.<exe>.bin` (no more clobbering one file). `<key>.aot` image loaded at start by `.app/` processes
+  (`X86CODE_A64_AOT_PROCS=name,..|all`, `X86CODE_A64_AOT=0` off).
+- Builder: `X86CODE_A64_AOT_BUILD=1` on any small guest binary (hello.sim); at exit it reads the block descriptors
+  of every training file for this image UUID (any build), pre-translates them (`Jit::Pretranslate`, new dynarmic
+  API) and saves the `.aot`. Preferences: 546K blocks in 4.2-4.8 s -> 143.9 MB; union of backboardd +
+  SpringBoard + Preferences: 654K blocks, 170 MB, 6.9 s. Load: ~300-360 ms per process.
+- cfprobe (Foundation): cold 1075 ms -> 935 ms with the image, identical output.
+- **Settings cold on the sim with the image: not measured.** Every boot after the image existed was gated by
+  cold-boot blocker 1 (SpringBoard never stayed up; with the image in SpringBoard it died every ~55 s, with it in
+  backboardd blocker 3). Before = 32 s (three cold boots).
+- Not done: ASLR-off per process (relocs suffice for step 1), shared mmap, image-relative guest offsets, per-block
+  guest hash.

@@ -167,10 +167,11 @@ void native_objc_install();
 void native_objc_configure_jit(Dynarmic::A64::UserConfig &c);  // wire inline_* into a new Jit's config
 void native_objc_stats();  // hits/misses into the process log
 // Persistent JIT cache (dyld shared-cache translations). Keyed by cache UUID + build id.
-void jitcache_prepare(const std::string &cache_path);  // read UUID; call before first Jit
+void jitcache_prepare(const std::string &cache_path, const std::string &exe);  // read UUID; call before first Jit
 void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &sp);
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared);
-void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared);
+void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string &to = "");
+void jitcache_aot_build(GuestThread &t);  // X86CODE_A64_AOT_BUILD=1: union of training .bins -> .aot
 void jitcache_save_if_shared();  // no-op when SHARED=0 or no live shared code
 u64 reserve_aligned(u64 size, u64 mask);  // guest-VM range [12 GB, 63 GB), PROT_NONE
 // gheap.cpp

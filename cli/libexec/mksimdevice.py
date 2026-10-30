@@ -314,7 +314,7 @@ def main():
             "X86CODE_A64_IVAU_CLEAR", "X86CODE_A64_EXEC_LOCK", "X86CODE_A64_ICLOG", "X86CODE_A64_RSB",
             # Speed 3: launchd jobs only see Bootstrap.Child; these must be listed to reach backboardd/SpringBoard.
             "X86CODE_A64_INLINE_OBJC", "X86CODE_A64_NATIVE_OBJC", "X86CODE_A64_GUEST_OBJC",
-            "X86CODE_A64_FUSE_SVC", "X86CODE_A64_JITCACHE", "X86CODE_A64_JITCACHE_DIR",
+            "X86CODE_A64_FUSE_SVC", "X86CODE_A64_SKIP_RET", "X86CODE_A64_AOT", "X86CODE_A64_AOT_PROCS", "X86CODE_A64_JITCACHE_SKIP_RANGE", "X86CODE_A64_JITCACHE", "X86CODE_A64_JITCACHE_DIR",
             "SIMFB_HZ",
         ) if ARM64 and os.environ.get(k)}),
         "SIMULATOR_UDID": udid,
