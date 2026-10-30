@@ -101,7 +101,10 @@ bool aot_eligible(const std::string &exe) {
     std::string base = b ? b + 1 : exe;
     if (const char *l = getenv("X86CODE_A64_AOT_PROCS")) {
         std::string list = std::string(",") + l + ",";
-        return list == ",all," || list.find("," + base + ",") != std::string::npos;
+        // Speed 7: "all" only where the image can be mapped shared (ASLR off: launchd_sim's children); elsewhere it
+        // would be a private ~200 MB copy.
+        if (list == ",all,") return (personality(0xffffffff) & ADDR_NO_RANDOMIZE) != 0;
+        return list.find("," + base + ",") != std::string::npos;
     }
     // Apps (.app/: SpringBoard, Preferences, ...) and backboardd. Speed 5: backboardd's image fault (an FP fallback
     // CallFunction baked libarm64jit's old address into a persisted block) is fixed, so it loads the image too.
