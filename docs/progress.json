@@ -1,8 +1,13 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 7: memory 3.92 -> 2.70 GB PSS (SpringBoard 748->~490, Preferences 596->~300, backboardd 466->~135, daemons ~65->~28 MB each); home 37 s, Settings cold 10-16 s / warm 2-3 s, zero crashes. Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
+ "now": "Speed 8: memory 2.74 -> 2.32 GB PSS for one sim (38 procs); second instance boots side by side (shared mtlvk, private /dev/shm): two instances 3.27 GB, marginal ~0.93 GB. Home 36 s, Settings cold 12 s / warm 3 s, zero crashes. Speed 7: memory 3.92 -> 2.70 GB PSS (SpringBoard 748->~490, Preferences 596->~300, backboardd 466->~135, daemons ~65->~28 MB each); home 37 s, Settings cold 10-16 s / warm 2-3 s, zero crashes. Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
  "metrics": [
+  [
+   "Memory, one sim (PSS)",
+   "2.32 GB (38 procs)",
+   "Speed 7 2.74 GB; two instances 3.27 GB total (~0.93 GB marginal); goal <1 GB not met"
+  ],
   [
    "Process crashes per cold boot + Settings",
    "0",
@@ -63,7 +68,7 @@
   {
    "name": "2. Boot to the home screen",
    "status": "done",
-   "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+   "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
   },
   {
    "name": "3. Fast and lean",
@@ -112,7 +117,7 @@
   ],
   [
    "32-speed1c-gpu-home.png",
-   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
+   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID — wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
   ],
   [
    "31-speed1b-gpu-home.png",
@@ -120,19 +125,19 @@
   ],
   [
    "15-stage3-compact-maps-home.png",
-   "Stage 3: compact patch+fastmem maps \u2014 SB 1.4\u21921.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
+   "Stage 3: compact patch+fastmem maps — SB 1.4→1.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
   ],
   [
    "14-stage3-pagemap-home.png",
-   "Stage 3: page-map cold boot home \u2014 host_heap 137\u219279 MB; 448 MB anon VMA remains"
+   "Stage 3: page-map cold boot home — host_heap 137→79 MB; 448 MB anon VMA remains"
   ],
   [
    "13-stage3-idle-cpu-fix-home.png",
-   "Stage 3: idle CPU fix \u2014 home with icons, whole-sim ~1.3% core, PSS\u22483.7 GB"
+   "Stage 3: idle CPU fix — home with icons, whole-sim ~1.3% core, PSS≈3.7 GB"
   ],
   [
    "12-stage3-slim-park-home.png",
-   "Stage 3: slim-park home \u2014 PSS\u22483.9 GB, WR parked 12 MB, reaper gone, bright\u22480.21"
+   "Stage 3: slim-park home — PSS≈3.9 GB, WR parked 12 MB, reaper gone, bright≈0.21"
   ],
   [
    "03-home-screen.png",
@@ -141,6 +146,14 @@
   [
    "01-boot-logo.png",
    "First pixels: iOS 27 boot logo from translated arm64 code"
+  ],
+  [
+   "45-speed8-home.png",
+   "Speed 8: home after memory diet (2.32 GB PSS)"
+  ],
+  [
+   "47-speed8-instanceB-home.png",
+   "Speed 8: a second sim instance at home next to the first"
   ]
  ],
  "notes": [],

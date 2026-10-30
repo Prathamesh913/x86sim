@@ -1064,3 +1064,19 @@ Details in round-done/speed7.md. Single runs on a shared host.
 - Tried and reverted: FastDispatch probe in GetBlock's entry path (GetBlock 15% -> 4%) brought iconservicesagent and
   Preferences crashes (likely a stale-entry store race after invalidation). sleepd cannot be dropped: SpringBoard
   spins on com.apple.sleepd.sleepserver.
+
+## Speed 8 (2026-10-30): memory per instance, two instances side by side
+
+Details in round-done/speed8.md. Single runs on a shared host.
+- PSS one sim (38 procs, idle after Settings): 2.74 -> 2.32 GB. Guest heap scavenger (MADV_DONTNEED of whole free
+  pages, thread caches ~32 KB/class): guest anon ~430 -> ~150 MB. darlingserver frozen memfd copies: large OOL /
+  copy=TRUE data shared copy-on-write (lsd's 8 MB LaunchServices store was copied into 8 processes): 84 -> 1.5 MB.
+  dynarmic constant pool no longer memset (2 MB touched per process): code-base region 108 -> 54 MB. AOT image also
+  trained on MTLCompilerService + iconservicesagent (code cache 384 MB): 146 -> ~60 and 138 -> ~85 MB.
+- dyld cache file pages (~450-700 MB PSS) fluctuate with host reclaim; clean, shared by instances; no change.
+- Two instances: A64_DEVICE/A64_STATE/A64_DPREFIX/SIMFB_RING per instance, A64_MTLVK_SOCKET shares one mtlvk.
+  Found: every darlingserver start stacked a tmpfs over the host's /dev/shm (617 layers); X86CODE_PRIVATE_SHM=1
+  (set by boot-a64 / tests/arm64/run.sh) keeps it in the container; arm64 rings live in /run/user/<uid>, linked
+  from /dev/shm. Two instances: 3.27 GB total, B first boot to home ~3.5 min, no crashes.
+- GetBlock FastDispatch probe (X86CODE_A64_GETBLOCK_FD=1) still crashes cold boots: off. metalhostd off the AOT
+  image (callee-saved register zeroed after libxpc calls with it). Settings "Time" placeholder: not addressed.

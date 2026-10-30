@@ -306,7 +306,9 @@ def main():
         # JIT metadata resident per thread; two arenas for the process
         **({"GLIBC_TUNABLES": "glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576"} if ARM64 else {}),
         # x86Code: its own frame ring, so an x86_64 device's viewers are not disturbed
-        **({"SIMFB_RING": os.environ.get("SIMFB_RING", "/Volumes/SystemRoot/dev/shm/x86code-a64-simfb.ring")} if ARM64 else {}),
+        # Speed 8: in /run/user/<uid> (the arm64 container's /dev/shm is private, X86CODE_PRIVATE_SHM); boot-a64.sh links
+        # /dev/shm/x86code-a64-simfb.ring to it for the host's viewers
+        **({"SIMFB_RING": os.environ.get("SIMFB_RING", f"/Volumes/SystemRoot/run/user/{os.getuid()}/x86code-a64-simfb.ring")} if ARM64 else {}),
         # Speed 3: launchd jobs only see Bootstrap.Child, so the JIT flags must be copied here to reach backboardd and
         # SpringBoard. Speed 6: every X86CODE_A64_* flag (was a list that missed new ones, e.g. PERFMAP).
         **({k: v for k, v in os.environ.items()
