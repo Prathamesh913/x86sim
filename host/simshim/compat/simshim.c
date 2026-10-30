@@ -282,11 +282,19 @@ __attribute__((constructor)) static void shim_ifimage_init(void)
 // as sim-to-host (xpc_connection_enable_sim2host_4sim: messages packed in the host's macOS XPC format, for the
 // Mac-side SimMetalHost). Our service, metalhostd, runs inside the simulator on the simulator's libxpc, which drops
 // such messages (the handshake failed with an XPC error), so those connections stay plain simulator connections.
+// iOS 27 MTLSimDriver may call enable_sim2host before the connection name is set; a NULL name used to fall through
+// and enable sim2host framing, which hangs MTLCreateSystemDefaultDevice against in-sim metalhostd. When
+// X86CODE_METAL_IN_SIM is set (mksimdevice with Metal), skip sim2host for unnamed connections too.
 #include <xpc/xpc.h>
 extern void xpc_connection_enable_sim2host_4sim(xpc_connection_t c);
 static void shim_xpc_connection_enable_sim2host_4sim(xpc_connection_t c)
 {
 	const char* name = xpc_connection_get_name(c);
+	static int logged;
+	if (getenv("X86CODE_SIMSHIM_XPC_LOG") && logged < 32) {
+		logged++;
+		fprintf(stderr, "simshim: enable_sim2host name=%s\n", name ? name : "(null)");
+	}
 	if (name && strncmp(name, "com.apple.metal.simulator", 25) == 0)
 		return;
 	// x86Code: same for IOSurface's connection: our com.apple.IOSurface.Remote (host/iosurfaced/iosurfaced)
@@ -295,6 +303,9 @@ static void shim_xpc_connection_enable_sim2host_4sim(xpc_connection_t c)
 		return;
 	// x86Code: and FileProvider's host service, served in the simulator by host/fpsim2host
 	if (name && strcmp(name, "com.apple.FileProvider.sim2host") == 0)
+		return;
+	// x86Code: iOS 27 may enable_sim2host before set_name; in-sim metalhostd cannot take host framing.
+	if (!name && getenv("X86CODE_METAL_IN_SIM"))
 		return;
 	xpc_connection_enable_sim2host_4sim(c);
 }

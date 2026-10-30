@@ -237,6 +237,11 @@ def main():
                            "MachServices": {n: True for n in names}, "EnvironmentVariables": menv,
                            "RunAtLoad": True, "KeepAlive": True,
                            "StandardOutPath": log, "StandardErrorPath": log}, f)
+        # x86Code: iOS 27 MTLCompiler lives on disk as Metal.framework/XPCServices/MTLCompilerService.xpc
+        # (moved out of the dyld cache). launchd_sim discovers it as a multi-instance Application XPC
+        # service (same as iOS 26.5 on x86). Do NOT install a single-instance LaunchDaemon for the
+        # same label: that makes "create copy of service" fail with error 137 and every pipeline dies.
+        # If create-copy fails on A64, fix that path instead of masking with a non-instance job.
 
     # x86Code: cross-process IOSurfaces (host/iosurfaced): iosurfaced serves com.apple.IOSurface.Remote (what
     # CoreSimulator's SimRenderServer does on a Mac) and IOSURFACE_REMOTE_EMULATED is not set, so every process's
@@ -332,6 +337,10 @@ def main():
         "LS_ENABLE_BUNDLE_LOCALIZATION_CACHING": "1",
         # x86Code: no CoreSimulator host; IOSurface allocates in-process, our SimFramebuffer fakes the display
         **({} if iosurface else {"IOSURFACE_REMOTE_EMULATED": "1"}),
+        # x86Code: metalhostd is in-sim (not Mac SimMetalHost). simshim skips sim2host framing for
+        # com.apple.metal.simulator* and, when this is set, for enable_sim2host calls before set_name (iOS 27).
+        **({"X86CODE_METAL_IN_SIM": "1"} if metal else {}),
+        **({"X86CODE_SIMSHIM_XPC_LOG": "1"} if os.environ.get("X86CODE_SIMSHIM_XPC_LOG") else {}),
         # X86CODE_SHIMLOG=1: simshim logs what it intercepts
         **({"X86CODE_SHIMLOG": "1"} if os.environ.get("X86CODE_SHIMLOG") else {}),
         **({"X86CODE_AUDIO_SOCKET": darling(AUDIO_SOCKET)} if AUDIO else {}),

@@ -84,7 +84,9 @@ int main(int argc, char** argv) {
 				close(s);
 			});
 			dispatch_resume(t);
-			dispatch_main();
+			fprintf(stderr, "metalhostd: CFRunLoopRun (refusing)\n");
+			CFRunLoopRun();
+			return 0;
 		}
 		uint64_t registryID = dev.registryID;
 
@@ -97,6 +99,11 @@ int main(int argc, char** argv) {
 			init_with_xpc_connection(l, registryID, 0);
 			fprintf(stderr, "metalhostd: serving %s (device \"%s\", registryID %#llx)\n", name.UTF8String, dev.name.UTF8String, registryID);
 		}
+		// x86Code: CFRunLoopRun keeps the main thread draining the main queue. dispatch_main's
+		// pthread_exit parks the A64 JIT main thread in a way that can leave XPC peer handlers
+		// unserved (mtlprobe hung in MTLCreateSystemDefaultDevice). Same for the refuse path above.
+		fprintf(stderr, "metalhostd: CFRunLoopRun\n");
+		CFRunLoopRun();
 	}
-	dispatch_main();
+	return 0;
 }
