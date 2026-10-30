@@ -1,8 +1,9 @@
 #!/bin/bash
-# ARM64-PLAN stage 2: arm64 iOS-simulator builds of the shims loaded into simulator processes (they call the guest's
-# frameworks, so they must be guest code): simshim, SimFramebuffer (simfb), SimulatorHID (simhid). Output next to the
-# x86_64 builds under host/<name>/arm64/ (mksimdevice.py X86SIM_ARCH=arm64 picks them up). The x86_64 builds are not
-# touched. Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid]
+# ARM64-PLAN stage 2 / Speed 1: arm64 iOS-simulator builds of the shims loaded into simulator processes (they call
+# the guest's frameworks, so they must be guest code): simshim, SimFramebuffer (simfb), SimulatorHID (simhid),
+# metalhostd (+vkmtl), iosurfaced, mtlprobe. Output under host/<name>/arm64/ (mksimdevice.py X86SIM_ARCH=arm64
+# picks them up). The x86_64 builds are not touched.
+# Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid metalhostd iosurfaced mtlprobe]
 set -e
 . "$(dirname "$0")/mac-env.sh"
 T="-target arm64-apple-ios17.0-simulator"
@@ -30,5 +31,37 @@ simhid)
 		-framework Foundation -framework IOKit -lobjc -o SimulatorHID simhid.m >&2 && cat SimulatorHID" < "$X/host/simhid/simhid.m" > "$W/SimulatorHID"
 	mkdir -p "$X/host/simhid/arm64/SimulatorHID.framework" && mv "$W/SimulatorHID" "$X/host/simhid/arm64/SimulatorHID.framework/"
 	cp "$X/host/simhid/SimulatorHID.framework/Info.plist" "$X/host/simhid/arm64/SimulatorHID.framework/" ;;
+metalhostd)
+	# Same sources as build/mac-build-metal.sh, arm64 sim target. Runs under the A64 JIT; talks to native mtlvk.
+	tar cf - -C "$X/host/metalhostd" vkmtl.m vkmtl_proto.h metalhostd.m | mac "
+	rm -rf /tmp/a64mtl && mkdir -p /tmp/a64mtl && cd /tmp/a64mtl && tar xf - &&
+	xcrun -sdk iphonesimulator clang $T -O1 -g -Wall -Wno-deprecated-declarations -Wno-unguarded-availability-new \
+		-fno-objc-arc -framework Foundation -framework Metal -framework IOSurface -lobjc \
+		-o metalhostd metalhostd.m vkmtl.m >&2 &&
+	cat metalhostd" > "$W/metalhostd"
+	mkdir -p "$X/host/metalhostd/arm64" && mv "$W/metalhostd" "$X/host/metalhostd/arm64/metalhostd"
+	chmod +x "$X/host/metalhostd/arm64/metalhostd" ;;
+iosurfaced)
+	# Same link as build/mac-build-iosurface.sh: Foundation + IOKit (IOCFSerialize), not IOSurface.framework.
+	tar cf - -C "$X/host/iosurfaced" iosurfaced.m | mac "
+	rm -rf /tmp/a64ios && mkdir -p /tmp/a64ios && cd /tmp/a64ios && tar xf - &&
+	xcrun -sdk iphonesimulator clang $T -O1 -g -Wall -Wno-deprecated-declarations -Wno-unguarded-availability-new \
+		-fno-objc-arc -framework Foundation -framework IOKit -lobjc \
+		-o iosurfaced iosurfaced.m >&2 &&
+	cat iosurfaced" > "$W/iosurfaced"
+	mkdir -p "$X/host/iosurfaced/arm64" && mv "$W/iosurfaced" "$X/host/iosurfaced/arm64/iosurfaced"
+	chmod +x "$X/host/iosurfaced/arm64/iosurfaced" ;;
+mtlprobe)
+	tar cf - -C "$X/tests/metal" mtlprobe.m shaders/probe_metallib.h shaders/probe_source.h | mac "
+	rm -rf /tmp/a64probe && mkdir -p /tmp/a64probe && cd /tmp/a64probe && tar xf - &&
+	xcrun -sdk iphonesimulator clang $T -O1 -g -Wall -Wno-deprecated-declarations -Wno-unguarded-availability-new \
+		-fobjc-arc -framework Foundation -framework Metal -framework IOSurface \
+		-o mtlprobe mtlprobe.m >&2 &&
+	cat mtlprobe" > "$W/mtlprobe"
+	mkdir -p "$X/tests/metal/arm64" && mv "$W/mtlprobe" "$X/tests/metal/arm64/mtlprobe"
+	chmod +x "$X/tests/metal/arm64/mtlprobe" ;;
+*) echo "unknown target: $w" >&2; exit 1 ;;
 esac; done
-file "$X"/host/sim*/arm64/*/* "$X"/host/sim*/arm64/*/*/* 2>/dev/null | grep -i mach
+file "$X"/host/sim*/arm64/*/* "$X"/host/sim*/arm64/*/*/* \
+	"$X"/host/metalhostd/arm64/metalhostd "$X"/host/iosurfaced/arm64/iosurfaced \
+	"$X"/tests/metal/arm64/mtlprobe 2>/dev/null | grep -i mach || true

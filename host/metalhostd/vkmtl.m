@@ -570,6 +570,8 @@ static size_t vk_region_bytes(MTLPixelFormat f, MTLRegion r, NSUInteger bpr, NSU
 - (NSUInteger)firstMipmapInTail { return _mips; }
 - (NSUInteger)tailSizeInBytes { return 0; }
 - (MTLTextureCompressionType)compressionType { return MTLTextureCompressionTypeLossless; }
+// x86Code: iOS 27 MTLSimTexture compressionMetadata (lossy/compressed layouts); none of ours are compressed.
+- (id)compressionMetadata { return nil; }
 - (MTLResourceID)gpuResourceID { MTLResourceID r; r._impl = _vkid; return r; }
 - (NSUInteger)allocatedSize {
 	NSUInteger bpp = vk_bytes_per_pixel(_format) ?: 4;
@@ -1103,6 +1105,11 @@ uint32_t vk_constant_values(MTLFunctionConstantValues* cv, wbuf* out) {
 - (MTLShaderValidation)shaderValidation { return MTLShaderValidationDefault; }
 - (MTLSize)requiredThreadsPerThreadgroup { return MTLSizeMake(0, 0, 0); }
 - (uint64_t)uniqueIdentifier { return _vkid; }
+// x86Code: iOS 27 persistent-kernel / forward-progress queries on compute pipelines.
+- (NSInteger)forwardProgressUsage { return 0; }
+- (MTLSize)recommendedPersistentThreadgroupsPerGridForThreadsPerThreadgroup:(MTLSize)tpt {
+	(void)tpt; return MTLSizeMake(0, 0, 0);
+}
 - (void)dealloc { vk_send(VKMTL_OBJ_DEL, &_vkid, 8); [_label release]; [super dealloc]; }
 @end
 
@@ -1691,6 +1698,18 @@ static void vk_cb_done(uint64_t cbid, uint32_t status, uint32_t error, double st
 - (BOOL)supportsFunctionPointers { return NO; }
 - (BOOL)supportsRaytracing { return NO; }
 - (BOOL)supportsDynamicLibraries { return NO; }
+// x86Code: iOS 27 Metal sim device queries (MTLSimDriver / MTLSimImplementation 24A434). supportsFP8 and
+// set*GlobalConstantsBase/Size: were removed; getters for *GlobalConstants* still exist on the client and
+// fall through forwardInvocation (nil/0). These stubs avoid unimplemented spam and match Common3/Mac2.
+- (BOOL)supportsPVRTC { return NO; }
+- (BOOL)supportsRGBTextureBuffers { return YES; }
+- (BOOL)supportsTextureMultifetch { return NO; }
+- (BOOL)supportsMXUNarrowTileSizes { return NO; }
+- (BOOL)supportsMXU { return NO; }
+- (BOOL)supportsSIMDGroupParallelForwardProgress { return NO; }
+- (void)useInternalResidencySet:(id)set { (void)set; }
+- (void)useInternalResidencySets:(const id*)sets count:(NSUInteger)count { (void)sets; (void)count; }
+- (id)genericAddressSpaceDispatchInfo { return nil; }
 - (BOOL)supportsTextureSampleCount:(NSUInteger)n { return n == 1 || n == 2 || n == 4 || n == 8; }
 - (BOOL)supportsFamily:(MTLGPUFamily)f {
 	return f == MTLGPUFamilyMac2 || f == MTLGPUFamilyCommon1 || f == MTLGPUFamilyCommon2 || f == MTLGPUFamilyCommon3;

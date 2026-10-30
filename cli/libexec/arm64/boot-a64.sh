@@ -3,14 +3,16 @@
 # seconds and summarise. Everything is separate from the x86_64 iOS 26.5 stack, which keeps running untouched:
 # its own Darling prefix (A64_DPREFIX, default $X86SIM_SCRATCH/a64prefix: only that container is shut down and
 # restarted), device (var/device-a64), state dir (var/run-a64) and frame ring (/dev/shm/x86code-a64-simfb.ring).
-# No mtlvk/mdns/jetsam restarts (those belong to the x86 boot). Runs in the systemd scope of cli/libexec/limited.sh
-# (40 MB/s IO, memory cap X86SIM_MEM_MAX).
+# mdns/jetsam stay with the x86 boot. mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
+# socket ($ST/mtlvk.sock) and pidfile — never pkill -x mtlvk (would hit a frozen x86 stack's mtlvk).
+# Runs in the systemd scope of cli/libexec/limited.sh (40 MB/s IO, memory cap X86SIM_MEM_MAX).
 #
 # Memory: Stage 2's 6G default was based on cgroup memory.current that missed every guest (darlingserver was
 # started by a darling shell *outside* the scope — the TZ link — so guests inherited that foreign cgroup). Real
 # Shared boot sum VmRSS at home is ~8.4–9.4 GB (PSS/cgroup ~4.6 GB). Default 12G so MemoryMax does not
 # OOM on the sum-RSS guests (6–8G is too low for that accounting). Override with X86SIM_MEM_MAX.
 # Usage: SECS=120 cli/libexec/arm64/boot-a64.sh [extra jobs...]   (A64_JOBS=min|std: the job list)
+#        X86CODE_METAL=0|1|backboardd|all  (default 0 = software; needs host/metalhostd/arm64/metalhostd)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 export X86SIM_ARCH=arm64
 export X86SIM_RUNTIME=${A64_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.0-24A434-arm64/RuntimeRoot}
@@ -19,12 +21,41 @@ export X86SIM_STATE=${A64_STATE:-$X86SIM_ROOT/var/run-a64}
 . "$X86SIM_ROOT/cli/lib/config.sh"
 export DPREFIX=${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}
 export X86SIM_DPREFIX=$DPREFIX
-export X86CODE_METAL=${X86CODE_METAL-0}         # software rendering until metalhostd is arm64
+export X86CODE_METAL=${X86CODE_METAL-0}
 export X86SIM_MEM_MAX=${X86SIM_MEM_MAX-12G}
 X=$X86SIM_ROOT; cd "$X"
 D=$X86SIM_DEVICE; ST=$X86SIM_STATE; SECS=${SECS:-90}
 mkdir -p "$D" "$ST"
 rm -rf "$D"/data/var/log/*.log
+# Speed 1: start this boot's mtlvk when Metal is requested. Own socket + pidfile under var/run-a64.
+stop_a64_mtlvk() {
+	local old
+	old=$(cat "$ST/mtlvk.pid" 2>/dev/null || true)
+	if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+		kill "$old" 2>/dev/null || true
+		sleep 0.2
+		[ -d "/proc/$old" ] && kill -9 "$old" 2>/dev/null || true
+	fi
+	rm -f "$ST/mtlvk.pid" "$ST/mtlvk.sock"
+}
+if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ]; then
+	MTLVK_BIN=${MTLVK:-$X86SIM_MTLVK}
+	stop_a64_mtlvk
+	export X86CODE_MTLVK_SOCKET=$ST/mtlvk.sock
+	if [ -x "$MTLVK_BIN" ]; then
+		setsid "$MTLVK_BIN" "$ST/mtlvk.sock" > "$ST/mtlvk.log" 2>&1 &
+		echo $! > "$ST/mtlvk.pid"
+		for i in $(seq 1 50); do [ -S "$ST/mtlvk.sock" ] && break; sleep 0.1; done
+	fi
+	mpid=$(cat "$ST/mtlvk.pid" 2>/dev/null || true)
+	if [ -S "$ST/mtlvk.sock" ] && [ -n "$mpid" ] && [ -d "/proc/$mpid" ]; then
+		echo "boot-a64: mtlvk up (pid $mpid), Metal for: $X86CODE_METAL" >&2
+	else
+		echo "boot-a64: mtlvk did not start ($MTLVK_BIN, see $ST/mtlvk.log): software rendering" >&2
+		export X86CODE_METAL=0
+		stop_a64_mtlvk
+	fi
+fi
 MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.apple.notifyd com.apple.configd_sim
 	com.apple.runningboardd com.apple.lsd com.apple.containermanagerd com.apple.containermanagerd.system
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd
@@ -232,4 +263,9 @@ if [ "${A64_SLIM:-1}" = 1 ]; then
 	fi
 fi
 # A64_KEEP=1: leave the device running (the container outlives the launcher's timeout); else stop this prefix
-[ "${A64_KEEP:-0}" = 1 ] || stop_prefix
+if [ "${A64_KEEP:-0}" = 1 ]; then
+	:
+else
+	stop_prefix
+	stop_a64_mtlvk
+fi

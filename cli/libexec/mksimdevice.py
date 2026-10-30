@@ -59,6 +59,17 @@ def darling(path):
     return DARLING_VIEW + path
 
 
+def runtime_climb_depth():
+    """Number of /.. needed so xpcproxy_sim's access(RuntimeRoot + program) reaches /.
+
+    RuntimeRoot is often a symlink into extracted/.../RuntimeRoot. access(2) walks the
+    physical target before applying '..', so depth must use realpath. The arm64
+    ios-27 symlink is 9 components long but 18 physically; with the short depth,
+    host jobs (metalhostd, iosurfaced, mtlprobe) failed with exit 78 / ENOENT.
+    """
+    return len(darling(os.path.realpath(RUNTIME)).strip("/").split("/"))
+
+
 def main():
     device = os.path.abspath(sys.argv[1])
     jobs = sys.argv[2:]
@@ -104,7 +115,7 @@ def main():
             mach = {a[5:]: True for a in extra if a.startswith("mach:")}
             log = darling(data + "/var/log/" + label + ".log")
             # xpcproxy_sim prefixes program paths with the runtime root: climb exactly back out of it
-            depth = len(darling(RUNTIME).strip("/").split("/"))
+            depth = runtime_climb_depth()
             program = "/.." * depth + darling(os.path.abspath(program))
             job_plist = {"Label": label, "ProgramArguments": [program] + args,
                          "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log,
@@ -188,7 +199,7 @@ def main():
         import subprocess
         hostnet = data + "/var/run/x86code-hostnet.plist"
         subprocess.run([sys.executable, PROJECT + "/linux/hostnet/hostnet.py", hostnet], check=False)
-        depth = len(darling(RUNTIME).strip("/").split("/"))
+        depth = runtime_climb_depth()
         log = darling(data + "/var/log/com.x86code.netconfig.log")
         with open(os.path.join(daemons, "com.x86code.netconfig.plist"), "wb") as f:
             plistlib.dump({"Label": "com.x86code.netconfig",
@@ -211,7 +222,7 @@ def main():
         if "all" in metal.split(","):
             names.append("com.apple.metal.simulator")
         log = darling(data + "/var/log/com.x86code.metalhostd.log")
-        depth = len(darling(RUNTIME).strip("/").split("/"))
+        depth = runtime_climb_depth()
         menv = {"X86CODE_METAL_NAMES": ",".join(names), "OS_ACTIVITY_MODE": "disable",
                 # x86Code: mtlvk's socket (Linux path; metalhostd prefixes /Volumes/SystemRoot)
                 "X86CODE_MTLVK_SOCKET": MTLVK_SOCKET}
@@ -230,7 +241,7 @@ def main():
     iosurface = os.environ.get("X86CODE_IOSURFACE", "1") not in ("", "0") and bool(host_path("host/iosurfaced/iosurfaced"))
     if iosurface:
         log = darling(data + "/var/log/com.x86code.iosurfaced.log")
-        depth = len(darling(RUNTIME).strip("/").split("/"))
+        depth = runtime_climb_depth()
         ienv = {"OS_ACTIVITY_MODE": "disable"}
         if os.environ.get("X86CODE_IOSURFACE_LOG"):
             ienv["X86CODE_IOSURFACE_LOG"] = "1"
