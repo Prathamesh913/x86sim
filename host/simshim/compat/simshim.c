@@ -278,6 +278,50 @@ __attribute__((constructor)) static void shim_ifimage_init(void)
 	_dyld_register_func_for_add_image(shim_ifimage_added);
 }
 
+#if defined(__arm64__)
+// x86Code (arm64, Speed 11): iconservicesagent keeps its icon store (IconsCache/<uuid>/, which also holds the Metal
+// shader cache __METAL_CACHE__ it points MTLSetShaderCachePath at) only if the store directory's owner is
+// "_iconservices", the daemon's user on a device. Here every process runs as the host user, so the store was wiped
+// at every launch ("one or more preconditions have been met to delete previous cache"): every boot re-rendered all
+// icons and MTLCompilerService recompiled RenderBox's pipelines (~12 CPU-s, home 8-11 s later). In iconservicesagent
+// only, a file owned by our own uid reports "_iconservices" as its owner account name.
+static IMP shim_owner_orig[2];
+static id shim_owner_name(id self, SEL sel, int k)
+{
+	id num = ((id (*)(id, SEL)) objc_msgSend)(self, sel_registerName("fileOwnerAccountID"));
+	if (num && ((unsigned (*)(id, SEL)) objc_msgSend)(num, sel_registerName("unsignedIntValue")) == getuid())
+		return (id) CFSTR("_iconservices");
+	return ((id (*)(id, SEL)) shim_owner_orig[k])(self, sel);
+}
+static id shim_owner_name0(id self, SEL sel) { return shim_owner_name(self, sel, 0); }
+static id shim_owner_name1(id self, SEL sel) { return shim_owner_name(self, sel, 1); }
+static void shim_owner_added(const struct mach_header* mh, intptr_t slide)
+{
+	static const char* cls[2] = { "NSDictionary", "NSFileAttributes" };
+	static const IMP imp[2] = { (IMP) shim_owner_name0, (IMP) shim_owner_name1 };
+	SEL sel = sel_registerName("fileOwnerAccountName");
+	for (int k = 0; k < 2; k++) {
+		Class c = shim_owner_orig[k] ? Nil : objc_getClass(cls[k]);
+		if (!c)
+			continue;
+		// only a method the class itself defines (NSFileAttributes may inherit NSDictionary's)
+		unsigned n = 0;
+		Method* ms = class_copyMethodList(c, &n);
+		for (unsigned i = 0; i < n; i++)
+			if (method_getName(ms[i]) == sel) {
+				shim_owner_orig[k] = method_setImplementation(ms[i], imp[k]);
+				char b[96]; int l = snprintf(b, sizeof b, "simshim: hooked %s fileOwnerAccountName\n", cls[k]); write(2, b, l);
+			}
+		free(ms);
+	}
+}
+__attribute__((constructor)) static void shim_owner_init(void)
+{
+	if (!strcmp(getprogname(), "iconservicesagent"))
+		_dyld_register_func_for_add_image(shim_owner_added);
+}
+#endif
+
 // x86Code: the Metal stand-in (host/metalhostd). MTLSimDriver marks its connections to com.apple.metal.simulator[.<proc>]
 // as sim-to-host (xpc_connection_enable_sim2host_4sim: messages packed in the host's macOS XPC format, for the
 // Mac-side SimMetalHost). Our service, metalhostd, runs inside the simulator on the simulator's libxpc, which drops
