@@ -18,7 +18,13 @@ use std::os::unix::net::UnixListener;
 
 pub const DEFAULT_SOCKET: &str = "var/run/mtlvk.sock";
 
+extern "C" fn on_usr1(_: libc::c_int) {
+    conn::STATS_REQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn main() {
+    // x86Code Speed 7: SIGUSR1 -> per-connection object counts on stderr (next request)
+    unsafe { libc::signal(libc::SIGUSR1, on_usr1 as libc::sighandler_t) };
     let arg = std::env::args().nth(1);
     let device = match Device::system_default() {
         Ok(d) => d,

@@ -115,6 +115,14 @@ bool aot_eligible(const std::string &exe) {
 }  // namespace
 
 void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
+    // Speed 7: FastDispatch table per process: 256K entries (4 MB) for apps and backboardd, whose hot sets need it;
+    // 64K (1 MB) for daemons. X86CODE_A64_FD_ENTRIES=n overrides.
+    {
+        const char *b = strrchr(exe.c_str(), '/');
+        size_t n = exe.find(".app/") != std::string::npos || (b && !strcmp(b + 1, "backboardd")) ? 0x40000 : 0x10000;
+        if (const char *e = getenv("X86CODE_A64_FD_ENTRIES")) n = strtoul(e, nullptr, 0);
+        Dynarmic::A64::Jit::SetFastDispatchEntries(n);
+    }
     g_dir = default_dir();
     // cache_path is often a Darling path (/Volumes/SystemRoot/...); this ELF uses glibc fopen.
     std::string linux_path = cache_path;

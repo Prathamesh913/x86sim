@@ -132,6 +132,42 @@ pub struct State {
     shared_vram: HashMap<(u64, u64, u64, u64, u64, u64, u32), Texture>,
     buf_keys: HashMap<u64, (u64, u64, u64)>,
     written: std::cell::RefCell<std::collections::BTreeSet<u64>>,
+    stats_seen: u32,
+}
+
+/// x86Code Speed 7: SIGUSR1 bumps this; each connection prints its object counts on its next request.
+pub static STATS_REQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+impl State {
+    fn print_stats(&self) {
+        let mut n = [0usize; 10];
+        let mut buf_bytes = 0u64;
+        for o in self.objs.values() {
+            let k = match o {
+                Obj::Buf(b) => {
+                    buf_bytes += b.length();
+                    0
+                }
+                Obj::Tex(_) => 1,
+                Obj::Queue(_) => 2,
+                Obj::Event(_) => 3,
+                Obj::Lib(_) => 4,
+                Obj::Func(_) => 5,
+                Obj::Pso(_) => 6,
+                Obj::Sampler(_) => 7,
+                Obj::Rps(_) => 8,
+                Obj::Dss(_) => 9,
+            };
+            n[k] += 1;
+        }
+        let lib: usize = self.lib_bytes.values().map(|v| v.len()).sum();
+        let mirror: usize = self.mirrors.values().map(|m| m.len).sum();
+        eprintln!(
+            "mtlvk stats: buf {} ({} MB) tex {} queue {} event {} lib {} func {} pso {} sampler {} rps {} dss {} | lib_bytes {} ({} MB) func_src {} mirrors {} ({} MB) proxies {} shared_vram {}",
+            n[0], buf_bytes >> 20, n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], self.lib_bytes.len(), lib >> 20,
+            self.func_src.len(), self.mirrors.len(), mirror >> 20, self.proxies.len(), self.shared_vram.len()
+        );
+    }
 }
 
 const PAGE: u64 = 4096;
@@ -172,7 +208,7 @@ impl State {
         }
         Ok(State { device, objs: HashMap::new(), mirrors: HashMap::new(), helper, out, log: std::env::var_os("MTLVK_LOG").is_some(), lib_bytes: HashMap::new(), func_src: HashMap::new(),
             vram_targets, proxies: HashMap::new(), proxy_views: HashMap::new(), shared_vram: HashMap::new(), buf_keys: HashMap::new(),
-            written: Default::default() })
+            written: Default::default(), stats_seen: 0 })
     }
 
     /// x86Code: note that a command writes texture `id` (a proxied one is copied back at the end of the command
@@ -241,6 +277,10 @@ impl State {
 
     /// Handles one request. Returns the reply payload for requests that have one.
     pub fn handle(&mut self, op: u32, p: &[u8], fd: Option<RawFd>) -> Option<Vec<u8>> {
+        if STATS_REQ.load(std::sync::atomic::Ordering::Relaxed) != self.stats_seen {
+            self.stats_seen = STATS_REQ.load(std::sync::atomic::Ordering::Relaxed);
+            self.print_stats();
+        }
         let mut r = Rd::new(p);
         let mut w = Wr::default();
         match op {
@@ -275,6 +315,9 @@ impl State {
                 self.proxies.remove(&id);
                 self.proxy_views.remove(&id);
                 self.buf_keys.remove(&id);
+                // x86Code Speed 7: these were never dropped (a released library kept its bytes for good)
+                self.lib_bytes.remove(&id);
+                self.func_src.remove(&id);
                 None
             }
             TEX_NEW => {
