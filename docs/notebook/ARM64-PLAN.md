@@ -1043,3 +1043,24 @@ Details in round-done/speed6.md. All numbers below are single runs on the shared
   was neutral in an A/B.
 - Final default config (AOT on): home 35 s, Settings cold 12 s / warm 6 s, zero crashes. PSS total 3.92 GB
   (was 5.17 GB cold without AOT). Cold without AOT: home 34-35 s, Settings 17-18 s.
+
+## Speed 7 (2026-10-30): memory diet (lazy AOT metadata, image in every process), Swift conformance step
+
+Details in round-done/speed7.md. Single runs on a shared host.
+- PSS 3.92 -> 2.70 GB (38 processes). SpringBoard 748 -> ~490, Preferences 596 -> ~300, backboardd 466 -> ~135 MB,
+  small daemons ~65 -> ~28 MB, mtlvk unchanged (~450-480 MB, mostly the NVIDIA driver: 163 MB of nvidiactl mappings,
+  live heap; no leak). Of the remaining 2.7 GB, ~950 MB is clean file pages (dyld cache 704 MB, AOT .map/.idx 245 MB)
+  that a second sim instance would share.
+- Lazy AOT metadata: the image's blocks / link sites / fastmem sites go to `<map>.idx` (sorted, mapped shared);
+  blocks are registered in lf_map on first lookup (a live bitset, no block_descriptors entry); invalidation
+  sets a dead bit. `X86CODE_A64_AOT_LAZY=0` restores full registration. A flock serialises the first .map/.idx build.
+- Every ASLR-off process loads the image (was apps + backboardd); `X86CODE_A64_AOT_PROCS` still overrides.
+- FastDispatch: keys stored inverted (clear = MADV_DONTNEED); 64K entries for daemons, 256K for apps/backboardd
+  (`X86CODE_A64_FD_ENTRIES`).
+- Swift conformance: the record step of swift_conformsToProtocolMaybeInstantiateSuperclasses is read by the JIT as
+  `svc #0xfffd`; native walk with a global protocol index and an exact skip of records naming a different unique type
+  (value types only). Preferences: 51M -> 10M guest round trips, conformance ~14.5% -> ~3.5% of samples, -13% CPU;
+  Settings cold wall time unchanged within noise. `X86CODE_A64_SWIFT_CONF_NATIVE=0` off.
+- Tried and reverted: FastDispatch probe in GetBlock's entry path (GetBlock 15% -> 4%) brought iconservicesagent and
+  Preferences crashes (likely a stale-entry store race after invalidation). sleepd cannot be dropped: SpringBoard
+  spins on com.apple.sleepd.sleepserver.
