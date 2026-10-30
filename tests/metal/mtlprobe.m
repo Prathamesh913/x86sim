@@ -538,6 +538,53 @@ static void render_tests(id<MTLDevice> dev, id<MTLCommandQueue> q) {
 		g_surface = s;
 		g_surfaceTex = st;
 	}
+
+	// x86Code Speed 1c: arm64 home is 1206 wide — tight rows 4824, IOSurface stride 4864.
+	// Render a known pattern into a 1206-wide surface and check every texel + that the 40-byte
+	// pad is untouched (a width*4 write would smear into the pad and shift rows when read back).
+	{
+		const NSUInteger W = 1206, H = 64;
+		NSDictionary* props = @{
+			(id)kIOSurfaceWidth: @(W), (id)kIOSurfaceHeight: @(H),
+			(id)kIOSurfaceBytesPerElement: @4, (id)kIOSurfacePixelFormat: @((int)'BGRA'),
+		};
+		IOSurfaceRef wide = IOSurfaceCreate((__bridge CFDictionaryRef)props);
+		size_t bpr = wide ? IOSurfaceGetBytesPerRow(wide) : 0;
+		CHECK(wide && bpr >= W * 4 && (bpr % 64) == 0,
+			"1206-wide IOSurface created (bytesPerRow %zu, tight %zu)", bpr, (size_t)W * 4);
+		MTLTextureDescriptor* wd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+			width:W height:H mipmapped:NO];
+		wd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+		wd.storageMode = MTLStorageModeShared;
+		id<MTLTexture> wt = wide ? [dev newTextureWithDescriptor:wd iosurface:wide plane:0] : nil;
+		CHECK(wt != nil, "texture over 1206-wide IOSurface (bytesPerRow %zu)", bpr);
+		if (wt && ptri) {
+			// Fill pad with 0xCD before the GPU write so a tight write is visible.
+			IOSurfaceLock(wide, 0, NULL);
+			uint8_t* base = IOSurfaceGetBaseAddress(wide);
+			memset(base, 0xCD, bpr * H);
+			IOSurfaceUnlock(wide, 0, NULL);
+			id<MTLCommandBuffer> cb = [q commandBuffer];
+			id<MTLRenderCommandEncoder> re = [cb renderCommandEncoderWithDescriptor:rpass(wt, green)];
+			draw_tri(re, ptri);
+			[re endEncoding];
+			[cb commit];
+			[cb waitUntilCompleted];
+			IOSurfaceLock(wide, kIOSurfaceLockReadOnly, NULL);
+			base = IOSurfaceGetBaseAddress(wide);
+			int inside = 0, bad = tri_wrong(base, bpr, 1, &inside);
+			size_t pad = bpr - W * 4, pad_bad = 0;
+			for (NSUInteger y = 0; y < H; y++) {
+				uint8_t* p = base + y * bpr + W * 4;
+				for (size_t i = 0; i < pad; i++) if (p[i] != 0xCD) pad_bad++;
+			}
+			IOSurfaceUnlock(wide, kIOSurfaceLockReadOnly, NULL);
+			CHECK(cb.status == MTLCommandBufferStatusCompleted && bad == 0 && pad_bad == 0,
+				"1206-wide IOSurface render (bpr %zu): %d texel wrong, %zu pad bytes clobbered (inside %d)",
+				bpr, bad, pad_bad, inside);
+		}
+		if (wide) CFRelease(wide);
+	}
 }
 
 // child: IOSurfaceLookup(id), check the triangle; exit status = wrong texels (capped)

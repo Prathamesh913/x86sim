@@ -1624,6 +1624,148 @@ pub fn selftest(device: &Device) -> Res<()> {
         return Err(format!("getBytes {:?}", &rep[16..32]));
     }
     println!("replaceRegion/getBytes round trip ok");
+
+    // x86Code Speed 1c: IOSurface row pitch must survive VRAM copy-back.
+    // Arm64 home is 1206 wide: tight rows are 4824 bytes, IOSurface/ring stride is 4864 (64-byte
+    // aligned). A write that uses width*4 into that buffer shows as thin diagonal lines when the
+    // ring is read with the real stride (pad/4 = 10 px of shift per row). The x86 device is 1179
+    // wide (4716 tight vs 4736 aligned): same class of bug, smaller pad. This probe uses the arm64
+    // sizes and checks every row's content and that the 40-byte pad is untouched.
+    {
+        const W: u64 = 1206;
+        const H: u64 = 900; // >= VRAM_MIN_PIXELS (1e6) so the VRAM proxy path runs
+        const BPR: u64 = 4864; // align64(1206*4)
+        const TIGHT: u64 = W * 4;
+        const PAD: u64 = BPR - TIGHT; // 40
+        assert_eq!(PAD, 40);
+        let bytes = (BPR * H) as usize;
+        let memfd = unsafe { libc::memfd_create(c"stride".as_ptr(), 0) };
+        unsafe { libc::ftruncate(memfd, bytes as i64) };
+        let base = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                bytes,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                memfd,
+                0,
+            )
+        } as *mut u8;
+        let surf = unsafe { std::slice::from_raw_parts_mut(base, bytes) };
+        surf.fill(0xCD);
+        let mut w = Wr::default();
+        w.u64(0x101).u64(bytes as u64).u64(0).u64(0).u32(1).u32(1);
+        let rep = s.handle(BUF_NEW, &w.0, Some(unsafe { libc::dup(memfd) })).unwrap();
+        if Rd::new(&rep).u32() != 0 {
+            return Err("stride BUF_NEW failed".into());
+        }
+        // TEX_NEW_BUF: id, buffer, texdesc, offset, bytesPerRow, iosurface=1, planar=0
+        // BGRA8Unorm=80, Type2D=2, Shared=0, usage RenderTarget|ShaderRead = 0x4|0x1
+        let mut w = Wr::default();
+        w.u64(0x102)
+            .u64(0x101)
+            .u32(2)
+            .u32(80)
+            .u64(W)
+            .u64(H)
+            .u64(1)
+            .u32(1)
+            .u32(1)
+            .u64(1)
+            .u64(0)
+            .u64(0x4 | 0x1)
+            .u32(0x03020100)
+            .u32(1)
+            .u64(0)
+            .u64(BPR)
+            .u32(1)
+            .u32(0);
+        let rep = s.handle(TEX_NEW_BUF, &w.0, None).unwrap();
+        if rep[0] != 0 {
+            return Err(format!("stride TEX_NEW_BUF failed: {:?}", &rep[..4.min(rep.len())]));
+        }
+        if !s.proxies.contains_key(&0x102) {
+            return Err("stride: expected VRAM proxy for 1206x900 IOSurface render target".into());
+        }
+        let mut w = Wr::default();
+        w.u64(0x103);
+        s.handle(QUEUE_NEW, &w.0, None);
+        // Clear the (proxied) texture to opaque red in BGRA = (0, 0, 255, 255)
+        let mut pass = Wr::default();
+        for i in 0..MAX_COLOR {
+            pass.u64(if i == 0 { 0x102 } else { 0 })
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .u32(2)
+                .u32(1)
+                .u32(0);
+            pass.f64(1.0).f64(0.0).f64(0.0).f64(1.0).u64(0).u32(0).u32(0);
+        }
+        for _ in 0..2 {
+            pass.u64(0)
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .u32(0)
+                .f64(0.0)
+                .f64(0.0)
+                .f64(0.0)
+                .f64(0.0)
+                .u64(0)
+                .u32(0)
+                .u32(0);
+        }
+        pass.u64(W).u64(H).u64(0).u64(1);
+        let mut cmds = Wr::default();
+        cmds.u32(C_RENDER_PASS).u32(pass.0.len() as u32).bytes(&pass.0);
+        let mut w = Wr::default();
+        w.u64(0x103).u64(0x11).u32(1).u32(0).bytes(&cmds.0);
+        s.handle(CB_COMMIT, &w.0, None);
+        let (op, p) = rx.recv_timeout(std::time::Duration::from_secs(30)).map_err(err("stride completion"))?;
+        let mut r = Rd::new(&p);
+        let (cb, status, error) = (r.u64(), r.u32(), r.u32());
+        println!("stride completion: op {op} cb {cb} status {status} error {error}");
+        if status != 4 {
+            return Err("stride command buffer failed".into());
+        }
+        let mut bad_px = 0u64;
+        let mut bad_pad = 0u64;
+        for y in 0..H {
+            let row = (y * BPR) as usize;
+            for x in 0..W {
+                let o = row + (x * 4) as usize;
+                let px = [surf[o], surf[o + 1], surf[o + 2], surf[o + 3]];
+                // BGRA clear red; allow +-1 on the converted channel
+                if px[0] > 1 || px[1] > 1 || px[2] < 254 || px[3] < 254 {
+                    bad_px += 1;
+                    if bad_px <= 3 {
+                        println!("stride bad texel ({x},{y}) BGRA={px:?}");
+                    }
+                }
+            }
+            for p in 0..PAD {
+                if surf[row + TIGHT as usize + p as usize] != 0xCD {
+                    bad_pad += 1;
+                }
+            }
+        }
+        println!(
+            "stride 1206x{H} bpr {BPR}: {bad_px} wrong texels, {bad_pad} pad bytes overwritten (want 0, 0)"
+        );
+        if bad_px != 0 || bad_pad != 0 {
+            return Err(format!(
+                "stride mismatch: {bad_px} wrong texels, {bad_pad} pad bytes clobbered (tight write into padded IOSurface)"
+            ));
+        }
+        unsafe {
+            libc::munmap(base.cast(), bytes);
+            libc::close(memfd);
+        }
+        println!("IOSurface VRAM copy-back stride 1206/4864 ok");
+    }
     Ok(())
 }
 

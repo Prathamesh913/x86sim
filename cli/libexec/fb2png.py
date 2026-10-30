@@ -26,13 +26,25 @@ else:
     data = open(src, "rb").read()
     w, h, stride, seq = struct.unpack("<4I", data[:16])
     px = data[16:]
+# x86Code Speed 1c: never decode with width*4 when the ring/surface stride is larger. A Pillow
+# frombuffer/frombytes that omits stride (or passes w*4) on a 1206-wide frame (tight 4824, stride
+# 4864) shifts every row by 40 bytes and looks like thin diagonal lines across the PNG. Require
+# enough bytes for stride*h and always pass the real stride into Pillow.
+need = stride * h
+if len(px) < need:
+    sys.stderr.write("fb2png: pixel buffer %d bytes < stride %d * height %d (= %d); refusing wrong-stride decode\n"
+                     % (len(px), stride, h, need))
+    sys.exit(2)
+if stride < w * 4:
+    sys.stderr.write("fb2png: stride %d < width*4 %d\n" % (stride, w * 4))
+    sys.exit(2)
 try:   # PIL when there is one (fast), else the pure-Python encoder below
     from PIL import Image
     img = Image.frombuffer("RGBA", (w, h), px, "raw", "BGRA", stride, 1).convert("RGB")
     if div > 1:
         img = img.reduce(div)
     img.save(dst)
-    print("frame %d: %dx%d stride %d -> %s (%dx%d)" % (seq, w, h, stride, dst, img.width, img.height))
+    print("frame %d: %dx%d stride %d (tight %d) -> %s (%dx%d)" % (seq, w, h, stride, w * 4, dst, img.width, img.height))
     sys.exit()
 except ImportError:
     pass
