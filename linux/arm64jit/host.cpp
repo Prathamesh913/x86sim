@@ -639,6 +639,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     map_commpage();
     Mapped main_exe = map_macho(exe, false);
     Mapped dyld = map_macho(root + "/usr/lib/dyld_sim", true);
+    dyld_sim_patches(dyld.slide);
     if (!dyld.entry) die("dyld_sim has no entry point");
     u64 helpers = build_syscall_helpers();
 
