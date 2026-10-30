@@ -927,6 +927,45 @@ not continued translation. Dominates whole-sim idle once Settings has been opene
    __TEXT); skipping ColorSync's range does not help, so the bad block is on the callee side (another library). This
    blocks the obvious fix for (1): a fast backboardd from cache. Bisect with JITCACHE_SKIP_RANGE by library next.
 
+## Speed 5 (2026-10-30): crash elimination, autosaved JIT cache, linked AOT image
+
+Metric: a cold boot (cleared JIT cache dir) + Settings cold/warm + 3 reopens with zero process crashes/restarts.
+Reached on 5 consecutive runs (sweep8, warm8, c9, c10, aot3) and the final default-config boot.
+
+Root causes and fixes (details in round-done/speed5.md):
+1. SpringBoard abort in `_BKSHIDUISensorOverseer` ("we must have a remote target"): the sim backboardd has no UI sensor
+   server (BKHIDUISensorCoordinator compiled out), BoardServices invalidates the declared service at its "automatic
+   bootstrap deadline" (a dispatch_async to the main queue, not a timer); on a Mac the invalidation arrives after
+   `-remoteTarget` returns, under a cold JIT before. `objc_direct`, so patched in the guest:
+   `_connectionLock_connectToRemoteServiceIfNeeded` returns nil (`X86CODE_A64_UISENSOR=1` keeps Apple's code).
+2. objc method-cache UAF: `_collecting_in_critical` cannot see JIT threads (their PCs are x86) -> returns true now
+   (old buckets leak; `X86CODE_A64_OBJC_CACHE_GC=1` restores). objc bucket race: LDP/STP pairs are 16-byte atomic on
+   arm64 (LSE2), two 8-byte accesses here; LDP now loads the high half (sel) first and the inline msgSend probe reads
+   sel before imp (no stale-imp hit -> jump to `0 ^ class`).
+3. 16K guest pages vs 4K Darling mappings: guest `vm_deallocate`/`munmap` of 4K-granular host-range memory (Mach OOL
+   data) unmapped the next mapping: libsystem stub images (GOT calls into unmapped pages), glibc chunks (robin_map UAF).
+   Received OOL sizes are recorded (`_mach_msg`/`_mach_msg_overwrite`), unmaps are clipped to them, to the containing
+   VMA for 4K-aligned starts, and never spill into a file mapping.
+4. Fault handler: native-RIP faults went to Darling's sigexc, which parked the thread in a darlingserver RPC (process
+   hung at 0%). Now report (SA_NODEFER, TLS-free nesting guard, mappings, native frame walk) and SIGKILL so launchd
+   restarts it. The `[x20+0xc]` diagnostic read and a SIGALRM watchdog were killing the report itself.
+5. backboardd image/cache fault (ColorSync): FP/vector fallbacks call host functions via `CallFunction` without
+   `RegAlloc::HostCall`, baking libarm64jit's old address into persisted blocks. `CallFunction` now marks the block
+   non-persistable.
+6. AOT image ran unlinked (every block exit through the locked dispatcher: home 154 s, Settings >74 s): link sites are
+   persisted (A64JC06) and relinked at load. backboardd loads the image by default now.
+7. Autosave thread (new) aborted metalhostd: Darling calls (logf's file write) from a non-Darling thread; and signals
+   delivered to it made mldr abort. Saver blocks signals and logs to stderr only.
+
+JIT cache autosave: idle (<500 new blocks/10 s for 20 s) or every 120 s while growing, >=5000 new blocks, plus at
+exit; snapshot under the lock without unlinking live code, file written outside it (7-14 ms lock for daemons).
+`X86CODE_A64_JITCACHE_AUTOSAVE=0` off. Verified: a reboot on the saved dir loads SpringBoard 754K, backboardd 175K,
+Preferences 561K blocks.
+
+Numbers (cold = cleared cache): home 68-84 s with 0 restarts (Speed 4: ~245 s, 3 restarts); Settings cold 27-32 s
+(no AOT), 26 s (AOT, linked); warm 5 s. A warm per-process cache or the AOT image barely moves home or Settings:
+SpringBoard spends ~24 s and Preferences ~12 s in dyld_sim prepare (all initializers), which is the next target.
+
 ## Stage 4: AOT translation (design)
 
 Prior art (all MIT, none drop-in): Box64 DynaCache (github.com/ptitSeb/box64, docs/USAGE.md, discussion #2510:

@@ -103,9 +103,9 @@ bool aot_eligible(const std::string &exe) {
         std::string list = std::string(",") + l + ",";
         return list == ",all," || list.find("," + base + ",") != std::string::npos;
     }
-    // Not backboardd yet: a builder-made image faults there (stale host address in a ColorSync block, ARM64-PLAN
-    // Stage 4), though a cold backboardd misses BoardServices' bootstrap deadline for BKHIDUISensorService.
-    return exe.find(".app/") != std::string::npos;
+    // Apps (.app/: SpringBoard, Preferences, ...) and backboardd. Speed 5: backboardd's image fault (an FP fallback
+    // CallFunction baked libarm64jit's old address into a persisted block) is fixed, so it loads the image too.
+    return exe.find(".app/") != std::string::npos || (b && !strcmp(b + 1, "backboardd"));
 }
 
 }  // namespace
