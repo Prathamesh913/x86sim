@@ -106,6 +106,11 @@ bool aot_eligible(const std::string &exe) {
         if (list == ",all,") return (personality(0xffffffff) & ADDR_NO_RANDOMIZE) != 0;
         return list.find("," + base + ",") != std::string::npos;
     }
+    // Speed 8: not metalhostd (our Metal shim, one per app). With the image it took a guest NULL read now and then
+    // (Speed 6 aot1; Speed 8 2 of ~20 boots): a callee-saved register (MTLSimApplicationContext's `this`) comes back
+    // zero from libxpc's xpc_dictionary_get_data/create_reply (MTLSimImplementation+0x1f6c/+0x218c). Never without
+    // the image. Root cause open; X86CODE_A64_AOT_PROCS=all still includes it.
+    if (base == "metalhostd") return false;
     // Speed 7: every process that can map the image shared (ASLR off: launchd_sim's children). With lazy metadata a
     // daemon pays ~1 MB for it and its shared-cache code becomes shared pages. Elsewhere: apps and backboardd.
     if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) return true;
@@ -189,7 +194,7 @@ void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string
     const std::string &dst = to.empty() ? g_path : to;
     if (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) return;
     mkdir(g_dir.c_str(), 0755);
-    std::string tmp = dst + ".tmp";
+    std::string tmp = dst + ".tmp." + std::to_string(getpid());  // Speed 8: two sim instances save the same <exe>.bin
     size_t bytes = Dynarmic::A64::Jit::SavePersistentCache(shared, tmp, g_uuid, g_build, kCacheLo, kCacheHi);
     if (!bytes) {
         if (getenv("X86CODE_A64_STATS")) logf("jitcache: nothing to save");

@@ -28,7 +28,10 @@ D=$X86SIM_DEVICE; ST=$X86SIM_STATE; SECS=${SECS:-90}
 mkdir -p "$D" "$ST"
 rm -rf "$D"/data/var/log/*.log
 # Speed 1: start this boot's mtlvk when Metal is requested. Own socket + pidfile under var/run-a64.
+# Speed 8: A64_MTLVK_SOCKET=<path of a running mtlvk's socket> shares that mtlvk (one per host for several devices; it
+# keeps an object table per connection): this boot neither starts nor stops it.
 stop_a64_mtlvk() {
+	[ -n "${A64_MTLVK_SOCKET:-}" ] && return 0
 	local old
 	old=$(cat "$ST/mtlvk.pid" 2>/dev/null || true)
 	if [ -n "$old" ] && [ -d "/proc/$old" ]; then
@@ -44,6 +47,17 @@ if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ]; then
 		echo "boot-a64: ensure-metal-framework failed; pipelines will not compile" >&2
 	}
 	MTLVK_BIN=${MTLVK:-$X86SIM_MTLVK}
+	if [ -n "${A64_MTLVK_SOCKET:-}" ]; then
+		if [ -S "$A64_MTLVK_SOCKET" ]; then
+			export X86CODE_MTLVK_SOCKET=$A64_MTLVK_SOCKET
+			echo "boot-a64: sharing mtlvk at $A64_MTLVK_SOCKET, Metal for: $X86CODE_METAL" >&2
+		else
+			echo "boot-a64: A64_MTLVK_SOCKET $A64_MTLVK_SOCKET is not a socket: software rendering" >&2
+			export X86CODE_METAL=0
+		fi
+	fi
+fi
+if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ] && [ -z "${A64_MTLVK_SOCKET:-}" ]; then
 	stop_a64_mtlvk
 	export X86CODE_MTLVK_SOCKET=$ST/mtlvk.sock
 	if [ -x "$MTLVK_BIN" ]; then
