@@ -11,7 +11,7 @@ to the simulator's hardware keyboard (host/simhid). F1 or Ctrl+H = home button, 
 up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in)."""
 import os, threading, socket, struct, sys, time
 import gi
-# x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole 1179x2556 texture (12 MB) for every
+# x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole frame texture for every
 # frame, and on the NVIDIA driver ~75% of that CPU time is kernel time inside the driver's ioctls: 46% of a core at
 # 60 fps (40% with gl). The cairo renderer scales the frame into the window's shm buffer on the CPU instead: 13%,
 # the compositor's cost unchanged (perf: tests on a synthetic 60 Hz ring). GSK_RENDERER=vulkan|gl still overrides.
@@ -29,8 +29,29 @@ src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(x86config.data(), "fram
 div = int(sys.argv[2]) if len(sys.argv) > 2 else 2
 sockpath = os.environ.get("SIMHID_SOCKET", os.path.join(os.path.dirname(src), "simhid.sock"))
 
-state = {"mtime": None, "size": (1179, 2556), "sock": None, "seq": None, "fps": [], "mode": "one", "start": (0, 0)}
 ring = fbring.Ring()
+
+
+def initial_size():
+    """Device pixels from the live ring, else SIMULATOR_MAINSCREEN_*, else classic x86 1179x2556."""
+    try:
+        if ring._open() and ring.mm and ring.mm[:4] == b"SFBR":
+            w, h = struct.unpack_from("<II", ring.mm, 16)
+            if w > 0 and h > 0:
+                return int(w), int(h)
+    except OSError:
+        pass
+    try:
+        w = int(os.environ.get("SIMULATOR_MAINSCREEN_WIDTH", "0"))
+        h = int(os.environ.get("SIMULATOR_MAINSCREEN_HEIGHT", "0"))
+        if w > 0 and h > 0:
+            return w, h
+    except ValueError:
+        pass
+    return 1179, 2556
+
+
+state = {"mtime": None, "size": initial_size(), "sock": None, "seq": None, "fps": [], "mode": "one", "start": (0, 0)}
 
 
 def send(line):
@@ -77,10 +98,11 @@ def on_activate(app):
     win = Gtk.ApplicationWindow(application=app, title="x86Code iOS Simulator")
     pic = Gtk.Picture()
     pic.set_content_fit(Gtk.ContentFit.FILL)
-    pic.set_size_request(1179 // div, 2556 // div)
+    dw, dh = state["size"]
+    pic.set_size_request(dw // div, dh // div)
     pic.set_can_shrink(True)
     win.set_child(pic)
-    win.set_default_size(1179 // div, 2556 // div)
+    win.set_default_size(dw // div, dh // div)
 
     def norm(x, y):
         w, h = pic.get_width() or 1, pic.get_height() or 1

@@ -689,12 +689,22 @@ iconservicesagent 248. Same JIT-meta pattern in every translated process — the
 JIT meta is cut would push whole-sim further from 1 GB. Next pass: apply the same map
 compaction wins process-wide, then trial-enable PosterBoard with a before/after PSS.
 
-### Still open (stage 3 remainder / stage 4 prep)
-1. Further shrink JIT meta (remaining 288 MB SB VMA = fastmem+patch+block_pages; sparse
-   `block_descriptors` / drop unused unlinked_heads; free IR after emit; `madvise` freed
-   guest heap). Goal gap: ~3.56 GB → under 1 GB.
-2. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
-3. A few more cold-boot reps with park+strip to call reliability done.
-4. Persistent on-disk translation cache; trim the early shared boot spin.
-5. Guest TLS destructors on every exit path; Metal → Vulkan (arm64 shims / 27.0 selectors).
-6. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.
+### Input fix (2026-10-29, this round)
+Arm64 touch was broken after the socket path started delivering events: `BKDisplayConvertCAScreenLocationToContext`
+got `displayUUID=(null)` for every digitizer event. `BKIOHIDService _setUpInitialProperties` copies the HID
+property `displayUUID` into its ivar; set it to `x86Code-main-display` (same string as `SFBDisplayGetDisplayUID`).
+Also: sync `_IOHIDServiceDispatchEvent` on the socket thread (async was a silent no-op under the JIT), mutex
+instead of `dispatch_sync` for `handle_line`, and `simtouch`/`simview` read 1206×2622 from the frame ring.
+Verified: Settings tap launches `com.apple.Preferences` with no new null-displayUUID convert errors.
+
+### Still open (stage 3 remainder / next rounds)
+1. **SPEED first (next):** Metal→Vulkan on the GPU; native x86 hot paths (`objc_msgSend`, retain/release,
+   memcpy/string); ahead-of-time translation of the shared cache. Faster runs unblock later memory work.
+2. Further shrink JIT meta (deferred this round — incomplete dynarmic header WIP was reverted; remaining
+   288 MB SB VMA = fastmem+patch+block_pages; sparse `block_descriptors` / drop unused unlinked_heads;
+   free IR after emit; `madvise` freed guest heap). Goal gap: ~3.56 GB → under 1 GB.
+3. PosterBoard extensions RSS bomb; restore chronod/FileProvider when leaner.
+4. A few more cold-boot reps with park+strip to call reliability done.
+5. Persistent on-disk translation cache; trim the early shared boot spin.
+6. Guest TLS destructors on every exit path.
+7. `X86CODE_A64_PROFILE` / `MEMLOG` still correlate with early `launchd_sim` SIGABRT — leave off for boots.

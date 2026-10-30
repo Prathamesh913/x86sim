@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Send touches/keys/buttons to the simulator (host/simhid, backboardd's virtual HID services).
-    cli/libexec/simtouch.py tap <x> <y>                    device pixels (1179x2556)
+    cli/libexec/simtouch.py tap <x> <y>                    device pixels (size from the frame ring / device env)
     cli/libexec/simtouch.py swipe <x1> <y1> <x2> <y2> [ms]
     cli/libexec/simtouch.py home | lock                    press + release
     cli/libexec/simtouch.py pinch <cx> <cy> <r1> <r2> [ms]   two fingers on a horizontal line through (cx,cy), their
@@ -14,12 +14,36 @@
     cli/libexec/simtouch.py openurl <url>                  open a URL (as `simctl openurl`); needs the boot's openurl job:
                                                       com.x86code.openurl (cli/libexec/rundev.sh starts it; log:
                                                       var/device/data/var/log/x86code-openurl.log)"""
-import os, socket, sys, time
+import os, socket, struct, sys, time
 
-W, H = 1179, 2556
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 import x86config  # noqa: E402
+import fbring  # noqa: E402
 SOCK = os.environ.get("SIMHID_SOCKET", os.path.join(x86config.data(), "simhid.sock"))
+
+
+def device_size():
+    """Prefer the live frame ring, then SIMULATOR_MAINSCREEN_*, then the classic x86 1179x2556."""
+    try:
+        r = fbring.Ring()
+        if r._open() and r.mm and r.mm[:4] == b"SFBR":
+            w, h = struct.unpack_from("<II", r.mm, 16)
+            if w > 0 and h > 0:
+                return int(w), int(h)
+    except OSError:
+        pass
+    try:
+        w = int(os.environ.get("SIMULATOR_MAINSCREEN_WIDTH", "0"))
+        h = int(os.environ.get("SIMULATOR_MAINSCREEN_HEIGHT", "0"))
+        if w > 0 and h > 0:
+            return w, h
+    except ValueError:
+        pass
+    return 1179, 2556
+
+
+W, H = device_size()
 
 # US layout: character -> (usage, shift)
 KEYS = {c: (4 + i, False) for i, c in enumerate("abcdefghijklmnopqrstuvwxyz")}

@@ -8,7 +8,14 @@ touchscreen, the main-screen buttons (home, lock, volume) and a keyboard. Apple'
 from Simulator.app over a mach port; ours reads a Unix socket.
 
 Clients: `cli/libexec/simview.py` (mouse, keyboard; Ctrl/Shift+drag = two fingers; F1/Ctrl+H home, F2 lock, F3/F4
-volume) and `cli/libexec/simtouch.py` (`x86sim tap|swipe|pinch|pan2|key|type|home|lock|raw`).
+volume) and `cli/libexec/simtouch.py` (`x86sim tap|swipe|pinch|pan2|key|type|home|lock|raw`). Device pixel size comes
+from the live frame ring / `SIMULATOR_MAINSCREEN_*` (arm64 is 1206×2622).
+
+Arm64 notes: the touchscreen HID props must include `displayUUID` = `x86Code-main-display` (same as
+`SFBDisplayGetDisplayUID`); `BKIOHIDService` copies that property into its displayUUID ivar, and without it
+`BKDisplayConvertCAScreenLocationToContext` drops every touch. Dispatch `_IOHIDServiceDispatchEvent` on the
+socket thread (not `dispatch_async`) and serialize `handle_line` with a mutex (`dispatch_sync` was a silent
+no-op under the A64 JIT).
 
 ## Socket protocol
 

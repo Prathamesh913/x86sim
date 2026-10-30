@@ -71,9 +71,27 @@ extern void IOHIDEventSetIntegerValue(IOHIDEventRef, uint32_t field, CFIndex val
 #define kDigitizerIdentity 0x20
 #define kFieldDigitizerIsDisplayIntegrated ((11 << 16) | 25)
 
+// x86Code arm64: also mirror to a host-visible log file. stderr under the JIT can be late or
+// interleaved with backboardd's own logging; a dedicated file lets us see whether the socket
+// thread actually runs handle_line / dispatch.
+static FILE* g_logf;
 static void slog(const char* fmt, ...) {
 	va_list ap; va_start(ap, fmt);
 	fprintf(stderr, "simhid: "); vfprintf(stderr, fmt, ap); fprintf(stderr, "\n");
+	if (!g_logf) {
+		const char* p = getenv("SIMHID_LOG");
+		if (!p || !*p) p = "/Volumes/SystemRoot/home/bobby/scratch/x86code/simhid.log";
+		g_logf = fopen(p, "a");
+		if (g_logf) setvbuf(g_logf, NULL, _IOLBF, 0);
+	}
+	if (g_logf) {
+		fprintf(g_logf, "simhid: ");
+		va_list ap2; va_start(ap2, fmt);
+		vfprintf(g_logf, fmt, ap2);
+		va_end(ap2);
+		fprintf(g_logf, "\n");
+		fflush(g_logf);
+	}
 	va_end(ap);
 }
 
@@ -87,21 +105,30 @@ typedef struct {
 
 static VService touch_svc, buttons_svc, keyboard_svc;
 
-static Boolean v_open(void* t, void* r, IOOptionBits o) { return true; }
-static void v_close(void* t, void* r, IOOptionBits o) {}
+static Boolean v_open(void* t, void* r, IOOptionBits o) {
+	slog("v_open %s", ((VService*)t)->name);
+	return true;
+}
+static void v_close(void* t, void* r, IOOptionBits o) { slog("v_close %s", ((VService*)t)->name); }
 static CFTypeRef v_copyProperty(void* t, void* r, CFStringRef key) {
 	VService* s = t;
 	CFTypeRef v = CFDictionaryGetValue(s->props, key);
 	return v ? CFRetain(v) : NULL;
 }
 static Boolean v_setProperty(void* t, void* r, CFStringRef key, CFTypeRef value) { return true; }
-static void v_setEventCallback(void* t, void* r, void* cb, void* a, void* b) {}
+static void v_setEventCallback(void* t, void* r, void* cb, void* a, void* b) {
+	slog("v_setEventCallback %s cb=%p", ((VService*)t)->name, cb);
+}
 static void v_schedule(void* t, void* r, dispatch_queue_t q) {
 	VService* s = t;
 	if (q) dispatch_retain(q);
 	s->queue = q;
+	slog("v_schedule %s queue=%p", s->name, q);
 }
-static void v_unschedule(void* t, void* r, dispatch_queue_t q) { ((VService*)t)->queue = NULL; }
+static void v_unschedule(void* t, void* r, dispatch_queue_t q) {
+	slog("v_unschedule %s", ((VService*)t)->name);
+	((VService*)t)->queue = NULL;
+}
 static IOHIDEventRef v_copyEvent(void* t, void* r, uint32_t type, IOHIDEventRef m, IOOptionBits o) { return NULL; }
 static IOReturn v_setOutputEvent(void* t, void* r, IOHIDEventRef e) { return 0; }
 static IOHIDEventRef v_copyMatchingEvent(void* t, void* r, CFDictionaryRef m) { return NULL; }
@@ -127,9 +154,16 @@ static void add_service(IOHIDEventSystemRef_ sys, VService* s) {
 }
 
 static void dispatch_event(VService* s, IOHIDEventRef e) {
-	if (!s->service || !e) { if (e) CFRelease(e); return; }
-	dispatch_queue_t q = s->queue ?: dispatch_get_main_queue();
-	dispatch_async(q, ^{ _IOHIDServiceDispatchEvent(s->service, e); CFRelease(e); });
+	if (!s->service || !e) {
+		slog("dispatch_event drop service=%p e=%p", s ? s->service : NULL, e);
+		if (e) CFRelease(e);
+		return;
+	}
+	// x86Code arm64: call _IOHIDServiceDispatchEvent on this thread. dispatch_async onto the
+	// service queue / main queue was a silent no-op under the JIT for socket-thread producers
+	// (reads happened, UI never saw touches). Direct dispatch matches Indigo's in-thread path.
+	_IOHIDServiceDispatchEvent(s->service, e);
+	CFRelease(e);
 }
 
 // --- events
@@ -155,6 +189,7 @@ static void send_touch(const char* phase, double x, double y) {
 	IOHIDEventSetIntegerValue(finger, kFieldDigitizerIsDisplayIntegrated, 1);
 	IOHIDEventAppendEvent(hand, finger, 0);
 	CFRelease(finger);
+	slog("touch %s (%.4f,%.4f) svc=%p queue=%p", phase, x, y, touch_svc.service, touch_svc.queue);
 	dispatch_event(&touch_svc, hand);
 }
 
@@ -211,9 +246,13 @@ static void handle_line(char* line) {
 	if (*line) slog("unknown command: %s", line);
 }
 
-static dispatch_queue_t cmd_q;
+// x86Code arm64: serialize with a mutex instead of dispatch_sync. dispatch_sync from the
+// socket pthread onto cmd_q was observed to consume socket bytes without ever running the
+// block under the A64 JIT (no touch logs, no UI). Mutex + direct call stays on this GuestThread.
+static pthread_mutex_t cmd_mu = PTHREAD_MUTEX_INITIALIZER;
 static void* client_thread(void* arg) {
 	int fd = (int)(intptr_t)arg;
+	slog("client_thread fd=%d", fd);
 	char buf[4096];
 	size_t n = 0;
 	for (;;) {
@@ -226,13 +265,16 @@ static void* client_thread(void* arg) {
 		while ((nl = strchr(start, '\n'))) {
 			*nl = 0;
 			if (nl > start && nl[-1] == '\r') nl[-1] = 0;
-			dispatch_sync(cmd_q, ^{ handle_line(start); });
+			pthread_mutex_lock(&cmd_mu);
+			handle_line(start);
+			pthread_mutex_unlock(&cmd_mu);
 			start = nl + 1;
 		}
 		n = strlen(start);
 		memmove(buf, start, n);
 		if (n >= sizeof(buf) - 1) n = 0;
 	}
+	slog("client_thread fd=%d done", fd);
 	close(fd);
 	return NULL;
 }
@@ -275,17 +317,24 @@ static void* listen_thread(void* arg) {
 - (instancetype)initUsingHIDService:(IOHIDEventSystemRef_)system error:(NSError**)error {
 	if (!(self = [super init])) return nil;
 	if (!system) { if (error) *error = [NSError errorWithDomain:@"SimHID" code:1 userInfo:nil]; [self release]; return nil; }
+	// displayUUID must match SFBDisplayGetDisplayUID ("x86Code-main-display"): BKIOHIDService
+	// _setUpInitialProperties copies the HID property "displayUUID" into its ivar; without it,
+	// BKDisplayConvertCAScreenLocationToContext gets a null UUID and drops every touch.
 	touch_svc = (VService){ "touchscreen", 0x7863000000000001ull,
-		make_props(@"x86Code touchscreen", 0x0d, 0x04, @{ @"DisplayIntegrated": @YES, @"SupportsInk": @NO }) };
+		make_props(@"com.apple.SimulatorHID.ScreenTouchService.x86Code-main-display", 0x0d, 0x04, @{
+			@"DisplayIntegrated": @YES,
+			@"SupportsInk": @NO,
+			@"displayUUID": @"x86Code-main-display",
+		}) };
 	buttons_svc = (VService){ "buttons", 0x7863000000000002ull, make_props(@"x86Code buttons", 0x0c, 0x01, nil) };
 	keyboard_svc = (VService){ "keyboard", 0x7863000000000003ull, make_props(@"x86Code keyboard", 0x01, 0x06, nil) };
 	add_service(system, &touch_svc);
 	add_service(system, &buttons_svc);
 	add_service(system, &keyboard_svc);
-	cmd_q = dispatch_queue_create("simhid.commands", DISPATCH_QUEUE_SERIAL);
 	pthread_t t;
 	pthread_create(&t, NULL, listen_thread, NULL);
 	pthread_detach(t);
+	slog("SimHIDSystem ready");
 	return self;
 }
 @end
