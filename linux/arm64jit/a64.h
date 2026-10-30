@@ -121,6 +121,8 @@ constexpr u32 kExitSvc = 0xffff;
 // "svc #0xfffe": a Linux syscall for our own arm64 shims (host/simfb's futex wake): x8 = x86_64 syscall number,
 // x0-x5 arguments, result (or -errno) in x0. The runtime's code never uses svc immediates this high.
 constexpr u32 kLinuxSvc = 0xfffe;
+// "svc #0xfffd": Swift conformance scan step (swiftconf.cpp), substituted by MemoryReadCode, never in memory.
+constexpr u32 kSwiftConfSvc = 0xfffd;
 extern u64 g_exit_stub;  // "svc #0xffff": LR of every native->guest call
 
 u32 add_thunk(const std::string &name, Handler fn, const void *native = nullptr, int nfixed = 0);
@@ -128,6 +130,8 @@ u64 stub_code(u32 index);              // guest address of thunk i's "svc #i; re
 void emit_stub(uint32_t *at, u32 index);  // writes "svc #index; ret" at a guest address
 void boundary_init();
 void dyld_sim_patches(u64 slide);
+std::optional<u32> swiftconf_read_code(u64 a);  // swiftconf.cpp: svc substituted at the Swift conformance step
+void swiftconf_step(GuestThread &t);
 struct GuestThread;
 void svc_bench(GuestThread &t);  // X86CODE_A64_SVCBENCH=n / X86CODE_A64_GUESTLIB_TEST=1 (guestlibc.cpp)
 bool is_guest_libc_export(const std::string &n);

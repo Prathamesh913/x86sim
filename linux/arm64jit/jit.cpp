@@ -89,7 +89,10 @@ GuestThread *GuestThread::current() { return t_self; }
 namespace {
 struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
-    std::optional<uint32_t> MemoryReadCode(u64 a) override { return GuestThread::rd<uint32_t>(a); }
+    std::optional<uint32_t> MemoryReadCode(u64 a) override {
+        if (auto w = swiftconf_read_code(a)) return w;
+        return GuestThread::rd<uint32_t>(a);
+    }
     uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
     uint16_t MemoryRead16(u64 a) override { return GuestThread::rd<uint16_t>(a); }
     uint32_t MemoryRead32(u64 a) override { return GuestThread::rd<uint32_t>(a); }
@@ -335,6 +338,7 @@ void memlog_shared_stats() {
 void GuestThread::CallSVC(uint32_t swi) {
     const u64 pc0 = jit->GetPC();  // svc+4
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
+    if (swi == kSwiftConfSvc) { swiftconf_step(*this); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
         set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));
     } else {
