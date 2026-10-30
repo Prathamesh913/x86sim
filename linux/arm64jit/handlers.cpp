@@ -248,7 +248,11 @@ static void h_dyld_cache_info(GuestThread &t, u32 i) {
 }
 
 // libSystem's initializer calls this first, before __malloc_init: the cache is mapped, nothing has allocated yet.
-static void h_libkernel_init(GuestThread &t, u32) { native_malloc_install(); t.set_x(0, 0); }
+static void h_libkernel_init(GuestThread &t, u32) {
+    native_malloc_install();
+    native_objc_install();  // shared-cache text is mapped; patch before any guest objc runs
+    t.set_x(0, 0);
+}
 
 // abort_with_payload(ns, code, payload, size, reason, flags) / abort_with_reason(ns, code, reason, flags): log first
 static void h_abort_with(GuestThread &t, u32 i) {

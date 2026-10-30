@@ -291,6 +291,7 @@ void memlog_shared_stats() {
          (unsigned long long)st.blocks, (unsigned long long)st.guest_instructions,
          st.code_bytes / 1048576.0, st.translate_ns / 1e9,
          (unsigned long long)st.lookups, g_live_threads.load());
+    native_objc_stats();
 }
 
 void GuestThread::CallSVC(uint32_t swi) {

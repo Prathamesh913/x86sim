@@ -161,6 +161,10 @@ std::vector<std::string> cache_exports(const std::string &cache_path, const std:
 // Native malloc (malloc.cpp): replaces libsystem_malloc's exports in the mapped cache with thunks to Darling's malloc.
 void native_malloc_prepare(const std::string &cache_path);  // before dyld_sim maps the cache: reads the exports
 void native_malloc_install();
+// Native objc_msgSend (objc.cpp): cache-hit fast path in host code; SetPC(IMP) on hit.
+void native_objc_prepare(const std::string &cache_path);
+void native_objc_install();
+void native_objc_stats();  // hits/misses into the process log
 u64 reserve_aligned(u64 size, u64 mask);  // guest-VM range [12 GB, 63 GB), PROT_NONE
 // gheap.cpp
 void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *));

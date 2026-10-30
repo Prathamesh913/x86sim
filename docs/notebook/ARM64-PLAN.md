@@ -874,17 +874,22 @@ not continued translation. Dominates whole-sim idle once Settings has been opene
 
 ### Native hot paths (status)
 - **memcpy/memset/str\***: already native via libsystem_platform stubs (Stage 0/2; memcpy bench 1.0x).
-- **objc_msgSend / retain/release:** not landed this round. Launch wall is ~80% guest execution — these matter.
-- **perf map:** `X86CODE_A64_PERFMAP=1` wired; use on next profiled launch.
+- **objc_msgSend (svc stub):** landed in `linux/arm64jit/objc.cpp` (cache hit → `SetPC(IMP)`; miss →
+  `__objc_msgSend_uncached`; nil/tagged handled). Correct on `objcswift.sim` (identical result hashes) and
+  Settings cold launch. **Default OFF** (`X86CODE_A64_NATIVE_OBJC=1` to enable): the svc/CallSVC/
+  ReturnFromRunCode round-trip is slower than the ~15 guest lookup instructions under the JIT
+  (`objcswift` msgSend **~537 ms native vs ~291 ms guest**). Launch wall with native on stayed **~30.6 s**
+  (same as guest). Next: **inline** the lookup into translated code (no svc), or a cheaper boundary.
+- **retain/release:** not landed (isa CAS / layout; keep guest).
+- **perf map:** `X86CODE_A64_PERFMAP=1` wired.
 
 ### Commits
 - `1b9b34f` — openurl arm64 + nsurlsessiond in boot-a64
-- (follow-ups) memlog translate_ns, PERFMAP, openurl 120 s arm64 wait, Speed 2 docs/screens
+- `1c8cc3b` — memlog translate_ns, PERFMAP, openurl 120 s arm64 wait, Speed 2 docs/screens
+- (this) native objc_msgSend path (opt-in)
 
 ### Gaps / next
-1. Cut cold launch: persistent per-app or shared-cache JIT disk cache; native objc_msgSend fast path; revisit RSB
-   under shared (off today — every return hits GetBlock).
-2. Stop Preferences ~110% background spin (lock/run-loop).
-3. objc_msgSend + retain/release native thunks; re-bench tests/arm64 + Settings scroll.
-4. PosterBoard still out (memory).
+1. Cut cold launch: persistent JIT disk cache; **inlined** objc_msgSend (not svc); revisit RSB under shared.
+2. Stop Preferences ~110% background spin (lock/run-loop) — dominates warm-alive.
+3. PosterBoard still out (memory).
 

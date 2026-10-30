@@ -1,17 +1,22 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Speed 2: Settings on GPU is real (list rows OCR-verified). 'Black launch' was slow cold start: tap\to content ~30.6 s (translate ~6 s / execute ~24 s). Warm-relaunch same; Metal already warm (mtlvk \Delta0). Scroll ~50 fps, latency p50 ~23 ms. openurl+nsurlsessiond on a64; cloudd 70% storm gone. Preferences still ~110% idle after open (JIT+mutex). Leave-running: GPU home on :0.",
+  "now": "Speed 2: Settings GPU cold/warm-relaunch tap-to-content ~30.6 s (translate ~6 s / execute ~24 s; Metal ~0). svc native objc_msgSend opt-in (X86CODE_A64_NATIVE_OBJC=1): correct on objcswift+Settings, slower than guest (~537 vs ~291 ms msgSend) — needs inlined emit. cloudd storm gone. Preferences ~110% idle. Leave-running: GPU home on :0.",
   "metrics": [
     [
-      "Settings cold tap\to content",
+      "Settings cold tap-to-content",
       "~30.6 s",
-      "translate ~5.9 s / ~565K blocks; rest JIT execute; Metal ~0 (home warm)"
+      "translate ~5.9-6.2 s / ~565K blocks; rest JIT execute; Metal ~0 (home warm)"
     ],
     [
       "Settings warm-relaunch",
       "~30.6 s",
       "per-process JIT cache discarded on terminate"
+    ],
+    [
+      "objcswift msgSend (guest / svc-native)",
+      "~291 ms / ~537 ms",
+      "svc boundary loses; native path opt-in only"
     ],
     [
       "Settings list scroll",
@@ -30,7 +35,7 @@
     ],
     [
       "Rendering",
-      "Metal\to Vulkan CA; Settings UI on GPU",
+      "Metal-to-Vulkan CA; Settings UI on GPU",
       "X86CODE_METAL=all; screens 33-settings / 34-home"
     ],
     [
@@ -58,7 +63,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Done: shared cache, slim-park, idle CPU, Metal CA home+Settings, openurl/nsurlsessiond, launch breakdown (translate vs execute). Next: persistent JIT cache, objc_msgSend native, Preferences background spin, AOT."
+      "detail": "Done: shared cache, slim-park, idle CPU, Metal CA home+Settings, openurl/nsurlsessiond, launch breakdown, svc objc_msgSend experiment (opt-in; inlined next). Next: persistent JIT cache, inlined objc_msgSend, Preferences spin, AOT."
     },
     {
       "name": "4. Near native",
@@ -67,11 +72,11 @@
     }
   ],
   "issues": [
-    "Cold Settings launch ~30 s (80% JIT execute, 20% translate); need persistent cache + native objc_msgSend",
+    "Cold Settings launch ~30 s (80% JIT execute, 20% translate); need persistent cache + inlined objc_msgSend",
+    "svc-based native objc_msgSend is a net loss vs guest (CallSVC overhead); default off",
     "Preferences ~110% CPU after open (background); JIT + pthread_mutex churn",
     "Wallpaper (PosterBoard) still out for memory; home is black wallpaper with correct colorful icons",
     "Memory: ~3.56 GB real vs 1 GB goal \u2014 anon_host_jit_meta still large across processes",
-    "objc_msgSend / retain-release native thunks not landed yet",
     "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory"
   ],
   "milestones": [

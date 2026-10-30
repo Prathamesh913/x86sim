@@ -510,6 +510,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
         build_stub_dylib(path, cache_exports(cache, path));
     }
     native_malloc_prepare(cache);
+    native_objc_prepare(cache);
     read_const_mappings(cache);
     double t_stubs = ms_since(g_t0);
 
