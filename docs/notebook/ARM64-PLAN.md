@@ -1112,3 +1112,49 @@ Details in round-done/speed9.md. Single runs on a shared host.
   profile; most of their volume was the Task.sleep spin (1945 -> 118 lines). Not stubbed.
 - `X86CODE_A64_GSAMPLE=<exe>` (debug): samples one guest thread's stack every 5 ms (top stacks + inclusive frames).
 - Final: home 42 s, Settings cold 9-12 s / warm 3 s, 3 consecutive clean cold boots + Settings (fin1-3).
+
+## Speed 10 (2026-10-30): image fast load, boot critical path, guest timebase, fresh devices, memory
+
+Details in round-done/speed10.md. Single runs on a shared host (30 GB RAM, ~33 GB in swap).
+- **Boot critical path.** A 1 Hz per-process CPU timeline plus SpringBoard's main-thread sampler showed that the host is
+  ~80% idle during boot: it's latency-bound. Where the time goes:
+  - dyld_sim prepare in SpringBoard: 3.5-12 s. The spread follows host page-cache misses: the slow runs coincide with
+    seconds of btrfs-endio/kcryptd reads, as image/dyld-cache pages come back from the encrypted disk.
+  - Every process on the image parsed ~1.2M index entries, sorted them and compared them with the shared .idx before
+    dropping them. That took ~300 ms each, under the layout flock, so ~25 daemons starting together were serialized.
+    Fixed: a published .map + complete .idx (v2) is mapped directly, 1-2 ms (dynarmic; `X86CODE_A64_AOT_FASTLOAD=0`
+    off).
+  - SpringBoard waits ~5 s on a FrontBoard scene lock. Home appears 8-11 s after MTLCompilerService starts, in every
+    run. MTLCompilerService spends a deterministic 11.9 CPU-s per boot in libLLVM -O2 passes (InstCombine, GVN,
+    inliner): shader source compiles redone every boot. The front-end caches (com.apple.metalfe) stay empty; the
+    client is not identified yet.
+  - boot-inner.sh's cgroup join forked tr + grep for every host process every 3 s (~35k forks per boot); now two
+    grep -l passes.
+  - Home: 36-44 s (image, before) -> 29/29/32 s (fin1-3).
+- **Guest timebase.** `X86CODE_A64_TIMEBASE=apple` (off by default) gives the guest Apple silicon's 125/3 timebase:
+  - Mach time is converted at the thunks: mach_*_time, timebase_info, mach_get_times, mk_timer_arm/_leeway/_cancel,
+    mach_wait_until, and EVFILT_TIMER with NOTE_MACHTIME in kevent/kevent64/kevent_qos/kevent_id.
+  - CNTPCT/CNTFRQ run at 24 MHz, mach_absolute_time is guest code (mrs), the Swift patch is off, and the cache key
+    has bit 18.
+  - Probes: all Swift sleeps and dispatch timers are right without the patch.
+  - A full boot leaves 8 processes spinning one native thread at 100%: Darling's workqueue kevent manager receives
+    events nonstop. The converted timers look right (TB_DEBUG log), so the source is not found yet; it needs Darling's
+    WQDBG.
+  - The scan route instead: libdispatch's inlined 125/3 helpers are guarded (it installs generic conversions when
+    mach_timebase_info isn't 125/3). The 0.024/41.67 doubles in UIKitCore/SpringBoardFoundation are layout constants.
+    Audio frameworks (AudioToolbox, CoreAudio, AVFAudio, PHASE, ...) carry 24e6 host-time constants; not in the boot
+    path. Under 1/1, the Swift deadline patch remains the only needed fix.
+- **Fresh device first boot.** lsd builds the LaunchServices store, and SpringBoard's icon threads
+  (SpringBoardHome -> IconServices) wait on it in sync XPC to iconservicesagent. SpringBoard was killed at ~90 s and
+  relaunched; home came after ~5 min. `A64_CLONE_FROM=<device>` (boot-a64) starts a new device from a booted device's
+  data/ (like simctl clone): a second instance reached home in 25 s, and Settings opened with its icons.
+  `A64_STOP_ONLY=1` stops a device's container.
+- **Memory** (anon PSS without mtlvk, one sim): 769 MB -> 698 MB, from two changes:
+  - lf_map grows at 75% load: SpringBoard's 32 -> 16 MB.
+  - Adaptive gheap refill: 1 block, doubling to ~16 KB.
+
+  Then 698 -> 669-680 MB from an image trained on every daemon (25 profiles: s9's five plus each daemon's cold-boot
+  .bin): -3 to -6 MB per daemon. Total PSS 2404 -> 2283-2291 MB.
+- Sampler: `X86CODE_A64_GSAMPLE` now starts at dyld_sim on the main thread and names the thunk a thread is in.
+  `_OUT=<linux path>` writes a file (logf dropped the samples on that thread). `_ALL=1|2` samples all threads (running
+  only | also blocked).
