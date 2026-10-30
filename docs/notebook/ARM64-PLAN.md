@@ -775,3 +775,5 @@ Probe GPU clear ~100 ms first CB; 100 CBs ~35–42 ms once the device is up. Scr
 - `dae5b4e` docs Speed 1 + progress.json
 - `77cd92f` ensure-metal-framework + iosurfaced CFRunLoop + simshim null-name skip
 - `11cc869` arm64 iosurfaced/metalhostd/mtlprobe Mach-Os
+- `801df25` docs/progress Speed 1b + GPU home milestone entry
+- `ad88b07` force-add SW + GPU home screenshots (`30` / `31`)
