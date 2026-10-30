@@ -164,6 +164,8 @@ void native_malloc_install();
 // Native / inline objc_msgSend (objc.cpp).
 void native_objc_prepare(const std::string &cache_path);
 void native_objc_install();
+void objc_cache_gc_guard(GuestThread &t);
+void sim_service_patches(GuestThread &t);
 void native_objc_configure_jit(Dynarmic::A64::UserConfig &c);  // wire inline_* into a new Jit's config
 void native_objc_stats();  // hits/misses into the process log
 // Persistent JIT cache (dyld shared-cache translations). Keyed by cache UUID + build id.

@@ -169,6 +169,62 @@ void native_objc_install() {
              (unsigned long)g_msgsend, (unsigned long)g_uncached, (unsigned long)g_tagged);
 }
 
+// Speed 5: libobjc frees a class's old method-cache buckets (cache_t::collectNolock) only when
+// _collecting_in_critical() finds no thread whose PC is inside objc_msgSend / cache_getImp
+// (objc_restartableRanges + thread_get_state). Under the JIT the probe runs as x86: the inline msgSend
+// probe and translated blocks have no guest PC inside those ranges, so the check always passed and buckets
+// were freed while another thread was still scanning them: SpringBoard SIGSEGVs in lookUpImpOrForward /
+// _collecting_in_critical on garbage caches (count=1867017839, 1634885989), the "libobjc lookup crash" of
+// Speed 4. Make _collecting_in_critical return true: old buckets are never freed (they stay on objc's
+// garbage list; a bounded leak, at most the caches' cumulative growth). X86CODE_A64_OBJC_CACHE_GC=1 restores
+// Apple's behaviour.
+// Replace a shared-cache function's entry with `mov x0/w0, #ret; ret` when its first instruction matches (the
+// cache text is a private mapping), and drop any translation of it (persistent cache / AOT image included).
+static bool patch_return(GuestThread &t, u64 addr, uint32_t expect, uint32_t mov_ret, const char *what) {
+    auto *p = (uint32_t *)addr;
+    if (p[0] != expect) {
+        logf("patch %s: prologue mismatch at %#lx (%#x); not patched", what, (unsigned long)addr, p[0]);
+        return false;
+    }
+    u64 page = addr & ~0xfffull, len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
+    if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) {
+        logf("patch %s: mprotect %#lx failed", what, (unsigned long)page);
+        return false;
+    }
+    p[0] = mov_ret;
+    p[1] = 0xd65f03c0u;  // ret
+    mprotect((void *)page, len, PROT_READ | PROT_EXEC);
+    t.jit->InvalidateCacheRange(addr, 8);
+    if (getenv("X86CODE_A64_STATS")) logf("patch %s at %#lx", what, (unsigned long)addr);
+    return true;
+}
+
+constexpr u64 kCollectingInCritical = 0x1c005ae50ull;  // __ZL23_collecting_in_criticalv, iOS 27.0 24A434
+void objc_cache_gc_guard(GuestThread &t) {
+    if (const char *e = getenv("X86CODE_A64_OBJC_CACHE_GC"); e && atoi(e) == 1) return;
+    // sub sp, sp, #368 -> mov w0, #1
+    patch_return(t, kCollectingInCritical, 0xd105c3ffu, 0x52800020u, "objc _collecting_in_critical -> true");
+}
+
+// Speed 5: the simulator backboardd has no UI sensor server. BKHIDUISensorCoordinator is compiled out of the sim
+// build (only the ivar's type name is left), yet backboardd's Info.plist still declares BKHIDUISensorService in the
+// BKSHIDServices domain. BoardServices therefore drops it at its "automatic bootstrap deadline" (a dispatch_async to
+// backboardd's main queue, queued when BSServiceManager is created: "no listener at automatic bootstrap deadline")
+// and invalidates every client connection ("... because there is no listener"). SpringBoard's
+// -[_BKSHIDUISensorOverseer _connectionLock_connectToRemoteServiceIfNeeded] (objc_direct, so not swizzlable)
+// activates a fresh connection and aborts (brk, "we must have a remote target") if -remoteTarget is already nil. On
+// a Mac the invalidation arrives after -remoteTarget returned (the same backboardd lines appear there and
+// SpringBoard carries on with a dead connection, "backboardd must be exiting"). Under a cold JIT SpringBoard's
+// activate -> remoteTarget window is long enough for backboardd's reply to win, so cold boots restarted
+// SpringBoard 2-6 times. There is no server to reach in the simulator, so the overseer gets no remote target (what
+// it ends up with on a Mac too); mode pushes and queries go to nil. X86CODE_A64_UISENSOR=1 leaves it alone.
+constexpr u64 kUISensorConnect = 0x1c8e3e22cull;  // -[_BKSHIDUISensorOverseer _connectionLock_connectToRemoteServiceIfNeeded]
+void sim_service_patches(GuestThread &t) {
+    if (const char *e = getenv("X86CODE_A64_UISENSOR"); e && atoi(e) == 1) return;
+    // sub sp, sp, #0xb0 -> mov x0, #0
+    patch_return(t, kUISensorConnect, 0xd102c3ffu, 0xd2800000u, "BKS UI sensor connect -> nil");
+}
+
 void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {
     if (!g_inline) return;
     c.inline_objc_msgsend = g_msgsend;

@@ -41,7 +41,7 @@ namespace {
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
 // Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
-constexpr u64 kBuildId = 0x0000000full;  // Speed 4: hybrid svc;ret flag split, AOT image
+constexpr u64 kBuildId = 0x00000010ull;  // Speed 5: CallFunction marks blocks non-persistable (FP/vector fallbacks)
 // kBuildId (bits 0-15), code-shaping env flags (16-17), libarm64jit build-id / load base hash (32-63).
 u64 g_build = kBuildId;
 std::string g_key, g_aot_path;

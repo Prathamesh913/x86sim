@@ -6,6 +6,7 @@
 // libraries, then runs _dyld_sim_prepare() and main under the JIT on this (the main) thread. dyld_sim maps the
 // runtime's prebuilt shared cache itself (fixed at 0x1C0000000) through the SyscallHelpers table we hand it.
 #include "a64.h"
+namespace Dynarmic::Backend { bool IsJitCodeAddress(unsigned long host_pc); }
 #include "macho.h"
 #include <cerrno>
 #include <cstdarg>
@@ -19,6 +20,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <ucontext.h>
 #include <execinfo.h>
 #include <dlfcn.h>
@@ -232,12 +234,87 @@ static bool in_const_data(u64 a) {
     for (int i = 0; i < g_nconst; i++) if (a >= g_const_lo[i] && a < g_const_hi[i]) return true;
     return false;
 }
+// Fatal-fault report: the mapping (from /proc/self/maps, read with raw syscalls into a static buffer) of an address.
+static void maps_line(u64 a, char *out, size_t n) {
+    static char buf[1 << 20];
+    out[0] = 0;
+    int fd = (int)syscall(SYS_open, "/proc/self/maps", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    long len = 0, r;
+    while (len < (long)sizeof buf - 1 && (r = syscall(SYS_read, fd, buf + len, sizeof buf - 1 - len)) > 0) len += r;
+    syscall(SYS_close, fd);
+    buf[len] = 0;
+    for (char *l = buf; *l;) {
+        char *e = strchr(l, '\n');
+        if (e) *e = 0;
+        char *q;
+        unsigned long lo = strtoul(l, &q, 16), hi = strtoul(*q == '-' ? q + 1 : q, &q, 16);
+        if (a >= lo && a < hi) {
+            // "lo-hi perms offset ...": report the file offset (= ELF vaddr for these libraries' segments)
+            while (*q == ' ') q++;
+            while (*q && *q != ' ') q++;
+            unsigned long off = strtoul(q, nullptr, 16);
+            const char *path = strrchr(l, ' ');
+            snprintf(out, n, "%s+%#lx", path ? path + 1 : "?", (unsigned long)(a - lo + off));
+            return;
+        }
+        if (!e) break;
+        l = e + 1;
+    }
+}
+// Frame-pointer walk of the native stack (Darling's libraries keep rbp frames); stops at an unreadable frame.
+static void native_backtrace(ucontext_t *ctx) {
+    char m[256];
+    u64 rip = (u64)ctx->uc_mcontext.gregs[REG_RIP], fp = (u64)ctx->uc_mcontext.gregs[REG_RBP];
+    maps_line(rip, m, sizeof m);
+    logf("  native #0 %#lx %s", (unsigned long)rip, m);
+    for (int i = 1; i < 24 && fp && !(fp & 7); i++) {
+        u64 frame[2];
+        struct iovec local{frame, sizeof frame}, remote{(void *)fp, sizeof frame};
+        if (syscall(SYS_process_vm_readv, getpid(), &local, 1, &remote, 1, 0) != (long)sizeof frame || !frame[1]) break;
+        maps_line(frame[1], m, sizeof m);
+        logf("  native #%d %#lx %s", i, (unsigned long)frame[1], m);
+        if (frame[0] <= fp) break;
+        fp = frame[0];
+    }
+}
+// Speed 5: a fault whose RIP is not in JIT code (Darling's native libsystem_malloc / kernel / pthread, libarm64jit,
+// a jump to a non-exec address) is fatal. Chaining it to Darling's sigexc handler parked the faulting thread in a
+// darlingserver sigprocess RPC forever (often holding the zone lock of the malloc that faulted), so the process hung
+// at 0% instead of crashing and being restarted by launchd_sim. Now: report (an alarm watchdog kills the process if
+// reporting itself blocks; a nested fault in the handler kills at once), then SIGKILL. X86CODE_A64_NATIVE_FAULT=chain
+// restores the old chaining.
+static void fatal_exit(int code) {
+    (void)code;
+    syscall(SYS_kill, getpid(), SIGKILL);
+    syscall(SYS_exit_group, 128 + code);
+}
+static void arm_fault_watchdog() {
+    struct sigaction dfl{};
+    dfl.sa_handler = SIG_DFL;
+    syscall(SYS_rt_sigaction, SIGALRM, &dfl, nullptr, 8);
+    sigset_t m;
+    sigemptyset(&m);
+    sigaddset(&m, SIGALRM);
+    syscall(SYS_rt_sigprocmask, SIG_UNBLOCK, &m, nullptr, 8);
+    alarm(5);
+}
 static void on_fault(int sig, siginfo_t *si, void *uc) {
     auto *ctx = (ucontext_t *)uc;
     if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86CODE_A64_FAULTLOG")) {
         struct sigaction *old = &g_old_segv;
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
     }
+    static thread_local int depth;
+    if (depth++) {
+        static const char m[] = "arm64host: fault inside the fault handler; killing the process\n";
+        if (write(2, m, sizeof m - 1) < 0) {}
+        fatal_exit(sig);
+    }
+    const u64 rip = (u64)ctx->uc_mcontext.gregs[REG_RIP];
+    static const char *nf = getenv("X86CODE_A64_NATIVE_FAULT");
+    const bool fatal = !Dynarmic::Backend::IsJitCodeAddress(rip) && !(nf && !strcmp(nf, "chain"));
+    if (fatal) arm_fault_watchdog();
     char buf[256];
     int n = snprintf(buf, sizeof buf, "signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
                      (unsigned long long)ctx->uc_mcontext.gregs[REG_RIP], (unsigned long long)ctx->uc_mcontext.gregs[REG_ERR]);
@@ -266,6 +343,12 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     }
     if (GuestThread *t = GuestThread::current(); t && si->si_code != SEGV_ACCERR) { logf("  pc in %s, in thunk %s", where(t->jit->GetPC()).c_str(), t->in_thunk >= 0 ? g_thunks[t->in_thunk].name.c_str() : "-"); guest_backtrace(*t); }
     peek();
+    if (fatal) {
+        native_backtrace(ctx);
+        logf("fatal native fault (rip not in JIT code): killing pid %d", (int)getpid());
+        fatal_exit(sig);
+    }
+    depth--;
     struct sigaction *old = sig == SIGSEGV ? &g_old_segv : &g_old_bus;
     if (old->sa_flags & SA_SIGINFO) old->sa_sigaction(sig, si, uc);
     else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) old->sa_handler(sig);

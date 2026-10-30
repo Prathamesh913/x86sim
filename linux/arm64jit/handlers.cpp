@@ -251,6 +251,8 @@ static void h_dyld_cache_info(GuestThread &t, u32 i) {
 static void h_libkernel_init(GuestThread &t, u32) {
     native_malloc_install();
     native_objc_install();  // shared-cache text is mapped; patch before any guest objc runs
+    objc_cache_gc_guard(t);
+    sim_service_patches(t);
     t.set_x(0, 0);
 }
 
