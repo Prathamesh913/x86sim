@@ -9,8 +9,8 @@ Mouse: click/drag = touch; Ctrl+drag = two-finger pinch around the window centre
 centre); Shift+drag = two-finger pan (fingers 100 px apart at device scale, moving together). Keyboard: typed keys go
 to the simulator's hardware keyboard (host/simhid). F1 or Ctrl+H = home button, F2 = lock button, F3/F4 = volume
 up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in).
-Console pane (right; SIMVIEW_CONSOLE=0 hides it): last-frame age (stall check) and the newest lines of the sim's
-logs, followed once a second. Logs: SIMVIEW_LOGS (colon-separated dirs), default the a64 and x86 device log dirs."""
+Console pane (right; SIMVIEW_CONSOLE=0 hides it): last-frame age (stall check) and the sim's logs, newest line at the top,
+followed once a second. Logs: SIMVIEW_LOGS (colon-separated dirs), default the a64 and x86 device log dirs."""
 import os, threading, socket, struct, sys, time
 import gi
 # x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole frame texture for every
@@ -160,11 +160,10 @@ def on_activate(app):
                         new += ["[%s] %s" % (tag, l) for l in chunk.splitlines() if l.strip()]
                     offs[f] = size
             if new:
-                buf.insert(buf.get_end_iter(), "\n".join(new[-300:]) + "\n")
-                extra = buf.get_line_count() - 2000
-                if extra > 0:
-                    buf.delete(buf.get_start_iter(), buf.get_iter_at_line(extra)[1])
-                tv.scroll_to_iter(buf.get_end_iter(), 0.0, False, 0, 1)
+                buf.insert(buf.get_start_iter(), "\n".join(reversed(new[-300:])) + "\n")   # newest first, at the top
+                if buf.get_line_count() > 2000:
+                    buf.delete(buf.get_iter_at_line(2000)[1], buf.get_end_iter())
+                sw.get_vadjustment().set_value(0)
             return GLib.SOURCE_CONTINUE
 
         GLib.timeout_add_seconds(1, poll)
