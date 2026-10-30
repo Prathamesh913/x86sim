@@ -67,8 +67,8 @@
   },
   {
    "name": "4. Near native",
-   "status": "later",
-   "detail": "Translate the fixed iOS 27 shared cache to x86 ahead of time, once per iOS version (like Rosetta 2), with the JIT as fallback."
+   "status": "in progress",
+   "detail": "Translate ahead of time, like Rosetta 2, with the JIT as fallback. (1) iOS system libraries: the code that actually runs is recorded and translated once per iOS version. (2) That translation is shared read-only by every iOS process instead of each keeping its own copy: the main lever for under 1 GB per app. (3) Apps are translated when installed, then refined from what runs. (4) Anything missed, or generated at run time (JavaScript JIT), still goes through the JIT and is saved for next time. ASLR is off for the sim's processes only, so translations stay valid."
   }
  ],
  "issues": [
