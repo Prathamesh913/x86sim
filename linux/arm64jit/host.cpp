@@ -415,6 +415,10 @@ using namespace a64;
 extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, char **argv, char **envp, char **apple, const DarwinApi *api) {
     clock_gettime(CLOCK_MONOTONIC, &g_t0);
     g_darwin = api;
+    // x86Code: dynarmic writes /tmp/perf-<pid>.map when PERF_BUILDID_DIR is set (Linux perf symbolize).
+    // X86CODE_A64_PERFMAP=1 selects /tmp (the only allowed /tmp use besides that map).
+    if (getenv("X86CODE_A64_PERFMAP") && !getenv("PERF_BUILDID_DIR"))
+        setenv("PERF_BUILDID_DIR", "/tmp", 0);
     g_trace = getenv("X86CODE_A64_TRACE") != nullptr;
     // X86CODE_A64_TRACE_PROC=name[,name]: trace only these executables (set for a whole boot)
     if (const char *tp = getenv("X86CODE_A64_TRACE_PROC"); tp && getenv("X86CODE_A64_EXE")) {

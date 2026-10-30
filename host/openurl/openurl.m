@@ -14,6 +14,7 @@
 #import <Foundation/Foundation.h>
 #include <objc/message.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <dlfcn.h>
@@ -48,13 +49,16 @@ static void openViaFrontBoard(NSURL* url, NSString* u, NSString* app, NSArray* a
 	if (args.count) d[@"__Arguments"] = args; // FBSOpenApplicationOptionKeyArguments (simctl launch <id> args...)
 	id opts = MSG(id, id, SEL, id)(optClass, sel_getUid("optionsWithDictionary:"), d);
 	dispatch_semaphore_t done = dispatch_semaphore_create(0);
-	__block NSString* result = @"(no reply in 30 s)";
+	// x86Code: arm64 under the JIT often needs >30 s for a cold app to finish FrontBoard's open
+	// handshake (Settings ~30 s tap-to-content). Keep 30 s on x86; 120 s when X86SIM_ARCH=arm64.
+	const int open_secs = (getenv("X86SIM_ARCH") && !strcmp(getenv("X86SIM_ARCH"), "arm64")) ? 120 : 30;
+	__block NSString* result = [NSString stringWithFormat:@"(no reply in %d s)", open_secs];
 	void (^completion)(id, NSError*) = ^(id process, NSError* err) {
 		result = err ? [NSString stringWithFormat:@"error %@", err] : [NSString stringWithFormat:@"ok %@", process];
 		dispatch_semaphore_signal(done);
 	};
 	MSG(void, id, SEL, id, id, id)(svc, sel_getUid("openApplication:withOptions:completion:"), bid, opts, completion);
-	dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+	dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)open_secs * NSEC_PER_SEC));
 	fprintf(logf_, "openurl %s -> %s: %s\n", u.UTF8String, bid.UTF8String, result.UTF8String); fflush(logf_);
 }
 

@@ -1,42 +1,37 @@
 {
   "title": "iOS 27 Simulator on x86-64 Linux",
   "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
-  "now": "Speed 1c: GPU home is CORRECT. The Speed 1b 'corrupt diagonal' PNG was a wrong-stride screenshot save (tight w*4 on a 4864-pitch ring), not a GPU write bug. Hardened fb2png + mtlvk 1206-wide VRAM stride selftest + arm64 mtlprobe. Correct GPU home matches software (mean abs diff ~3.2). Idle SpringBoard spin gone (~2% / few frames; was 160% @24fps). Page-swipe ~49 fps p50 16.7 ms, latency p50 ~86 ms, backboardd ~23%. Leave-running: GPU home on :0.",
+  "now": "Speed 2: Settings on GPU is real (list rows OCR-verified). 'Black launch' was slow cold start: tap\to content ~30.6 s (translate ~6 s / execute ~24 s). Warm-relaunch same; Metal already warm (mtlvk \Delta0). Scroll ~50 fps, latency p50 ~23 ms. openurl+nsurlsessiond on a64; cloudd 70% storm gone. Preferences still ~110% idle after open (JIT+mutex). Leave-running: GPU home on :0.",
   "metrics": [
+    [
+      "Settings cold tap\to content",
+      "~30.6 s",
+      "translate ~5.9 s / ~565K blocks; rest JIT execute; Metal ~0 (home warm)"
+    ],
+    [
+      "Settings warm-relaunch",
+      "~30.6 s",
+      "per-process JIT cache discarded on terminate"
+    ],
+    [
+      "Settings list scroll",
+      "~50 fps; p50 16.7 ms; latency p50 ~23 ms",
+      "software baseline ~40 fps / 25 ms / ~247 ms"
+    ],
+    [
+      "Idle after Settings opened",
+      "Preferences ~110%",
+      "perf: ~42% [JIT] + pthread_mutex; cloudd storm gone"
+    ],
     [
       "Boot to home screen",
       "~3 min (186 s)",
       "was ~7 min; goal under 1 min"
     ],
     [
-      "Real memory (PSS, whole sim)",
-      "~3.56 GB",
-      "was ~3.8 GB; goal under 1 GB"
-    ],
-    [
-      "SpringBoard",
-      "~1.18 GB PSS",
-      "anon_host ~477 MB (was 763; 448 MB VMA gone); hblkhd 652\u2192413 MB"
-    ],
-    [
-      "Whole-sim attribution",
-      "JIT meta 46% / dyld 20% / code 13% / host_heap 10%",
-      "see ARM64-PLAN compact-maps section"
-    ],
-    [
-      "Spotlight / WidgetRenderer",
-      "parked (~12 MB) / absent",
-      "was kill-every-5s reaper; RunningBoard UIKitApplication"
-    ],
-    [
-      "Idle CPU (GPU home)",
-      "SpringBoard ~2%; few frames / 12 s",
-      "Speed 1b's 160%@24fps was from continuous present; fixed/gone"
-    ],
-    [
       "Rendering",
-      "Metal\u2192Vulkan CA home CORRECT",
-      "stride screenshot bug fixed; page-swipe ~49 fps; latency p50 ~86 ms"
+      "Metal\to Vulkan CA; Settings UI on GPU",
+      "X86CODE_METAL=all; screens 33-settings / 34-home"
     ],
     [
       "Device",
@@ -63,7 +58,7 @@
     {
       "name": "3. Fast and lean",
       "status": "in progress",
-      "detail": "Done: shared cache, slim-park, idle CPU, page-map, compact patch+fastmem maps (448 MB VMA gone), arm64 touch input (displayUUID + sync dispatch + ring size). Deferred: remaining JIT meta (~1.6 GB). Next rounds: Metal\u2192Vulkan, native x86 hot paths, AOT shared-cache."
+      "detail": "Done: shared cache, slim-park, idle CPU, Metal CA home+Settings, openurl/nsurlsessiond, launch breakdown (translate vs execute). Next: persistent JIT cache, objc_msgSend native, Preferences background spin, AOT."
     },
     {
       "name": "4. Near native",
@@ -72,15 +67,22 @@
     }
   ],
   "issues": [
-    "Scroll list (Settings) not opened this round (black launch); page-swipe used for continuous CA metrics",
+    "Cold Settings launch ~30 s (80% JIT execute, 20% translate); need persistent cache + native objc_msgSend",
+    "Preferences ~110% CPU after open (background); JIT + pthread_mutex churn",
     "Wallpaper (PosterBoard) still out for memory; home is black wallpaper with correct colorful icons",
-    "CA Metal home is black wallpaper (no PosterBoard); icons faint/missing vs software \u2014 GPU composites at ~24 fps",
-    "Memory: ~3.56 GB real vs 1 GB goal \u2014 anon_host_jit_meta still 46% of PSS across processes; SB largest VMA now 288 MB",
-    "Cold boot with park+strip: recent boots reached full home; more reps to call reliable",
-    "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory",
-    "Profiling/memory-log switches can crash launchd_sim early in boot"
+    "Memory: ~3.56 GB real vs 1 GB goal \u2014 anon_host_jit_meta still large across processes",
+    "objc_msgSend / retain-release native thunks not landed yet",
+    "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory"
   ],
   "milestones": [
+    [
+      "33-speed2-settings-gpu.png",
+      "Speed 2: Settings on GPU after ~30.6 s cold launch. Visible: Settings title, Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy (OCR-verified)."
+    ],
+    [
+      "34-speed2-gpu-home.png",
+      "Speed 2: GPU home after Settings closed. OCR: Maps, Calendar, Photos, News, Health, Wallet, Siri, Settings, Search; status ~8:21."
+    ],
     [
       "32-speed1c-gpu-home.png",
       "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
@@ -106,36 +108,8 @@
       "Stage 3: slim-park home \u2014 PSS\u22483.9 GB, WR parked 12 MB, reaper gone, bright\u22480.21"
     ],
     [
-      "11-stage3-home-after-park.png",
-      "Stage 3: live park enable \u2014 PSS 6096\u21923889 MB, cgroup 6148\u21923954 MB"
-    ],
-    [
-      "10-stage3-home-before-park.png",
-      "Stage 3: full home before park (Spotlight 2.0 GB PSS)"
-    ],
-    [
-      "07-stage3-home.png",
-      "Stage 3: SHARED=1 home + slim reclaim (PSS\u22483.7 GB, a64 ring monitors, icstress pass)"
-    ],
-    [
-      "06-shared-home.png",
-      "Stage 3: SHARED=1 + BlockLinking home in 186s (sum RSS 8.4 GB, PSS 4.6 GB, no BKS)"
-    ],
-    [
-      "05-noshared-home-contained.png",
-      "Stage 3: SHARED=0 home under cgroup containment in 199s (sum RSS 8.4 GB, OUT=0)"
-    ],
-    [
-      "04-noshared-home.png",
-      "Stage 3 control: home with SHARED=0 / CODECACHE_MB=8 in 372s"
-    ],
-    [
       "03-home-screen.png",
       "Home screen: SpringBoard on iOS 27, every process translated arm64"
-    ],
-    [
-      "02-springboard-spinner.png",
-      "backboardd and SpringBoard up: boot spinner"
     ],
     [
       "01-boot-logo.png",

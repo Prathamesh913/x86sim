@@ -820,3 +820,71 @@ Vertical rubber-band on home: sparse frames, p50 16.7 ms when present. GPU wait 
 3. Raise list-scroll confidence once a scrollable app opens; page-swipe already beats software fps.
 4. cloudd+diagnosticd still eat idle CPU (~70%+20%); unrelated to Metal present path.
 
+## Speed 2: app launch + idle + scroll (2026-10-29)
+
+Retarget: the GPU-path "black app" was a **slow cold launch** (~30–60 s blank), not a broken paint path.
+Wait up to 3 minutes; read the screen every ~10 s until real UI text appears.
+
+### What landed
+- **openurl on a64:** `host/openurl/arm64/openurl` (Linux inotify via `svc #0xfffe`); boot-a64 adds
+  `com.x86code.openurl=host/openurl/arm64/openurl`. `simtouch.py app` / terminate work.
+  FrontBoard open wait is 120 s when `X86SIM_ARCH=arm64` (was 30 s — too short for cold Settings).
+- **nsurlsessiond in MIN:** stops cloudd's `getActiveSessionIdentifiers` → missing `nsurlsessiond` busy-retry
+  (~70% core + hundreds of MB of log). This boot: no cloudd process, launchd.log idle (0 failed-lookup growth).
+- **X86CODE_METAL=all** for the measurement boot (generic `com.apple.metal.simulator`); Settings UI renders on GPU.
+- **memlog:** SharedStats now prints `translate Xs` on SIGUSR1. `X86CODE_A64_PERFMAP=1` → dynarmic
+  `/tmp/perf-<pid>.map`.
+
+### Settings launch (GPU, Metal=all, home already warm)
+
+| | Cold (terminate→launch) | Warm-alive (home, process kept) | Warm-relaunch (terminate→launch) |
+|---|---|---|---|
+| Tap/open → first list content | **30.6 s** | **26.0 s** | **30.6 s** |
+| Screen at content | Settings title; Apple Account; General; Accessibility; Action Button; Appearance; Camera; Home Screen & App Library; Search; Siri; StandBy | same | same |
+| mtlvk log growth during launch | **0** | — | **0** |
+
+Screenshot: `docs/screens/arm64/33-speed2-settings-gpu.png` (OCR-verified list rows).
+
+### Cold-launch breakdown (SIGUSR1 SharedStats at content, ~30 s wall)
+
+| Piece | Evidence | Share of ~30 s |
+|---|---|---|
+| JIT **translate** | `translate 5.9s`, ~565K blocks, ~108 MB x86 code, 21 threads | **~6 s (~20%)** |
+| JIT **execute** cold UIKit/Swift/CA setup | Preferences ~100–140% CPU; lookups are GetBlock hits (dispatcher), not miss count | **~24 s (~80%)** |
+| Metal / AIR→SPIR-V / MTLCompiler | mtlvk byte delta 0; compilers already up from home | **~0 s** (home warmed them) |
+| openurl / FrontBoard | `openurl … Preferences: ok` after process exists | small vs JIT |
+| IOSurface | iosurfaced already serving; no launch-specific stall seen | small |
+
+Warm-relaunch matches cold: translation cache is **per-process**; kill discards it.
+Warm-alive stays slow because Preferences keeps burning ~110% CPU in the background (see below).
+
+### Settings list scroll (after content)
+
+| | Software baseline | GPU Speed 2 |
+|---|---|---|
+| Motion fps | ~40 | **~50** |
+| Frame p50 | 25 ms | **16.7 ms** |
+| Touch→frame p50 / max | ~247 / ~950 ms | **~23 / ~247 ms** |
+| CPU while scrolling | backboardd ~102% | Preferences ~53%, backboardd ~31% |
+
+### Preferences idle spin (~110% on home after launch)
+perf (~5 s, no guest map): **~42% samples in [JIT]**, with heavy `pthread_mutex_lock/unlock` (native libc via
+pthread thunks). Blocks barely grow (565K→580K) while lookups double — run-loop / lock churn under the JIT,
+not continued translation. Dominates whole-sim idle once Settings has been opened.
+
+### Native hot paths (status)
+- **memcpy/memset/str\***: already native via libsystem_platform stubs (Stage 0/2; memcpy bench 1.0x).
+- **objc_msgSend / retain/release:** not landed this round. Launch wall is ~80% guest execution — these matter.
+- **perf map:** `X86CODE_A64_PERFMAP=1` wired; use on next profiled launch.
+
+### Commits
+- `1b9b34f` — openurl arm64 + nsurlsessiond in boot-a64
+- (follow-ups) memlog translate_ns, PERFMAP, openurl 120 s arm64 wait, Speed 2 docs/screens
+
+### Gaps / next
+1. Cut cold launch: persistent per-app or shared-cache JIT disk cache; native objc_msgSend fast path; revisit RSB
+   under shared (off today — every return hits GetBlock).
+2. Stop Preferences ~110% background spin (lock/run-loop).
+3. objc_msgSend + retain/release native thunks; re-bench tests/arm64 + Settings scroll.
+4. PosterBoard still out (memory).
+
