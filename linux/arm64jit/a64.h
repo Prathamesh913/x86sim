@@ -168,6 +168,7 @@ void objc_cache_gc_guard(GuestThread &t);
 void sim_service_patches(GuestThread &t);
 extern std::atomic<bool> g_stub_guard_armed;
 void jitcache_save_on_exit();
+extern thread_local bool g_non_darling_thread;  // logf: stderr only (plain std::thread, e.g. the cache saver)
 void native_objc_configure_jit(Dynarmic::A64::UserConfig &c);  // wire inline_* into a new Jit's config
 void native_objc_stats();  // hits/misses into the process log
 // Persistent JIT cache (dyld shared-cache translations). Keyed by cache UUID + build id.

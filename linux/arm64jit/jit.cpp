@@ -490,6 +490,7 @@ void die(const char *fmt, ...) {
     va_end(ap);
     abort();
 }
+thread_local bool g_non_darling_thread = false;
 void logf(const char *fmt, ...) {
     char buf[1024];
     va_list ap; va_start(ap, fmt);
@@ -515,7 +516,7 @@ void logf(const char *fmt, ...) {
             path = p;
         }
     }
-    if (!path.empty()) {
+    if (!path.empty() && !g_non_darling_thread) {  // Darling's open/write abort on a thread Darling does not know
         static auto *dopen = (int (*)(const char *, int, ...))dsym("open");
         static auto *dwrite = (long (*)(int, const void *, size_t))dsym("write");
         static auto *dclose = (int (*)(int))dsym("close");

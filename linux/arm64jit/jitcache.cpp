@@ -47,7 +47,7 @@ namespace {
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
 // Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
-constexpr u64 kBuildId = 0x00000011ull;  // Speed 5: LDP high-half first (objc bucket race), linked AOT blocks (A64JC06)
+constexpr u64 kBuildId = 0x00000012ull;  // Speed 5: 256K FastDispatch table, LDP high half first, linked AOT blocks (A64JC06)
 // kBuildId (bits 0-15), code-shaping env flags (16-17), libarm64jit build-id / load base hash (32-63).
 u64 g_build = kBuildId;
 std::string g_key, g_aot_path;
@@ -189,7 +189,8 @@ void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string
 }
 
 // Speed 5: the cache used to be written only on SIGUSR1 or at exit with X86CODE_A64_STATS, so normal use never warmed
-// it. Now a low-priority thread saves this process's .bin once translation has been quiet for ~20 s and at least
+// it. Now a low-priority thread saves this process's .bin once translation has been quiet (<500 new blocks per 10 s)
+// for ~20 s, or every 120 s while it keeps growing, when at least
 // kMinNewBlocks blocks were added since the last save/load, and __exit saves under the same threshold
 // (jitcache_save_on_exit). The snapshot holds the shared lock only for the copy (no unlink; see SavePersistentCache).
 // X86CODE_A64_JITCACHE_AUTOSAVE=0 turns both off.
@@ -223,17 +224,25 @@ void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &old);
     std::thread([] {
+        g_non_darling_thread = true;
         setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 19);
+        // Busy processes (SpringBoard, backboardd, Preferences) never stop translating entirely: "quiet" is under
+        // 500 new blocks per 10 s, and a save is forced every 120 s while the hot set keeps growing.
         u64 last = 0;
-        int quiet = 0;
+        int quiet = 0, since = 0;
         for (;;) {
             sleep(10);
             auto sp = g_shared.lock();
             if (!sp) return;
             const u64 n = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;
-            quiet = n == last ? quiet + 1 : 0;
+            quiet = n - last < 500 ? quiet + 1 : 0;
             last = n;
-            if (quiet >= 2) save_if_grown(*sp, "idle");
+            since++;
+            if (quiet >= 2 || since >= 12) {
+                const u64 before = g_saved_blocks.load();
+                save_if_grown(*sp, quiet >= 2 ? "idle" : "periodic");
+                if (g_saved_blocks.load() != before) since = 0;
+            }
         }
     }).detach();
     pthread_sigmask(SIG_SETMASK, &old, nullptr);
