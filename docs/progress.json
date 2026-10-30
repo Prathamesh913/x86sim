@@ -1,146 +1,156 @@
 {
- "title": "iOS 27 Simulator on x86-64 Linux",
- "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
- "metrics": [
-  [
-   "Process crashes per cold boot + Settings",
-   "0",
-   "was 3-6 SpringBoard restarts plus hangs; see speed5.md crash table"
+  "title": "iOS 27 Simulator on x86-64 Linux",
+  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
+  "now": "Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
+  "metrics": [
+    [
+      "Process crashes per cold boot + Settings",
+      "0",
+      "was 3-6 SpringBoard restarts plus hangs; see speed5.md crash table"
+    ],
+    [
+      "Boot to home screen",
+      "68-84 s cold, 0 restarts",
+      "cold = cleared JIT cache; was ~245 s with 3 SpringBoard restarts (Speed 4); Speed 3 71 s was warm"
+    ],
+    [
+      "Settings first open",
+      "26-32 s",
+      "cold cache; 26 s with the AOT image, 27-32 s without; a warm per-app cache does not cut it (dyld+initializers dominate)"
+    ],
+    [
+      "Settings reopen",
+      "5 s",
+      "unchanged"
+    ],
+    [
+      "Settings list scroll",
+      "~50 fps; p50 16.7 ms; latency p50 ~23 ms",
+      "software baseline ~40 fps / 25 ms / ~247 ms"
+    ],
+    [
+      "Idle after Settings opened",
+      "Preferences ~110%",
+      "still open; JIT + pthread_mutex churn"
+    ],
+    [
+      "Memory",
+      "~3.56 GB",
+      "goal under 1 GB per app; JIT metadata is ~46%"
+    ],
+    [
+      "Rendering",
+      "Metal-to-Vulkan CA on the GPU",
+      "X86CODE_METAL=all"
+    ],
+    [
+      "Device",
+      "iPhone 17 (1206x2622)",
+      "iOS 27.0 (24A434)"
+    ]
   ],
-  [
-   "Boot to home screen",
-   "68-84 s cold, 0 restarts",
-   "cold = cleared JIT cache; was ~245 s with 3 SpringBoard restarts (Speed 4); Speed 3 71 s was warm"
+  "stages": [
+    {
+      "name": "0. Proof of concept",
+      "status": "done",
+      "detail": "Small arm64 iOS-simulator programs run on x86-64 Linux under dynarmic. 2.45x slower than native x86 overall; calls into native x86 code cost nothing."
+    },
+    {
+      "name": "1. Inside Darling",
+      "status": "done",
+      "detail": "Darling's loader hands arm64 programs to the JIT. Apple's own dyld_sim maps the iOS 27 shared cache; libobjc and libswiftCore run translated. System calls go through native x86 libsystem stubs generated from the cache."
+    },
+    {
+      "name": "2. Boot to the home screen",
+      "status": "done",
+      "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+    },
+    {
+      "name": "3. Fast and lean",
+      "status": "in progress",
+      "detail": "Done: shared cache, slim-park, idle CPU, Metal CA home+Settings, openurl/nsurlsessiond, launch breakdown, svc objc_msgSend experiment (opt-in; inlined next). Next: persistent JIT cache, inlined objc_msgSend, Preferences spin, AOT. Speed 3: inline objc_msgSend and a persistent JIT cache are on; boot 71 s, Settings reopen 5 s."
+    },
+    {
+      "name": "4. Near native",
+      "status": "in progress",
+      "detail": "Translate ahead of time, like Rosetta 2, with the JIT as fallback. (1) iOS system libraries: the code that actually runs is recorded and translated once per iOS version. (2) That translation is shared read-only by every iOS process instead of each keeping its own copy: the main lever for under 1 GB per app. (3) Apps are translated when installed, then refined from what runs. (4) Anything missed, or generated at run time (JavaScript JIT), still goes through the JIT and is saved for next time. ASLR is off for the sim's processes only, so translations stay valid."
+    }
   ],
-  [
-   "Settings first open",
-   "26-32 s",
-   "cold cache; 26 s with the AOT image, 27-32 s without; a warm per-app cache does not cut it (dyld+initializers dominate)"
+  "issues": [
+    "SpringBoard dyld_sim prepare ~24 s (all initializers under the JIT) dominates boot and first app launch",
+    "Settings search field: stuck placeholder crossfade (faint \"Time\" over \"Search\")",
+    "Preferences: missing accountsd / corefollowup / profiled services (fast lookup failures, accountsd retried ~90x)",
+    "Preferences ~110% CPU after open (background spin)",
+    "Memory: ~3.56 GB real vs 1 GB goal; JIT metadata still large across processes",
+    "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory: black wallpaper, blank widgets",
+    "Settings search field shows faint overlapping 'Time' text"
   ],
-  [
-   "Settings reopen",
-   "5 s",
-   "unchanged"
+  "milestones": [
+    [
+      "40-speed5-settings-cold.png",
+      "Speed 5: Settings cold (26 s, AOT image), no crashes. Visible: Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy, search field."
+    ],
+    [
+      "39-speed5-home-cold.png",
+      "Speed 5: home after a cold boot with zero process restarts. Visible: Calendar Fri 30, Photos, Maps, News, Health, Wallet, Siri, Settings, Search pill, dock with Safari and Messages."
+    ],
+    [
+      "36-speed3-settings.png",
+      "Speed 3: Settings on the GPU, 31 s first open, 5 s reopen. Visible: Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy, search field."
+    ],
+    [
+      "35-speed3-home.png",
+      "Speed 3: home after a 71 s boot. Visible: time, Wi-Fi, battery; Calendar (Thu 29), Photos, Maps, News, Health, Wallet, Siri, Settings; Search pill; Safari and Messages in the dock. Black wallpaper, blank widgets (PosterBoard/chronod off)."
+    ],
+    [
+      "33-speed2-settings-gpu.png",
+      "Speed 2: Settings on GPU after ~30.6 s cold launch. Visible: Settings title, Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy (OCR-verified)."
+    ],
+    [
+      "34-speed2-gpu-home.png",
+      "Speed 2: GPU home after Settings closed. OCR: Maps, Calendar, Photos, News, Health, Wallet, Siri, Settings, Search; status ~8:21."
+    ],
+    [
+      "32-speed1c-gpu-home.png",
+      "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
+    ],
+    [
+      "31-speed1b-gpu-home.png",
+      "INVALID (Speed 1c): diagonal artifact from fb2png/Pillow decoding with width*4 instead of ring stride 4864. Metrics from that round are untrustworthy for content; see 32-speed1c-gpu-home.png."
+    ],
+    [
+      "15-stage3-compact-maps-home.png",
+      "Stage 3: compact patch+fastmem maps \u2014 SB 1.4\u21921.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
+    ],
+    [
+      "14-stage3-pagemap-home.png",
+      "Stage 3: page-map cold boot home \u2014 host_heap 137\u219279 MB; 448 MB anon VMA remains"
+    ],
+    [
+      "13-stage3-idle-cpu-fix-home.png",
+      "Stage 3: idle CPU fix \u2014 home with icons, whole-sim ~1.3% core, PSS\u22483.7 GB"
+    ],
+    [
+      "12-stage3-slim-park-home.png",
+      "Stage 3: slim-park home \u2014 PSS\u22483.9 GB, WR parked 12 MB, reaper gone, bright\u22480.21"
+    ],
+    [
+      "03-home-screen.png",
+      "Home screen: SpringBoard on iOS 27, every process translated arm64"
+    ],
+    [
+      "01-boot-logo.png",
+      "First pixels: iOS 27 boot logo from translated arm64 code"
+    ]
   ],
-  [
-   "Settings list scroll",
-   "~50 fps; p50 16.7 ms; latency p50 ~23 ms",
-   "software baseline ~40 fps / 25 ms / ~247 ms"
-  ],
-  [
-   "Idle after Settings opened",
-   "Preferences ~110%",
-   "still open; JIT + pthread_mutex churn"
-  ],
-  [
-   "Memory",
-   "~3.56 GB",
-   "goal under 1 GB per app; JIT metadata is ~46%"
-  ],
-  [
-   "Rendering",
-   "Metal-to-Vulkan CA on the GPU",
-   "X86CODE_METAL=all"
-  ],
-  [
-   "Device",
-   "iPhone 17 (1206x2622)",
-   "iOS 27.0 (24A434)"
-  ]
- ],
- "stages": [
-  {
-   "name": "0. Proof of concept",
-   "status": "done",
-   "detail": "Small arm64 iOS-simulator programs run on x86-64 Linux under dynarmic. 2.45x slower than native x86 overall; calls into native x86 code cost nothing."
-  },
-  {
-   "name": "1. Inside Darling",
-   "status": "done",
-   "detail": "Darling's loader hands arm64 programs to the JIT. Apple's own dyld_sim maps the iOS 27 shared cache; libobjc and libswiftCore run translated. System calls go through native x86 libsystem stubs generated from the cache."
-  },
-  {
-   "name": "2. Boot to the home screen",
-   "status": "done",
-   "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
-  },
-  {
-   "name": "3. Fast and lean",
-   "status": "in progress",
-   "detail": "Done: shared cache, slim-park, idle CPU, Metal CA home+Settings, openurl/nsurlsessiond, launch breakdown, svc objc_msgSend experiment (opt-in; inlined next). Next: persistent JIT cache, inlined objc_msgSend, Preferences spin, AOT. Speed 3: inline objc_msgSend and a persistent JIT cache are on; boot 71 s, Settings reopen 5 s."
-  },
-  {
-   "name": "4. Near native",
-   "status": "in progress",
-   "detail": "Translate ahead of time, like Rosetta 2, with the JIT as fallback. (1) iOS system libraries: the code that actually runs is recorded and translated once per iOS version. (2) That translation is shared read-only by every iOS process instead of each keeping its own copy: the main lever for under 1 GB per app. (3) Apps are translated when installed, then refined from what runs. (4) Anything missed, or generated at run time (JavaScript JIT), still goes through the JIT and is saved for next time. ASLR is off for the sim's processes only, so translations stay valid."
+  "notes": [],
+  "speed6": {
+    "date": "2026-10-30",
+    "home_s": 35,
+    "settings_cold_s": 12,
+    "settings_warm_s": 6,
+    "sb_prepare_s": "25.0->3.4-5.8",
+    "pss_total_gb": 3.92,
+    "crashes": 0
   }
- ],
- "issues": [
-  "SpringBoard dyld_sim prepare ~24 s (all initializers under the JIT) dominates boot and first app launch",
-  "Settings search field: stuck placeholder crossfade (faint \"Time\" over \"Search\")",
-  "Preferences: missing accountsd / corefollowup / profiled services (fast lookup failures, accountsd retried ~90x)",
-  "Preferences ~110% CPU after open (background spin)",
-  "Memory: ~3.56 GB real vs 1 GB goal; JIT metadata still large across processes",
-  "Wallpaper (PosterBoard), widgets (chronod) and Files left out to save memory: black wallpaper, blank widgets",
-  "Settings search field shows faint overlapping 'Time' text"
- ],
- "milestones": [
-  [
-   "40-speed5-settings-cold.png",
-   "Speed 5: Settings cold (26 s, AOT image), no crashes. Visible: Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy, search field."
-  ],
-  [
-   "39-speed5-home-cold.png",
-   "Speed 5: home after a cold boot with zero process restarts. Visible: Calendar Fri 30, Photos, Maps, News, Health, Wallet, Siri, Settings, Search pill, dock with Safari and Messages."
-  ],
-  [
-   "36-speed3-settings.png",
-   "Speed 3: Settings on the GPU, 31 s first open, 5 s reopen. Visible: Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy, search field."
-  ],
-  [
-   "35-speed3-home.png",
-   "Speed 3: home after a 71 s boot. Visible: time, Wi-Fi, battery; Calendar (Thu 29), Photos, Maps, News, Health, Wallet, Siri, Settings; Search pill; Safari and Messages in the dock. Black wallpaper, blank widgets (PosterBoard/chronod off)."
-  ],
-  [
-   "33-speed2-settings-gpu.png",
-   "Speed 2: Settings on GPU after ~30.6 s cold launch. Visible: Settings title, Apple Account, General, Accessibility, Action Button, Appearance, Camera, Home Screen & App Library, Search, Siri, StandBy (OCR-verified)."
-  ],
-  [
-   "34-speed2-gpu-home.png",
-   "Speed 2: GPU home after Settings closed. OCR: Maps, Calendar, Photos, News, Health, Wallet, Siri, Settings, Search; status ~8:21."
-  ],
-  [
-   "32-speed1c-gpu-home.png",
-   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID — wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
-  ],
-  [
-   "31-speed1b-gpu-home.png",
-   "INVALID (Speed 1c): diagonal artifact from fb2png/Pillow decoding with width*4 instead of ring stride 4864. Metrics from that round are untrustworthy for content; see 32-speed1c-gpu-home.png."
-  ],
-  [
-   "15-stage3-compact-maps-home.png",
-   "Stage 3: compact patch+fastmem maps — SB 1.4→1.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
-  ],
-  [
-   "14-stage3-pagemap-home.png",
-   "Stage 3: page-map cold boot home — host_heap 137→79 MB; 448 MB anon VMA remains"
-  ],
-  [
-   "13-stage3-idle-cpu-fix-home.png",
-   "Stage 3: idle CPU fix — home with icons, whole-sim ~1.3% core, PSS≈3.7 GB"
-  ],
-  [
-   "12-stage3-slim-park-home.png",
-   "Stage 3: slim-park home — PSS≈3.9 GB, WR parked 12 MB, reaper gone, bright≈0.21"
-  ],
-  [
-   "03-home-screen.png",
-   "Home screen: SpringBoard on iOS 27, every process translated arm64"
-  ],
-  [
-   "01-boot-logo.png",
-   "First pixels: iOS 27 boot logo from translated arm64 code"
-  ]
- ]
 }

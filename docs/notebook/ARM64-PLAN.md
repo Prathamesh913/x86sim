@@ -1020,3 +1020,26 @@ File format (target, "A64AOT1"):
   backboardd blocker 3). Before = 32 s (three cold boots).
 - Not done: ASLR-off per process (relocs suffice for step 1), shared mmap, image-relative guest offsets, per-block
   guest hash.
+
+## Speed 6 (2026-10-30): GetBlock, dyld_sim matchesPath, metadata compaction, shared AOT image (Stage 4 step 2)
+
+Details in round-done/speed6.md. All numbers below are single runs on the shared host (about ±10 s spread).
+- Profile (perf + PERFMAP; mksimdevice now passes every X86CODE_A64_* flag to jobs): GetBlock + an uncontended
+  recursive mutex took 33% of SpringBoard. Fix: lock-free hit path, a growable insert-only map that mirrors
+  block_descriptors. 54% of SpringBoard's dyld_sim prepare was `JustInTimeLoader::matchesPath`: it builds a full
+  mach_o::Image per loaded image to read the install name (~14M calls). Fix: an inline arm64 routine in dyld_sim's
+  __TEXT padding (`X86CODE_A64_DYLD_NATIVE=0` turns it off).
+- Prepare time, cold: SpringBoard 25.0 -> 3.4-3.8 s (it varies, 5.8 s while also mapping the AOT image); Preferences
+  12 -> 1.7 s.
+- Metadata: SpringBoard anon 909 -> 433 MB. Link sites in a pool, page->blocks vectors, an 8-byte fastmem table,
+  unlinked heads computed instead of stored, and a persistable flag in place of a separate vector.
+- Stage 4 step 2: launchd_sim sets ADDR_NO_RANDOMIZE for its children. The code cache sits at 0x7fffa0000000; the
+  FastDispatch table follows it and a fixed data page (callbacks object, objc counters) sits below it. The first
+  process with a given layout writes `<key>.aot.<layout>.map` (relocated and linked); every other one mmaps it
+  MAP_PRIVATE, with no writes if the bytes are already right. Result: ~180 MB of shared clean pages across
+  backboardd, SpringBoard and Preferences. `X86CODE_A64_AOT_SHARE=0` and `X86CODE_A64_NOASLR=0` turn these off.
+- Guest libc: arm64 memmove/memcpy/bzero/strcmp/memcmp/strlen run as guest code, sizes of 256 B and up go to the
+  native function. An svc costs 42-60 ns vs 13 ns for guest strlen. `X86CODE_A64_GUEST_LIBC=0` turns it off. Wall time
+  was neutral in an A/B.
+- Final default config (AOT on): home 35 s, Settings cold 12 s / warm 6 s, zero crashes. PSS total 3.92 GB
+  (was 5.17 GB cold without AOT). Cold without AOT: home 34-35 s, Settings 17-18 s.
