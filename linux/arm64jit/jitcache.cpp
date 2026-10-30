@@ -5,8 +5,9 @@
 // and a build id (bump when emit / StackLayout / fuse_svc / inline objc change). Blocks that
 // emit HostCall (svc thunks, CNTPCT, …) are excluded — they bake ASLR-sensitive host pointers.
 //
-// Load restores the code slab after an identical prelude; relative jumps to terminal handlers
-// and inter-block links stay valid. FastDispatch is cleared and refills on use.
+// Load restores the code slab after an identical prelude; emitter-recorded relocations fix
+// absolute host Imm64s (objc counters, RSB patch sites, …). Relative jumps to terminal handlers
+// stay valid when prelude_size matches. FastDispatch is cleared and refills on use.
 #include "a64.h"
 #include <cstdio>
 #include <cstring>
@@ -22,8 +23,8 @@ namespace {
 
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
-// Bump when emitted code shape changes (StackLayout, fuse_svc_ret, inline objc, HostCall set).
-constexpr u64 kBuildId = 0x00000003ull;
+// Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
+constexpr u64 kBuildId = 0x00000007ull;  // default: persist non-fastmem blocks only
 
 uint8_t g_uuid[16]{};
 bool g_uuid_ok = false;
@@ -71,20 +72,20 @@ void jitcache_prepare(const std::string &cache_path) {
 
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
     if (!g_uuid_ok) return;
-    // Opt-in until relocation table lands (ASLR breaks absolute host pointers in the slab).
-    if (!(getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 1)) return;
+    // Default on. X86CODE_A64_JITCACHE=0 disables load/save.
+    if (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) return;
     struct stat st;
     if (stat(g_path.c_str(), &st) != 0) return;
     size_t n = Dynarmic::A64::Jit::LoadPersistentCache(shared, g_path, g_uuid, kBuildId, kCacheLo, kCacheHi);
     if (n)
         logf("jitcache: loaded %zu blocks from %s (%.1f MB)", n, g_path.c_str(), st.st_size / 1048576.0);
-    else if (getenv("X86CODE_A64_STATS"))
+    else
         logf("jitcache: load miss or mismatch for %s", g_path.c_str());
 }
 
 void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared) {
     if (!g_uuid_ok) return;
-    if (!(getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 1)) return;
+    if (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) return;
     mkdir(g_dir.c_str(), 0755);
     std::string tmp = g_path + ".tmp";
     size_t bytes = Dynarmic::A64::Jit::SavePersistentCache(shared, tmp, g_uuid, kBuildId, kCacheLo, kCacheHi);
