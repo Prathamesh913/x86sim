@@ -65,7 +65,7 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.mobilegestalt.xpc com.apple.UserEventAgent-System com.apple.securityd com.apple.trustd com.apple.syslogd
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
 	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
-	com.apple.cloudd com.apple.diagnosticd"
+	com.apple.cloudd com.apple.diagnosticd com.apple.nsurlsessiond"
 # x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No PosterBoard: it spawns a flock of
 # poster extensions (~450 MB each, 10+ processes, +5 GB) that push SHARED=0 past 13 GB before home. No chronod
 # (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
@@ -74,15 +74,18 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # parks Spotlight / WidgetRenderer before dyld (X86CODE_A64_SLIM_PARK). Without cloudd+diagnosticd
 # in the job set, securityd busy-retries those Mach lookups (~1.9 cores idle). Those two stay
 # runnable (not parked): a parked MachServices daemon accepts the lookup then hangs clients forever.
+# nsurlsessiond: without it cloudd busy-retries getActiveSessionIdentifiers (~70% of a core + huge log).
+# openurl: com.x86code.openurl (arm64 build) so simtouch.py app/openurl works on the a64 device.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination"
 FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
+OUR_JOBS="com.x86code.openurl=host/openurl/arm64/openurl"
 case "${A64_JOBS:-std}" in
-	min) JOBS="$MIN" ;;
-	slim) JOBS="$MIN $UI_SLIM" ;;
-	full) JOBS="$MIN $UI $FULLUI" ;;
-	*) JOBS="$MIN $UI" ;;
+	min) JOBS="$MIN $OUR_JOBS" ;;
+	slim) JOBS="$MIN $UI_SLIM $OUR_JOBS" ;;
+	full) JOBS="$MIN $UI $FULLUI $OUR_JOBS" ;;
+	*) JOBS="$MIN $UI $OUR_JOBS" ;;
 esac
 X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
 # Strip home-screen / Today widgets so SpringBoard does not demand WidgetRenderer (even with park).

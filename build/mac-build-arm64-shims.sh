@@ -3,7 +3,7 @@
 # the guest's frameworks, so they must be guest code): simshim, SimFramebuffer (simfb), SimulatorHID (simhid),
 # metalhostd (+vkmtl), iosurfaced, mtlprobe. Output under host/<name>/arm64/ (mksimdevice.py X86SIM_ARCH=arm64
 # picks them up). The x86_64 builds are not touched.
-# Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid metalhostd iosurfaced mtlprobe]
+# Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid metalhostd iosurfaced mtlprobe openurl]
 set -e
 . "$(dirname "$0")/mac-env.sh"
 T="-target arm64-apple-ios17.0-simulator"
@@ -60,8 +60,18 @@ mtlprobe)
 	cat mtlprobe" > "$W/mtlprobe"
 	mkdir -p "$X/tests/metal/arm64" && mv "$W/mtlprobe" "$X/tests/metal/arm64/mtlprobe"
 	chmod +x "$X/tests/metal/arm64/mtlprobe" ;;
+openurl)
+	# Same sources as build/mac-build-jobs.sh; arm64 sim target. Linux inotify via svc #0xfffe.
+	tar cf - -C "$X/host/openurl" openurl.m openurl.entitlements | mac "
+	rm -rf /tmp/a64openurl && mkdir -p /tmp/a64openurl && cd /tmp/a64openurl && tar xf - &&
+	xcrun -sdk iphonesimulator clang $T -O1 -g -Wall -Wno-deprecated-declarations \
+		-fobjc-arc -framework Foundation -Wl,-sectcreate,__TEXT,__entitlements,openurl.entitlements \
+		-o openurl openurl.m >&2 &&
+	cat openurl" > "$W/openurl"
+	mkdir -p "$X/host/openurl/arm64" && mv "$W/openurl" "$X/host/openurl/arm64/openurl"
+	chmod +x "$X/host/openurl/arm64/openurl" ;;
 *) echo "unknown target: $w" >&2; exit 1 ;;
 esac; done
 file "$X"/host/sim*/arm64/*/* "$X"/host/sim*/arm64/*/*/* \
 	"$X"/host/metalhostd/arm64/metalhostd "$X"/host/iosurfaced/arm64/iosurfaced \
-	"$X"/tests/metal/arm64/mtlprobe 2>/dev/null | grep -i mach || true
+	"$X"/tests/metal/arm64/mtlprobe "$X"/host/openurl/arm64/openurl 2>/dev/null | grep -i mach || true

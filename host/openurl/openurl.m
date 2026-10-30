@@ -356,11 +356,19 @@ static void request(NSString* rest) {
 	answer(rid, r);
 }
 
-// x86Code: a Linux system call (Darling processes are Linux processes)
+// x86Code: a Linux system call (Darling processes are Linux processes).
+// Arm64 guest under libarm64jit: svc #0xfffe with x8 = x86_64 syscall number (same as simfb's futex).
 static long linux_syscall3(long n, long a, long b, long c) {
+#if defined(__arm64__)
+	register long x0 __asm__("x0") = a, x1 __asm__("x1") = b, x2 __asm__("x2") = c;
+	register long x8 __asm__("x8") = n;
+	__asm__ volatile("svc #0xfffe" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+	return x0;
+#else
 	long r;
 	__asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
 	return r;
+#endif
 }
 
 static volatile BOOL wake;
