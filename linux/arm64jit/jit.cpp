@@ -183,8 +183,10 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         c.recompile_on_fastmem_failure = false;
         c.recompile_on_exclusive_fastmem_failure = false;
         // Per process (reserved; only emitted pages are resident). Stage 2's per-thread 8 MB is too small here.
-        int mb = getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256;
-        if (mb > 0 && mb < 64) mb = 256;
+        // Speed 8: 384 MB (was 256): the AOT image with MTLCompilerService and iconservicesagent holds ~230 MB of
+        // code, and SpringBoard's own new code no longer fit ("shared code cache full").
+        int mb = getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 384;
+        if (mb > 0 && mb < 64) mb = 384;
         c.code_cache_size = (size_t)mb << 20;
         if (const u64 b = code_cache_base()) Dynarmic::A64::Jit::SetCodeCacheAddress(b);
         auto sc = Dynarmic::A64::Jit::MakeSharedCode(c);
