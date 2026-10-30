@@ -4,8 +4,8 @@
 // libarm64jit.so's ELF build-id, so any rebuild refuses old files):
 //   <key>.<exe>.bin  per process (warm start / AOT training), written on SIGUSR1 (memlog) or at exit with STATS.
 //   <key>.aot        Stage 4 AOT image: the union of every .bin's blocks, translated by one builder process
-//                    (X86CODE_A64_AOT_BUILD=1, at its exit). App processes (.app/ executables, or
-//                    X86CODE_A64_AOT_PROCS=name,name|all) load it at start instead of their own .bin.
+//                    (X86CODE_A64_AOT_BUILD=1, at its exit). Every ASLR-off process (Speed 7; otherwise .app/
+//                    executables, or X86CODE_A64_AOT_PROCS=name,name|all) loads it at start instead of its .bin.
 //                    X86CODE_A64_AOT=0 disables.
 // When the process runs with ADDR_NO_RANDOMIZE (setarch -R), the key also holds libarm64jit's load base: a file
 // is used only when host addresses match too (otherwise the reloc table re-bases the emitted host addresses).
@@ -106,8 +106,9 @@ bool aot_eligible(const std::string &exe) {
         if (list == ",all,") return (personality(0xffffffff) & ADDR_NO_RANDOMIZE) != 0;
         return list.find("," + base + ",") != std::string::npos;
     }
-    // Apps (.app/: SpringBoard, Preferences, ...) and backboardd. Speed 5: backboardd's image fault (an FP fallback
-    // CallFunction baked libarm64jit's old address into a persisted block) is fixed, so it loads the image too.
+    // Speed 7: every process that can map the image shared (ASLR off: launchd_sim's children). With lazy metadata a
+    // daemon pays ~1 MB for it and its shared-cache code becomes shared pages. Elsewhere: apps and backboardd.
+    if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) return true;
     return exe.find(".app/") != std::string::npos || (b && !strcmp(b + 1, "backboardd"));
 }
 
