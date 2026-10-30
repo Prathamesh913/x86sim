@@ -9,9 +9,9 @@ Mouse: click/drag = touch; Ctrl+drag = two-finger pinch around the window centre
 centre); Shift+drag = two-finger pan (fingers 100 px apart at device scale, moving together). Keyboard: typed keys go
 to the simulator's hardware keyboard (host/simhid). F1 or Ctrl+H = home button, F2 = lock button, F3/F4 = volume
 up/down. Input goes through <device data>/simhid.sock (backboardd's SimulatorHID stand-in).
-Console pane (right; SIMVIEW_CONSOLE=0 hides it): last-frame age (stall check) and the sim's logs, newest line at the top,
+Console pane (right; SIMVIEW_CONSOLE=0 hides it): last-frame age (stall check), sim up/down + CPU, and the sim's logs, newest line at the top,
 followed once a second. Logs: SIMVIEW_LOGS (colon-separated dirs), default the a64 and x86 device log dirs."""
-import os, threading, socket, struct, sys, time
+import glob, os, threading, socket, struct, sys, time
 import gi
 # x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole frame texture for every
 # frame, and on the NVIDIA driver ~75% of that CPU time is kernel time inside the driver's ioctls: 46% of a core at
@@ -53,7 +53,7 @@ def initial_size():
     return 1179, 2556
 
 
-state = {"mtime": None, "size": initial_size(), "sock": None, "seq": None, "fps": [], "mode": "one", "start": (0, 0)}
+state = {"mtime": None, "size": initial_size(), "sock": None, "seq": None, "key": None, "fps": [], "mode": "one", "start": (0, 0)}
 
 
 def send(line):
@@ -133,6 +133,21 @@ def on_activate(app):
             last = state.get("frame_at")
             age = "no frame yet" if last is None else "%.0f s ago" % (now - last)
             stalled = last is not None and now - last > 10
+            # the stack's systemd scope (cli/libexec/limited.sh): gone = sim down; cpu.stat delta = how busy it is
+            scopes = glob.glob("/sys/fs/cgroup/user.slice/user-%d.slice/user@%d.service/app.slice/x86sim-*.scope"
+                               % (os.getuid(), os.getuid()))
+            if not scopes:
+                age += ", sim not running (frame is stale)"
+                stalled = False
+            else:
+                try:
+                    use = int(open(scopes[0] + "/cpu.stat").read().split()[1])
+                    prev = state.get("cpu")
+                    state["cpu"] = (now, use)
+                    if prev:
+                        age += ", sim CPU %d%%" % (100 * (use - prev[1]) / 1e6 / max(now - prev[0], 0.1))
+                except (OSError, ValueError, IndexError):
+                    pass
             status.set_markup("<tt>frame %s, last %s%s</tt>" % (state["seq"], GLib.markup_escape_text(age),
                               "  <span foreground='red'>STALLED?</span>" if stalled else ""))
             new = []
@@ -250,11 +265,11 @@ def on_activate(app):
         try:
             seq = ring.seq()
             if seq:
-                if seq != state["seq"]:
+                if (ring.ino, seq) != state["key"]:
                     f = ring.latest()
-                    if f:
+                    if f:   # None: torn read (simfb reused the slot mid-copy); the waiter retries
                         show(f[0], f[1], f[2], f[3], f[5])
-                        state["seq"] = seq
+                        state["seq"], state["key"] = seq, (ring.ino, seq)
             else:
                 st = os.stat(src)
                 if st.st_mtime_ns != state["mtime"]:
@@ -267,21 +282,24 @@ def on_activate(app):
         done.set()
         return GLib.SOURCE_REMOVE
 
+    # The shown frame is keyed by (ring inode, seq), not seq alone: a rebooted sim's new ring restarts its count. Any
+    # mismatch (new frame, a torn read that got skipped, a new ring) is retried at least once a second, so the window
+    # never sits on an old frame while the ring holds a newer one.
     def waiter():
-        seen = None
         while True:
-            seq = ring.wait(seen, 1.0) if seen else ring.seq()
+            seq = ring.seq()
             if not seq:   # no ring (yet): the file
                 GLib.idle_add(update, threading.Event())
-                seen = 0
                 time.sleep(0.5)
                 continue
-            if seq == seen:
-                continue
-            seen = seq
-            done = threading.Event()
-            GLib.idle_add(update, done)
-            done.wait(1.0)   # one update in flight at a time
+            if (ring.ino, seq) != state["key"]:
+                done = threading.Event()
+                GLib.idle_add(update, done)
+                done.wait(1.0)   # one update in flight at a time
+                if (ring.ino, seq) != state["key"]:
+                    time.sleep(0.02)
+                    continue
+            ring.wait(seq, 1.0)
 
     threading.Thread(target=waiter, daemon=True).start()
     win.present()

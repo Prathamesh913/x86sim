@@ -161,10 +161,17 @@ std::vector<std::string> cache_exports(const std::string &cache_path, const std:
 // Native malloc (malloc.cpp): replaces libsystem_malloc's exports in the mapped cache with thunks to Darling's malloc.
 void native_malloc_prepare(const std::string &cache_path);  // before dyld_sim maps the cache: reads the exports
 void native_malloc_install();
-// Native objc_msgSend (objc.cpp): cache-hit fast path in host code; SetPC(IMP) on hit.
+// Native / inline objc_msgSend (objc.cpp).
 void native_objc_prepare(const std::string &cache_path);
 void native_objc_install();
+void native_objc_configure_jit(Dynarmic::A64::UserConfig &c);  // wire inline_* into a new Jit's config
 void native_objc_stats();  // hits/misses into the process log
+// Persistent JIT cache (dyld shared-cache translations). Keyed by cache UUID + build id.
+void jitcache_prepare(const std::string &cache_path);  // read UUID; call before first Jit
+void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &sp);
+void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared);
+void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared);
+void jitcache_save_if_shared();  // no-op when SHARED=0 or no live shared code
 u64 reserve_aligned(u64 size, u64 mask);  // guest-VM range [12 GB, 63 GB), PROT_NONE
 // gheap.cpp
 void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *));
