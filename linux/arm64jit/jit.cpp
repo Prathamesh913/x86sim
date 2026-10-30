@@ -10,6 +10,12 @@
 #include <algorithm>
 #include <mutex>
 #include <map>
+#include <thread>
+#include <vector>
+#include <cstring>
+#include <csignal>
+#include <pthread.h>
+#include <sys/uio.h>
 #include <malloc.h>
 #include <sched.h>
 #include <cstdarg>
@@ -64,9 +70,64 @@ static void destroy_guest_thread(void *p) {
         t_self = nullptr; t_owner.t = nullptr; delete t;
     }
 }
+// X86CODE_A64_GSAMPLE=<exe name> (debug): a host thread samples the process's first guest thread every 5 ms (last
+// block PC, LR and 6 frame-pointer frames, read with process_vm_readv) and logs the 15 most frequent stacks every 10 s.
+// For "busy but nothing visible" loops that perf cannot attribute (JIT frames have no host unwind info).
+static void gsample_start(GuestThread *t) {
+    const char *want = getenv("X86CODE_A64_GSAMPLE"), *exe = getenv("X86CODE_A64_EXE");
+    if (!want || !exe) return;
+    const char *b = strrchr(exe, '/');
+    if (strcmp(want, b ? b + 1 : exe) != 0) return;
+    sigset_t all, old;
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &old);
+    std::thread([t] {
+        g_non_darling_thread = true;
+        auto rd = [](u64 a) -> u64 {
+            u64 v = 0;
+            struct iovec lo{&v, 8}, re{reinterpret_cast<void *>(a), 8};
+            return syscall(SYS_process_vm_readv, getpid(), &lo, 1, &re, 1, 0) == 8 ? v : 0;
+        };
+        std::map<std::vector<u64>, u32> counts;
+        u32 n = 0;
+        const char *sk = getenv("X86CODE_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
+        const u64 skip = sk ? strtoull(sk, nullptr, 16) : 0;
+        const int depth = getenv("X86CODE_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86CODE_A64_GSAMPLE_DEPTH")) : 6;
+        for (;;) {
+            usleep(5000);
+            if (!t->jit) continue;
+            std::vector<u64> st{t->jit->GetPC(), t->x(30)};
+            if (skip && st[0] == skip) continue;
+            u64 fp = t->x(29);
+            for (int k = 0; k < depth && fp > 0x10000 && !(fp & 7); k++) {
+                st.push_back(rd(fp + 8));
+                const u64 next = rd(fp);
+                if (next <= fp) break;
+                fp = next;
+            }
+            counts[st]++;
+            if (++n % 2000) continue;
+            std::vector<std::pair<u32, const std::vector<u64> *>> top;
+            for (auto &[k, v] : counts) top.push_back({v, &k});
+            std::sort(top.begin(), top.end(), [](auto &a, auto &b) { return a.first > b.first; });
+            logf("gsample: %u samples", n);
+            for (size_t i = 0; i < top.size() && i < 15; i++) {
+                char line[1024];
+                int o = snprintf(line, sizeof line, "gsample %4u:", top[i].first);
+                for (u64 a : *top[i].second) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " %#lx", (unsigned long)a);
+                logf("%s", line);
+            }
+            counts.clear();
+        }
+    }).detach();
+    pthread_sigmask(SIG_SETMASK, &old, nullptr);
+}
+
 GuestThread &GuestThread::self() {
     if (!t_self) {
         t_owner.t = new GuestThread(); t_self = t_owner.t;
+        static std::once_flag sample_once;
+        std::call_once(sample_once, [] { gsample_start(t_self); });
         static unsigned long key = [] {
             unsigned long k = 0;
             auto *create = (int (*)(unsigned long *, void (*)(void *)))dsym("pthread_key_create");
@@ -87,10 +148,35 @@ GuestThread *GuestThread::current() { return t_self; }
 // thread (stage 2). Shared code is never freed while the process runs (threads blocked in native calls return
 // into it), so the cache is a large reservation: only the code actually emitted is resident.
 namespace {
+// Speed 9: libswift_Concurrency's dispatch executor (the swift_task_enqueueGlobalWithDeadline path) converts a
+// deadline from ns to mach ticks with Apple silicon's timebase inlined (ns * 3 / 125). Our guest timebase is 1/1 (mach
+// time counts ns, like Darling's), so every Swift sleep (Task.sleep, Clock.sleep, ...) fired at once: Settings'
+// search-field task spun its main thread (~10k wakeups/s, ~90% of a core while idle) and its placeholder crossfade
+// never settled. The two words that pick the conversion branch read as "mov x21, x8; b <join>" (deadline unchanged).
+// Only when the original words are there (iOS 27.0 24A434 cache); guest memory is not written (MemoryReadCode, like
+// swiftconf), so the AOT builder sees the same code. X86CODE_A64_SWIFT_TIMEBASE=0 turns it off (rebuild the image).
+constexpr u64 kSwiftDeadlineConv = 0x1c156d4ac;
+std::optional<uint32_t> swift_timebase_read_code(u64 a) {
+    if (a != kSwiftDeadlineConv && a != kSwiftDeadlineConv + 4) return std::nullopt;
+    static const bool ok = [] {
+        const char *e = getenv("X86CODE_A64_SWIFT_TIMEBASE");
+        if (e && atoi(e) == 0) return false;
+        // cmp x8, x9 ; b.lo (x*3 first) ; ... and the join branch both conversions take (b -> 0x1c156d3bc)
+        const bool match = GuestThread::rd<uint32_t>(kSwiftDeadlineConv) == 0xeb09011fu &&
+                           GuestThread::rd<uint32_t>(kSwiftDeadlineConv + 4) == 0x54000663u &&
+                           GuestThread::rd<uint32_t>(0x1c156d4d8) == 0x17ffffb9u;
+        if (!match) logf("swift timebase: libswift_Concurrency deadline conversion not found; Task.sleep stays early");
+        return match;
+    }();
+    if (!ok) return std::nullopt;
+    return a == kSwiftDeadlineConv ? 0xaa0803f5u /* mov x21, x8 */ : 0x17ffffc3u /* b 0x1c156d3bc */;
+}
+
 struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
     std::optional<uint32_t> MemoryReadCode(u64 a) override {
         if (auto w = swiftconf_read_code(a)) return w;
+        if (auto w = swift_timebase_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
     uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
