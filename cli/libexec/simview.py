@@ -132,6 +132,10 @@ def on_activate(app):
             now = time.monotonic()
             last = state.get("frame_at")
             age = "no frame yet" if last is None else "%.0f s ago" % (now - last)
+            if state.get("frame_t"):   # the frame's own publish time (simfb, CLOCK_REALTIME): its real age
+                age += ", frame is %.0f s old" % (time.time() - state["frame_t"])
+            if state.get("noframe") and now - state["noframe"] > 3:
+                age += ", ring seq %d but no valid frame" % ring.seq()
             stalled = last is not None and now - last > 10
             # the stack's systemd scope (cli/libexec/limited.sh): gone = sim down; cpu.stat delta = how busy it is
             scopes = glob.glob("/sys/fs/cgroup/user.slice/user-%d.slice/user@%d.service/app.slice/x86sim-*.scope"
@@ -267,12 +271,16 @@ def on_activate(app):
             if seq:
                 if (ring.ino, seq) != state["key"]:
                     f = ring.latest()
-                    if f:   # None: torn read (simfb reused the slot mid-copy); the waiter retries
+                    if f:   # None: torn read (simfb reused the slot mid-copy), or no frame copied yet; retried
                         show(f[0], f[1], f[2], f[3], f[5])
-                        state["seq"], state["key"] = seq, (ring.ino, seq)
+                        state["seq"], state["key"], state["frame_t"] = seq, (ring.ino, seq), f[4] / 1e9
+                        state.pop("noframe", None)
+                    else:
+                        state.setdefault("noframe", time.monotonic())
             else:
                 st = os.stat(src)
-                if st.st_mtime_ns != state["mtime"]:
+                # only a live dump: an old file (another device's, or a dead sim's) would pass for the screen
+                if st.st_mtime_ns != state["mtime"] and time.time() - st.st_mtime < 10:
                     data = open(src, "rb").read()
                     w, h, stride, seq = struct.unpack("<4I", data[:16])
                     show(w, h, stride, seq, data[16:16 + stride * h])
