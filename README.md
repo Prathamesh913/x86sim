@@ -1,23 +1,73 @@
 # x86code: the iOS simulator on Linux
 
-x86code boots Apple's **iOS 26.5 simulator runtime** (the x86_64 "universal" runtime, build 23F73) on **x86-64
-Linux**. The runtime's binaries are Apple's, unmodified. They run under [Darling](https://github.com/darlinghq/darling),
-which we extended for the iOS simulator. The parts a Mac and CoreSimulator normally provide are reimplemented here:
-the launchd handshake, the display, touch input, Metal on Vulkan, cross-process IOSurfaces, DNS, network state and
-host file services. The home screen, Settings, Safari (with real web pages), Maps, Photos, News, Health, Files,
-Preview, Spotlight and the other runtime apps run with GPU rendering.
+x86code runs Apple's **iOS 27 simulator runtime** on **x86-64 Linux**, with no Mac at runtime. Apple ships iOS 27's
+simulator for arm64 only, so every iOS process runs its unmodified arm64 code through an **embedded JIT**
+([dynarmic](https://github.com/azahar-emu/dynarmic), our fork) inside [Darling](https://github.com/darlinghq/darling),
+which we extended for the iOS simulator. System calls cross into native x86 code; graphics, input and networking go to
+native Linux services. Core Animation renders on the host GPU through Metal → Vulkan.
 
 <p>
-<img src="docs/screens/84-x86sim-boot-home.png" width="200" alt="home screen">
-<img src="docs/screens/58-safari-wikipedia.png" width="200" alt="Safari">
-<img src="docs/screens/71-spotlight-search-maps.png" width="200" alt="Spotlight and Maps">
-<img src="docs/screens/64-news-today.png" width="200" alt="News">
-<img src="docs/screens/95-metaldemo.png" width="200" alt="an installed Metal app">
+<img src="docs/screens/arm64/32-speed1c-gpu-home.png" width="220" alt="iOS 27 home screen on the GPU">
+<img src="docs/screens/arm64/33-speed2-settings-gpu.png" width="220" alt="iOS 27 Settings on the GPU">
 </p>
 
-The project is experimental. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit,
-[docs/WORKAROUNDS.md](docs/WORKAROUNDS.md) for what is faked or approximated, and
-[docs/notebook/FINDINGS.md](docs/notebook/FINDINGS.md) for the full lab notebook.
+The project is experimental. [docs/notebook/ARM64-PLAN.md](docs/notebook/ARM64-PLAN.md) has the arm64 design, stage
+results and measurements; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the host services;
+[docs/WORKAROUNDS.md](docs/WORKAROUNDS.md) lists what is faked or approximated; [docs/notebook/FINDINGS.md](docs/notebook/FINDINGS.md)
+is the full lab notebook.
+
+## Status (iOS 27.0, build 24A434, iPhone 17)
+
+| | |
+|---|---|
+| Boot | launchd_sim → daemons → backboardd → SpringBoard home screen, every process translated, ~3 min |
+| Rendering | Core Animation on Metal → Vulkan (RTX 5090), including iOS 27's glass dock and search |
+| Input | Touch and gestures through our SimulatorHID stand-in |
+| Apps | Settings opens and scrolls (~50 fps, touch-to-frame ~23 ms); cold launch ~30 s |
+| Idle | ~1% of one core for the whole simulator |
+| Memory | ~3.6 GB real (PSS); the goal is under 1 GB |
+| Not yet | Wallpaper (PosterBoard), widgets and Files are left out to save memory; fast launches; installing your own apps on iOS 27 |
+
+### How it works
+
+- **Darling's loader** hands arm64 Mach-O programs to `arm64host` + `libarm64jit` (`host/arm64host`, `linux/arm64jit`),
+  which runs Apple's own `dyld_sim` against the iOS 27 shared cache under dynarmic (`external/dynarmic`).
+- iOS 27 makes no system calls itself: `libsystem_kernel`, `libsystem_platform` and `libsystem_pthread` come from the
+  host. Ours are stubs generated from the cache whose exports call **native x86** Darling code (Mach traps, BSD calls,
+  darlingserver). malloc runs natively too.
+- One **shared translation cache** per process, with block linking; signals are delivered at block boundaries.
+- The host services from the iOS 26.5 work (framebuffer, SimulatorHID, IOSurface, Metal host, mtlvk) are reused:
+  native Linux pieces unchanged, sim-side pieces rebuilt for arm64.
+- Next: native hot paths inline in translated code (objc_msgSend, retain/release), a persistent translation cache,
+  then ahead-of-time translation of the whole shared cache (Rosetta-style), and the memory diet.
+
+### Quick start (iOS 27)
+
+After the common setup below (submodules, Darling, mtlvk, the Mac-built binaries with `build/mac-build-arm64-shims.sh`,
+and the iOS 27.0 runtime extracted to `runtimes/ios-27.0-24A434-arm64/` with `tools/runtime/extract-runtime.py`):
+
+```sh
+X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh     # boot; A64_JOBS=slim|std|full picks the services
+DISPLAY=:0 SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring \
+  SIMHID_SOCKET=$PWD/var/device-a64/data/simhid.sock cli/libexec/simview.py   # window: mouse = touch
+tests/arm64/run.sh <path>/objcswift.sim                          # JIT tests (Mac-built, tests/arm64): hello, bench, threads, objcswift, icstress
+```
+
+The boot runs in its own Darling prefix, device and frame ring, inside a systemd scope with a disk and memory cap
+(`cli/libexec/limited.sh`).
+
+### iOS 26.5 on x86_64 (frozen)
+
+The project first ran Apple's last **x86_64** simulator runtime, iOS 26.5 (23F73), natively under Darling, with no
+JIT. That path is feature-complete for its runtime (apps, Safari, Maps, News, your own apps, simctl-like tooling,
+LLDB, ~27 s boots, 60 fps) and is kept working but frozen. Most of the sections below (`x86sim` commands, debugging,
+the status list) describe it.
+
+<p>
+<img src="docs/screens/84-x86sim-boot-home.png" width="160" alt="home screen">
+<img src="docs/screens/58-safari-wikipedia.png" width="160" alt="Safari">
+<img src="docs/screens/64-news-today.png" width="160" alt="News">
+</p>
 
 ## Requirements
 
@@ -26,12 +76,12 @@ The project is experimental. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) f
 - **A Vulkan GPU**: NVIDIA (proprietary driver) or AMD (RADV), with `VK_EXT_external_memory_host`. Development used an
   NVIDIA RTX 5090. Without a usable GPU, `X86CODE_METAL=0` falls back to software rendering.
 - **Darling's build dependencies**: clang/LLVM, cmake, ninja, bison, flex, FUSE, libcap, Python 3, and the rest of
-  Darling's [build list](https://docs.darlinghq.org/build-instructions.html).
+  Darling's [build list](https://docs.darlinghq.org/build-instructions.html); dynarmic also needs boost headers.
 - **Rust** (stable, via rustup) for `linux/mtlvk` and metal2vulkan.
 - **Python 3** with `PIL` (Pillow) and `dnspython`. The viewer needs PyGObject with GTK 4, the stream needs `ffmpeg`
   (NVENC), `x86sim dismiss` needs `tesseract`, `x86sim site` needs `cloudflared`, and `x86sim debug` needs `lldb`.
-- **Apple's iOS 26.5 simulator runtime and Xcode**, which are not included: take the iOS 26.5 (23F73) simulator
-  runtime image from Xcode on a Mac and extract it (see below). iOS 27 has no x86_64 runtime, so 26.5 is the target.
+- **Apple's simulator runtimes and Xcode**, which are not included: iOS 27.0 (24A434, arm64) for the main path, and
+  iOS 26.5 (23F73, universal) for the frozen x86_64 path, taken from Xcode on a Mac and extracted (see below).
 - **A Mac with Xcode** (reachable over ssh) to compile the small simulator-side binaries in `host/` and `tests/`.
   These are Mach-O files for the iOS simulator SDK, and only Apple's toolchain builds them. Running needs no Mac.
 
@@ -41,13 +91,13 @@ The project is experimental. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) f
 cli/        x86sim front end; cli/libexec: the scripts it wraps; cli/lib: configuration
 host/       simulator-side services (Mach-O, run inside Darling): simhost, simfb, simhid, iosurfaced,
             metalhostd (+ vkmtl), fpsim2host, fseventsd, netconfig, openurl, simshim/{compat,diag}
-linux/      native Linux services: mtlvk (Rust, Metal on Vulkan), mdnsd (mDNSResponder), hostnet
+linux/      native Linux pieces: arm64jit (the JIT host library), mtlvk (Rust, Metal on Vulkan), mdnsd, hostnet
 tests/      sample apps (tests/apps, apps.sh), probes (tests/probes), Metal (mtlprobe + shaders) and IOSurface (iosprobe) tests, smoke test
 tools/      debug/: core dumps, stacks, stuck processes, Darling install (dinstall.sh), container cleanup;
             runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux
 build/      Mac build scripts (mac-build-*.sh) for the host/ and tests/ binaries
 docs/       ARCHITECTURE, WORKAROUNDS, METAL, protocols/, REPOS, notebook/ (FINDINGS lab notebook), screens/
-external/   git submodules: darling and metal2vulkan (x86code branches of the designgears forks)
+external/   git submodules: darling, dynarmic and metal2vulkan (x86code branches of the designgears forks)
 ```
 
 ## Setup
@@ -87,7 +137,7 @@ external/   git submodules: darling and metal2vulkan (x86code branches of the de
 Commands that need root (installing Darling, killing the setuid `darling` launcher, cores) read the password from
 `SUDO_PASS` in the environment or use sudo's prompt or cache. The password is never stored in a file.
 
-## Usage
+## Usage (iOS 26.5 x86_64 path)
 
 ```sh
 x86sim boot                     # boot the standard device in the background, wait for the home screen
@@ -176,7 +226,7 @@ Build them with `make mac`. To share a build with a machine that has no Mac, pac
 `git ls-files --others --ignored --exclude-standard host tests | grep -v '\.new$' | tar czf x86code-host-bin.tgz -T -`,
 then attach the archive to a release or copy it over.
 
-## Status
+## Status of the iOS 26.5 x86_64 path
 
 - Boots to the home screen. Metal composites on the host GPU and the wallpaper, widgets and icons
   render.
@@ -206,6 +256,7 @@ then attach the archive to a release or copy it over.
   own copy, under Apple's license terms. Only interface declarations needed for interoperability were reconstructed
   (for example `host/simfb/SimFramebuffer.h`).
 - **Darling** (`external/darling`) is GPL-3.0 with its own component licenses. See its repository.
+- **dynarmic** (`external/dynarmic`) is 0BSD.
 - **metal2vulkan** (`external/metal2vulkan`) is dual-licensed **GPL-2.0-or-later OR LGPL-3.0-or-later**. Its license
   files are kept. `linux/mtlvk` links it and uses the same terms.
 - The rest of this repository is x86code's own work. No license has been chosen yet: the repository is private.
