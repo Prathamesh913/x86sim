@@ -307,7 +307,16 @@ def main():
         **({"GLIBC_TUNABLES": "glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576"} if ARM64 else {}),
         # x86Code: its own frame ring, so an x86_64 device's viewers are not disturbed
         **({"SIMFB_RING": os.environ.get("SIMFB_RING", "/Volumes/SystemRoot/dev/shm/x86code-a64-simfb.ring")} if ARM64 else {}),
-        **({k: os.environ[k] for k in ("X86CODE_A64_TRACE_PROC", "X86CODE_A64_STEP_PROC", "X86CODE_A64_STATS", "X86CODE_A64_MEMLOG", "X86CODE_A64_CODECACHE_MB", "X86CODE_A64_GUEST_MALLOC", "X86CODE_A64_SHARED", "X86CODE_A64_PROFILE", "X86CODE_A64_RSS", "X86CODE_A64_LINK", "X86CODE_A64_SAFE", "X86CODE_A64_FASTDISPATCH", "X86CODE_A64_IVAU_CLEAR", "X86CODE_A64_EXEC_LOCK", "X86CODE_A64_ICLOG", "X86CODE_A64_RSB") if ARM64 and os.environ.get(k)}),
+        **({k: os.environ[k] for k in (
+            "X86CODE_A64_TRACE_PROC", "X86CODE_A64_STEP_PROC", "X86CODE_A64_STATS", "X86CODE_A64_MEMLOG",
+            "X86CODE_A64_CODECACHE_MB", "X86CODE_A64_GUEST_MALLOC", "X86CODE_A64_SHARED", "X86CODE_A64_PROFILE",
+            "X86CODE_A64_RSS", "X86CODE_A64_LINK", "X86CODE_A64_SAFE", "X86CODE_A64_FASTDISPATCH",
+            "X86CODE_A64_IVAU_CLEAR", "X86CODE_A64_EXEC_LOCK", "X86CODE_A64_ICLOG", "X86CODE_A64_RSB",
+            # Speed 3: launchd jobs only see Bootstrap.Child; these must be listed to reach backboardd/SpringBoard.
+            "X86CODE_A64_INLINE_OBJC", "X86CODE_A64_NATIVE_OBJC", "X86CODE_A64_GUEST_OBJC",
+            "X86CODE_A64_FUSE_SVC", "X86CODE_A64_JITCACHE", "X86CODE_A64_JITCACHE_DIR",
+            "SIMFB_HZ",
+        ) if ARM64 and os.environ.get(k)}),
         "SIMULATOR_UDID": udid,
         "SIMULATOR_DEVICE_NAME": "x86code",
         "SIMULATOR_RUNTIME_VERSION": DEVTYPE["version"],

@@ -192,7 +192,7 @@ GuestThread::GuestThread() {
     c.cntfrq_el0 = 1000000000;           // the counter counts ns, like Darling's mach_absolute_time (timebase 1/1)
     c.tpidr_el0 = &tpidr;
     c.tpidrro_el0 = &tpidrro;
-    c.fuse_svc_ret = !(getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 0);
+    c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;  // opt-in: default OFF (seq-race / present hang)
     native_objc_configure_jit(c);
     // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
     // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
