@@ -79,7 +79,7 @@ impl Default for Config {
             runtime_root: r.join("runtimes/ios-27.0-24A434-arm64/RuntimeRoot"),
             device: Some(r.join("var/device-a64")),
             training: vec![s.join("s15/train5"), s.join("s17/train6")],
-            scope: "loaded".into(),
+            scope: "hot".into(),
             budget_mb: DEFAULT_BUDGET_MB,
             follow_features: false,
             test_prefix: s.join("a64testprefix"),

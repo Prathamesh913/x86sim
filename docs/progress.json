@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 17: wallpaper on by default (PosterBoard on demand builds a new device's poster store with MercuryPoster, as on a Mac); poster/widget/PosterBoard/chronod code in the AOT image (image 4ecf7640, 712 MB): JIT code one sim 105->74 MB, full widgets config 4.83->3.30 GB PSS. Guarded import-stub direct links (dynarmic). arm64 constrained workqueue requests queue instead of blocking (Maps/geod hang). Files: DesktopServicesHelper added; On My iPhone still Loading. Home 28-34 s, Settings cold 13 s (targets not met). Three clean default runs.",
+ "now": "Speed 18: AOT image split into per-library chunks (incremental: keyed by library UUID, load address and CODEGEN_VERSION; translator rebuilds keep it), static discovery (function starts, symbols, unwind info, branch successors) measured: everything = 115.6M blocks / 29 GB, the budgeted 'loaded' scope gave no launch gain and +130-165 MB PSS, so the default stays the trained set. New Rust launcher (egui), x86code-aot CLI and x86code-mcp server; per-device feature toggles with presets.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -398,5 +398,12 @@
   "image": "4ecf7640, 2.75M blocks, 712 MB",
   "files": "On My iPhone still Loading; DesktopServicesHelper (Mac uses its FileService) added; DS node setup never starts in our Files",
   "report": "round-done/speed17.md"
+ },
+ "speed18": {
+  "image": "chunked: 728 chunks, 2.75M blocks (trained set); full build 24-29 s on 4 capped builders, 3-chunk update 24 s, no-op 0.16 s",
+  "everything": "1995 chunks, 115.6M blocks, 29.1 GB x86 code, 4m17s on 4 builders",
+  "loaded_scope": "5.19M blocks, 960 MB code: Settings/apps unchanged, dynamic JIT 152.9 vs 153.5 MB, PSS +130-165 MB -> opt-in",
+  "launcher": "tools/launcher: x86code-launcher (egui), x86code-aot, x86code-mcp",
+  "features": "wallpaper, spotlight, keyboard, siri, maps, photos, files, widgets; presets full/lean/minimal"
  }
 }

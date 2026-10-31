@@ -459,8 +459,9 @@ static void aot_job(GuestThread &t, Dynarmic::A64::Jit::SharedCode &sc, const ch
         };
         // hot blocks first (contiguous at the slot start), then their successors and the static entries, depth first
         // from each entry (a function's blocks stay together)
+        // without static entries (scope "hot": the trained blocks only) nothing is followed
         std::vector<u64> next;
-        for (u64 d : hot) { if (overflow) break; one(d, &next); }
+        for (u64 d : hot) { if (overflow) break; one(d, stat.empty() ? nullptr : &next); }
         const u64 hot_used = Dynarmic::A64::Jit::ChunkCodeEnd(sc) - ch.off, hot_blocks = blocks;
         work.assign(next.rbegin(), next.rend());
         for (size_t i = 0; !overflow; i++) {

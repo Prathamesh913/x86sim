@@ -1356,3 +1356,38 @@ Details in round-done/speed17.md.
   Our Files no longer fails that lookup, but still shows "Loading": its DesktopServices node setup (OpenSync /
   startObserving, logged at default level on the Mac at launch) never appears in our log. Open.
 - **Not done**: GetBlock/FastDispatch cost, Swift type-name fast path; home 26-28 s, Settings cold 12-13 s.
+
+## Speed 18 (2026-10-31): chunked, incremental AOT image with static discovery; launcher, CLI, MCP; feature toggles
+
+Details in round-done/speed18.md.
+- **Chunked image**: one chunk per library / executable (1826 dyld-cache dylibs, 169 placed Mach-Os; app executables
+  placed from Containers/ form the app tier). Each chunk is translated by libarm64jit's builder
+  (`X86CODE_A64_AOT_JOB`) into its own *slot* of the code slab (code is slab-position dependent: rel32 to the prelude,
+  RIP-relative constants), saved as an A64CK01 chunk file and joined by tools/launcher into the usual A64JC06
+  `<uuid>-<build>.aot`, so fast load (.map/.idx) and lazy registration are unchanged. Chunk key = library UUID (or
+  size:mtime), load address, CODEGEN_VERSION, code-shaping flags. The libarm64jit build-id hash is gone from every key
+  (kCodegenVersion 0x14 in jitcache.cpp, mirrored in core/src/key.rs and checked against the builder): a translator
+  rebuild without a codegen change kept all 728 chunks (tested). Parallel builders own disjoint constant-pool regions;
+  the assembler merges pools slot by slot and rebases reloc embeds.
+- **Static discovery**: LC_FUNCTION_STARTS, symbol tables and __unwind_info of every dylib / placed file (11.5M
+  entries, 1.75 GB of arm64 code), plus every direct successor the translator reports (`PretranslateCollect`: link
+  targets, BL return addresses), limited to the library's code sections. A block runs only when the guest branches to
+  its exact PC, so a guess in data is translated but never executed; page writes invalidate as before.
+- **Measured** (4 builders, nice 19, idle IO): everything = 1995 chunks, 115.6M blocks, 29.1 GB of x86 code, 4m17s
+  (15 CPU-min): 22x the largest slab (1344 MB, rel32 reach of libarm64jit/glibc). Libraries any process loads with
+  static fill to a 960 MB budget: 5.19M blocks, 29 s full build; 3-chunk incremental 24 s (builder start dominates);
+  no-op update 0.16 s. A/B against the trained set only (same pipeline, 2.75M blocks, = Speed 17's image): Settings
+  13/7 s both, Calendar/Photos/Maps identical, untrained Reminders/Contacts cold 4 s both, dynamic JIT code after the
+  full test 152.9 vs 153.5 MB, but PSS +130..165 MB one sim (bigger .idx and per-process block bitsets, fault-around
+  on denser .map pages). **Default scope: the trained set ("hot")**, chunked and incremental; "loaded"/"all" are
+  opt-in (x86code-aot config scope, launcher). Static code does not pay here: what still runs through the JIT is not
+  in the discoverable code.
+- **Code cache**: sized from the image (768..1344 MB, end fixed at the old cache end, grows down).
+- **tools/launcher** (cargo workspace): x86code-core (lib), `x86code-aot status|update|build|measure|config|features|sim`,
+  `x86code-mcp` (MCP over stdio: features_list/get/set/preset, sim_status/start/stop/restart, aot_status) and
+  `x86code-launcher` (eframe/egui: sim controls and status, Pre-translate with progress / cancel / resume / cores
+  slider, per-chunk image status with reasons and "N of M chunks need rebuilding", Features panel with presets).
+  boot-a64.sh checks the image 90 s after boot (aot-status.txt; X86CODE_AOT_AUTOUPDATE=1 rebuilds).
+- **Feature toggles**: `<device>/features.json`, definitions in cli/libexec/arm64/features-def.json (jobs, parks,
+  costs, presets full / lean / minimal), applied by boot-a64.sh at the next boot. A shared job (assistantd: keyboard
+  and Siri) is dropped only when every feature using it is off. Boot-critical jobs are never offered.

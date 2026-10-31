@@ -308,6 +308,17 @@ fi
 	A64_CMDFILE="$CMDFILE" \
 	A64_PREFETCH_HOT="$([ "${A64_PREFETCH:-1}" != 0 ] && echo "$PF_INNER")" \
 	"$X/cli/libexec/arm64/boot-inner.sh" > "$ST/lsim.out" 2>&1 &)
+# Speed 18: 90 s in, check the chunked AOT image against this runtime / placement / codegen (tools/launcher x86code-aot
+# status, low priority) and note in $ST/aot-status.txt how many chunks need rebuilding: a translator rebuild with a new
+# CODEGEN_VERSION, a runtime update or a newly placed app no longer silently boots without an image. The launcher
+# offers the rebuild; X86CODE_AOT_AUTOUPDATE=1 runs `x86code-aot update` (2 builders, nice 19, idle IO) right away.
+AOTBIN=$X/tools/launcher/target/release/x86code-aot
+if [ -x "$AOTBIN" ]; then
+	(sleep 90; nice -n 19 ionice -c 3 "$AOTBIN" --jc "${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}" --device "$D" status > "$ST/aot-status.txt" 2>&1
+	 if [ "${X86CODE_AOT_AUTOUPDATE:-0}" = 1 ] && grep -q "need rebuilding" "$ST/aot-status.txt"; then
+		"$AOTBIN" --jc "${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}" --device "$D" update --workers 2 > "$ST/aot-update.log" 2>&1
+	 fi) < /dev/null > /dev/null 2>&1 &
+fi
 # Speed 11: 60 s in (home is up), record which ranges of the dyld cache and the AOT image this boot's processes
 # have mapped in; the next boot prefetches them (boot-inner.sh). A64_PREFETCH=0: neither.
 if [ "${A64_PREFETCH:-1}" != 0 ]; then
