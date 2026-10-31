@@ -10,3 +10,6 @@
 	path = external/dynarmic
 	url = git@github.com:x86code/dynarmic.git
 	branch = x86code
+[submodule "tools/launcher"]
+	path = tools/launcher
+	url = git@github.com:x86code/x86code-launcher.git
