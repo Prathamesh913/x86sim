@@ -1391,3 +1391,34 @@ Details in round-done/speed18.md.
 - **Feature toggles**: `<device>/features.json`, definitions in cli/libexec/arm64/features-def.json (jobs, parks,
   costs, presets full / lean / minimal), applied by boot-a64.sh at the next boot. A shared job (assistantd: keyboard
   and Siri) is dropped only when every feature using it is off. Boot-critical jobs are never offered.
+
+## Speed 19 (2026-10-31): native baseline, frame-accurate opens, bitmap fills, sparse image
+
+Details in round-done/speed19.md.
+- **Timing method** (`cli/libexec/simrecord.py`): `capture` copies every frame ring slot (slot t_ns, CLOCK_REALTIME) to a
+  file; host/simhid (arm64) now prefixes each log line with CLOCK_REALTIME ns, so a tap's touch-down lines up with the
+  frames. `open` gives response (first changed frame) and content (first frame that resembles the final screen and stays
+  for 0.5 s). `mp4open` does the same for `simctl io recordVideo` files; `render` makes a real-timing mp4 with an Xcode
+  "Show Touches"-style overlay; `sbs` puts two recordings side by side with a shared timer.
+- **Mac baseline** (own iPhone 17 / iOS 27.0 device, booted, measured, deleted): cold opens via simctl launch 4-8 s
+  (response->content 2.9-7.0 s), warm (app switch) 1.6-2.7 s (0.62-0.76 s; simctl adds ~0.9 s before anything moves).
+- **Ours** is close on cold (Settings 5.4-5.8 s from the tap, Photos 7.2, Maps 8.1, Reminders 5.0, Contacts 4.0).
+  Speed 18's 14 s / 7 s Settings figures were measurement (2 s OCR polls, openurl). Warm from home was 1.1-1.2 s with
+  the same pid (no relaunches, no jetsam).
+- **Where warm latency went**: the touch-down highlight shows at +55 ms, then nothing until +0.83 s. SpringBoard's main
+  thread was 100% busy (per-thread CPU every 50 ms): 0.92 CPU-s, 12.6k page faults (~50 MB of new bitmaps), 2.5k
+  context switches per tap. perf: 25% in Darling's x86 libsystem_platform: `bzero`/`memset` call `memset_pattern4`,
+  which calls memmove once per 4 bytes (3.1M calls per 12.6 MB full-screen clear).
+  **Fix:** guest calls to bzero/memset/memset_pattern4/8/16 bind to glibc memset / doubling memcpy fills (host.cpp dsym,
+  `X86CODE_A64_FASTFILL=0` restores Darling's; Darling's own native callers and the x86_64 runtime are unchanged).
+  Warm tap->content 1.09-1.22 -> 0.88-1.04 s, response 0.83 -> 0.5-0.67 s.
+- **Still on tap**: libate ASTC encode/decode, vImage conversions, objc retain/release in SpringBoard (perfguest2 on
+  the image): an image compressed on the CPU at JIT speed. Next target.
+- **Not ours**: backboardd's 8 "IOSurfaceQueryTransactionList got non-success" lines per frame; the simulator's
+  IOSurfaceClientQueryTransactionList is `mov w0, #0xe00002c7; ret`.
+- **Sampler**: `X86CODE_A64_GSAMPLE_TRACE=1` writes every sample with wall-clock ns. With SpringBoard it killed the
+  process silently after 10-60 s (depth 24 sooner, depth 6 later); unresolved, debug only.
+  `X86CODE_A64_BIGCOPY=<bytes>` (+ `_DUMP=<file>`) sums fill/copy bytes by guest caller.
+- **Sparse image files**: the launcher assembler seeks over slot holes, dynarmic writes the published .map without
+  all-zero 64 KB pieces. .aot 1.2 GB -> 713 MB, .map 925 -> 514 MB on disk, byte-identical; jitcache 3.0 -> 2.2 GB.
+- Videos: ~/scratch/x86code/videos/speed19 (ours, mac, sbs) and the progress site's Videos section (not in git).

@@ -90,6 +90,10 @@ def build():
     issues = "".join("<li>%s</li>" % e(i) for i in st.get("issues", []))
     cards = "".join('<figure><img src="%s" loading="lazy" alt=""><figcaption>%s</figcaption></figure>' % (thumb(f), e(c))
                     for f, c in st.get("milestones", []) if os.path.exists(os.path.join(SCREENS, f)))
+    # videos: progress.json "videos" = [[file, caption]]; files live in $X86SIM_SITE/videos (copied there from
+    # ~/scratch/x86code/videos, never committed)
+    vids = "".join('<figure><video src="videos/%s" controls muted playsinline preload="metadata"></video><figcaption>%s</figcaption></figure>'
+                   % (e(f), e(c)) for f, c in st.get("videos", []) if os.path.exists(os.path.join(SITE, "videos", f)))
     commits = "".join('<li><span class="t">%s</span> %s</li>' % (e(t), e(m[:160])) for t, m in recent_commits())
     page = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -103,6 +107,8 @@ p{margin:6px 0}.sub{color:#aaa;font-size:14px}.now{background:#13261b;border:1px
 background:#000;border-radius:28px;border:1px solid #333}.cap{text-align:center;color:#888;font-size:12px}
 .ms{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.ms figure{margin:0}
 .ms img{width:100%%;border-radius:14px;border:1px solid #333}figcaption{font-size:12px;color:#aaa;margin-top:4px}
+.vs{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}.vs figure{margin:0}
+.vs video{aspect-ratio:auto;max-height:none;border-radius:12px;max-width:none}
 .mt{display:grid;grid-template-columns:1fr 1fr;gap:10px}.m{background:#151517;border:1px solid #26262a;border-radius:12px;padding:10px}
 .k{font-size:12px;color:#999}.v{font-size:18px;font-weight:600}.n{font-size:12px;color:#888}
 details{background:#151517;border:1px solid #26262a;border-radius:12px;margin:8px 0;padding:10px 12px}
@@ -120,6 +126,7 @@ ul{padding-left:20px}li{margin:4px 0}.log li{font-size:13px;color:#bbb;list-styl
 <h2>Where it stands</h2><div class="mt">%(metrics)s</div>
 <h2>Stages</h2>%(stages)s
 <h2>Known issues</h2><ul>%(issues)s</ul>
+<h2>Videos</h2><p class="sub">%(vidnote)s</p><div class="vs">%(vids)s</div>
 <h2>Milestones</h2><div class="ms">%(cards)s</div>
 <h2>Latest commits</h2><ul class="log">%(commits)s</ul>
 <footer>Updated %(time)s · private project</footer></main>
@@ -128,7 +135,8 @@ var v=document.getElementById('v'),u='live/stream.m3u8';
 if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=u}else if(window.Hls&&Hls.isSupported()){var h=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:6,maxLiveSyncPlaybackRate:1.2,backBufferLength:4});h.loadSource(u);h.attachMedia(v);h.on(Hls.Events.ERROR,function(e,d){if(d.fatal){setTimeout(function(){h.loadSource(u)},2000)}})}
 </script></body></html>""" % {"title": e(st.get("title", "iOS Simulator on Linux")), "summary": e(st.get("summary", "")),
                               "now": e(st.get("now", "")), "seq": seq if seq is not None else "—", "metrics": metrics,
-                              "stages": stages, "issues": issues, "cards": cards, "commits": commits,
+                              "stages": stages, "issues": issues, "cards": cards, "vids": vids,
+                              "vidnote": e(st.get("videos_note", "")), "commits": commits,
                               "time": time.strftime("%Y-%m-%d %H:%M")}
     with open(os.path.join(SITE, "index.tmp.html"), "w") as f:
         f.write(page)

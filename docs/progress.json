@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 18: AOT image split into per-library chunks (incremental: keyed by library UUID, load address and CODEGEN_VERSION; translator rebuilds keep it), static discovery (function starts, symbols, unwind info, branch successors) measured: everything = 115.6M blocks / 29 GB, the budgeted 'loaded' scope gave no launch gain and +130-165 MB PSS, so the default stays the trained set. New Rust launcher (egui), x86code-aot CLI and x86code-mcp server; per-device feature toggles with presets.",
+ "now": "Speed 19: frame-accurate open timing (ring t_ns vs simhid touch timestamps) against Xcode's iOS 27.0 simulator on the Mac. Warm opens were held up by SpringBoard's main thread clearing bitmaps through Darling's memset_pattern4 (one memmove per 4 bytes); guest fills now use glibc: warm tap-to-content ~1.15 -> 0.9 s. Cold opens are close to the Mac's. Next: SpringBoard's ASTC encode / vImage work on tap.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -405,5 +405,114 @@
   "loaded_scope": "5.19M blocks, 960 MB code: Settings/apps unchanged, dynamic JIT 152.9 vs 153.5 MB, PSS +130-165 MB -> opt-in",
   "launcher": "tools/launcher: x86code-launcher (egui), x86code-aot, x86code-mcp",
   "features": "wallpaper, spotlight, keyboard, siri, maps, photos, files, widgets; presets full/lean/minimal"
+ },
+ "videos": [
+  [
+   "Settings-cold.mp4",
+   "Settings cold: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Settings-warm.mp4",
+   "Settings warm: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Calendar-cold.mp4",
+   "Calendar cold: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Calendar-warm.mp4",
+   "Calendar warm: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Photos-cold.mp4",
+   "Photos cold: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Photos-warm.mp4",
+   "Photos warm: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Maps-cold.mp4",
+   "Maps cold: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Maps-warm.mp4",
+   "Maps warm: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Reminders-cold.mp4",
+   "Reminders cold: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Reminders-warm.mp4",
+   "Reminders warm: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Contacts-cold.mp4",
+   "Contacts cold: ours (left, touches shown) | Mac native (right)"
+  ],
+  [
+   "Contacts-warm.mp4",
+   "Contacts warm: ours (left, touches shown) | Mac native (right)"
+  ]
+ ],
+ "videos_note": "Side by side at real timing, timer = seconds since the trigger (ours: the tap's touch-down; Mac: simctl launch, which adds ~0.9 s before anything moves and has no touch to show). Mac warm launches are app-to-app switches; ours start from the home screen.",
+ "speed19": {
+  "summary": "Native baseline + frame-accurate timing; warm-open latency was SpringBoard bitmap clears through Darling's per-4-byte memset_pattern4; sparse AOT image files",
+  "mac_vs_ours_s": {
+   "note": "tap->content (response->content). Mac: trigger = simctl launch (+~0.9 s tool overhead, no touch), warm = app switch. Ours: trigger = touch-down (openurl for Reminders/Contacts), warm = from home, after the fix.",
+   "Settings": {
+    "mac_cold": "7.98 (5.42)",
+    "mac_warm": "2.63 (0.76)",
+    "ours_cold": "5.4-5.8 (5.0)",
+    "ours_warm": "0.88 (0.27)",
+    "ours_warm_before": "1.09-1.16"
+   },
+   "Calendar": {
+    "mac_cold": "n/a (was already open)",
+    "mac_warm": "2.69 (0.68)",
+    "ours_cold": "5.16 (4.6)",
+    "ours_warm": "0.96 (0.29)",
+    "ours_warm_before": "1.14-1.21"
+   },
+   "Photos": {
+    "mac_cold": "8.22 (7.01)",
+    "mac_warm": "1.90 (0.71)",
+    "ours_cold": "7.23 (6.68)",
+    "ours_warm": "0.94 (0.28)",
+    "ours_warm_before": "1.11-1.22"
+   },
+   "Maps": {
+    "mac_cold": "8.16 (7.03)",
+    "mac_warm": "1.57 (0.62)",
+    "ours_cold": "8.13 (7.57)",
+    "ours_warm": "1.04 (0.41)",
+    "ours_warm_before": "1.20"
+   },
+   "Reminders": {
+    "mac_cold": "5.65 (4.73)",
+    "mac_warm": "1.70 (0.63)",
+    "ours_cold": "5.03 (4.60)",
+    "ours_warm": "0.94 (0.42)",
+    "ours_warm_before": "1.15-1.16"
+   },
+   "Contacts": {
+    "mac_cold": "4.05 (2.90)",
+    "mac_warm": "1.67 (0.67)",
+    "ours_cold": "4.02 (3.60)",
+    "ours_warm": "0.91 (0.40)",
+    "ours_warm_before": "1.09-1.13"
+   }
+  },
+  "found": [
+   "Speed 18's Settings 14 s / 7 s were measurement: 2 s OCR polls + the openurl path. Frame-accurate: cold 5.4-6.1 s, warm 1.1 s (now 0.9).",
+   "Warm open from home: touch-down highlight at +55 ms, then nothing until +0.83 s while SpringBoard's main thread ran at 100% CPU (12.6k page faults, ~50 MB of new bitmaps).",
+   "25% of that thread was Darling's x86 libsystem_platform: bzero/memset = memset_pattern4, which calls memmove once per 4 bytes. Guest fills now bind to glibc memset (X86CODE_A64_FASTFILL=0 restores).",
+   "Remaining on tap: libate ASTC encode/decode, vImage conversions, objc retain/release (SpringBoard compresses an image on the CPU at JIT speed).",
+   "IOSurfaceQueryTransactionList log lines (8 per frame in backboardd) are Apple's: the simulator build's IOSurfaceClientQueryTransactionList always returns kIOReturnUnsupported.",
+   "Apparent dropped Maps taps were a test artifact: a notification permission alert ate the home press."
+  ],
+  "jitcache": ".aot 1.2 GB -> 713 MB and .map 925 -> 514 MB on disk (sparse; byte-identical); jitcache 3.0 -> ~2.2 GB",
+  "crash_gate": "g1-g3: 3 consecutive clean cold boots + Settings + Calendar/Photos/Maps + keyboard + Siri + Files (only the usual configd_sim/metalhostd/PhotosFileProvider MULTI)"
  }
 }
