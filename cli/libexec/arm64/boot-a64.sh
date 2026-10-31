@@ -100,8 +100,11 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # assetsd (on demand): the photo library; without it Photos throws in its library view's viewDidLoad.
 # geod + navd (Speed 15, on demand): Maps' GeoServices and navigation services. Without them Maps retried both lookups
 # without backoff (~85% CPU backgrounded); Speed 14 no-op patched the retry instead, which turned the features off.
+# campo (Speed 16): the Siri UI (Campo.app LaunchAngel, launched by RunningBoard as osservice<com.apple.campo> on the
+# Siri tap; mksimdevice puts angels where launchd_sim classifies them as angels, see there).
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
-	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd"
+	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
+	com.apple.campo"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"

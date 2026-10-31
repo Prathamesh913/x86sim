@@ -99,8 +99,18 @@ def main():
     shutil.rmtree(daemons, ignore_errors=True)
     os.makedirs(daemons)
     # x86Code: LaunchAngels (UI services launched on demand, e.g. PosterBoard, which draws the wallpaper) live
-    # in their own directory; CoreSimulator hands launchd_sim that path too
+    # in their own directory; CoreSimulator hands launchd_sim that path too. arm64 (Speed 16): if
+    # launchd_sim does not see them as angels, RunningBoard says osservice<com.apple.campo> is no angel, FrontBoard gives
+    # Campo a plain FBProcess and SpringBoard's Siri scene transaction asserts ("process was nil").
     angels = device + "/LaunchAngels"
+    if ARM64:
+        # launchd_sim takes a plist's path from the open file (F_GETPATH: canonical) and makes the job an angel only
+        # if it starts with <SimulatorRuntimeRoot>/System/Library/LaunchAngels/. So the device's angels go into its
+        # own hidden subdirectory of the runtime's (real) LaunchAngels directory, and SimulatorRuntimeRoot (below)
+        # is the canonical runtime path, as the cryptex mount is on a Mac.
+        shutil.rmtree(angels, ignore_errors=True)
+        angels = os.path.join(os.path.realpath(os.path.join(RUNTIME, "System/Library/LaunchAngels")),
+                              ".x86code-" + os.path.basename(os.path.abspath(device)))
     shutil.rmtree(angels, ignore_errors=True)
     os.makedirs(angels)
     for job in jobs:
@@ -393,7 +403,7 @@ def main():
             "ChildDefaults": child_defaults,
             "Self": env,
             "Paths": [darling(daemons), darling(angels)],
-            "SimulatorRuntimeRoot": rt,
+            "SimulatorRuntimeRoot": darling(os.path.realpath(RUNTIME)) if ARM64 else rt,
         },
     }
     with open(data + "/var/run/launchd_bootstrap.plist", "wb") as f:
