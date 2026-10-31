@@ -110,6 +110,8 @@ case "${A64_JOBS:-std}" in
 	full) JOBS="$MIN $UI $FULLUI $OUR_JOBS" ;;
 	*) JOBS="$MIN $UI $OUR_JOBS" ;;
 esac
+# A64_DROP="label ...": leave these jobs out (experiments)
+for j in ${A64_DROP:-}; do JOBS=$(echo " $JOBS " | sed "s/[[:space:]]$j[[:space:]]/ /"); done
 # Speed 10: A64_CLONE_FROM=<device dir> starts a new device (no data/ yet) from a copy of that device's data/, like
 # simctl clone. A fresh device's first boot otherwise builds the LaunchServices database (lsd) while SpringBoard's icon
 # requests wait on it: ~80 s, and SpringBoard was killed and relaunched at ~90 s (home after ~5 min). The store refers

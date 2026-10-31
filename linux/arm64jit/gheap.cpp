@@ -12,6 +12,10 @@
 // Speed 8: a scavenger thread (every 5 s) sorts each class's global free list and gives back (MADV_DONTNEED) the whole
 // pages that free blocks cover; those blocks move to a side list kept in host memory (their headers would re-touch
 // the pages), and refill hands them out after the free list. X86CODE_A64_GHEAP_SCAVENGE=0 turns it off.
+// Speed 13: zero on free, as Apple's libmalloc does for small blocks. A free small block is all zero except its 16-byte
+// header (list link + free marker), which small_alloc clears, so every small allocation comes back zeroed (and calloc
+// needs no memset). Code relies on it: assetsd's LEOTokenizerCreate ARC-stores into a fresh sqlite3_malloc(8) and
+// released the stale free-list link it found there. X86CODE_A64_GHEAP_ZERO=0 turns it off.
 #include "a64.h"
 #include <cerrno>
 #include <atomic>
@@ -50,6 +54,7 @@ struct Global {
     u64 scavenged_at = 0;          // nfree after the last scavenge (skip a class until it grows)
 } g_global[kClasses];
 std::atomic<u64> g_released_bytes{0};
+const bool g_zero = [] { const char *e = getenv("X86CODE_A64_GHEAP_ZERO"); return !(e && *e == '0'); }();
 
 std::mutex g_large_mu;
 std::unordered_map<u64, u64> g_large;  // address -> mapped size
@@ -199,7 +204,7 @@ void *small_alloc(int c) {
         tc.head[c] = b; tc.count[c] = got;
     }
     tc.head[c] = b->next; tc.count[c]--;
-    b->magic = 0;
+    b->next = nullptr; b->magic = 0;
     return b;
 }
 void *large_alloc(size_t size, size_t align) {
@@ -251,7 +256,7 @@ void *gh_calloc(size_t n, size_t s) {
     size_t t;
     if (__builtin_mul_overflow(n, s, &t)) return nullptr;
     void *p = gh_malloc(t);
-    if (p) memset(p, 0, t);
+    if (p && !(g_zero && t <= kMaxSmall)) memset(p, 0, t);
     return p;
 }
 void gh_free(void *p) {
@@ -268,6 +273,7 @@ void gh_free(void *p) {
             }
             return;
         }
+        if (g_zero) memset(p, 0, g_class_size[c]);
         b->magic = kFreeMagic;
         b->next = tc.head[c]; tc.head[c] = b;
         if (++tc.count[c] > limit_for(c)) flush(c, limit_for(c) / 2);

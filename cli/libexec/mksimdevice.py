@@ -167,10 +167,6 @@ def main():
             else:
                 # no logd here either: without this libtrace streams to diagnosticd anyway
                 plist.setdefault("EnvironmentVariables", {})["OS_ACTIVITY_MODE"] = "disable"
-        # x86Code arm64 (Speed 12): assetsd's photo search store (PhotoLibraryServices PLLeoLexiconStore ->
-        # LEOTokenizerCreate) ARC-stores into an uninitialised sqlite3_malloc(8) and releases the old garbage. That
-        # works on a device, where libmalloc zeroes freed memory; here assetsd crashed (SIGSEGV in objc_release) at
-        # every Photos launch. Zero its allocations instead.
         # x86Code arm64 (Speed 13): assistantd is here only for com.apple.assistant.dictation (the keyboard's dictation
         # availability; see boot-a64). Its LaunchEvents and its other ~30 MachServices started it at boot, and it
         # then pulled in cloudd, nsurlsessiond, securityd and tccd. Serve dictation only. X86SIM_ASSISTANTD=full: Apple's.
@@ -178,8 +174,6 @@ def main():
             plist.pop("LaunchEvents", None)
             keep = os.environ.get("X86SIM_ASSISTANTD_MACH", "com.apple.assistant.dictation").split(",")
             plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
-        if ARM64 and job == "com.apple.assetsd":
-            plist.setdefault("EnvironmentVariables", {})["MallocZeroOnAlloc"] = "1"
         # x86Code: X86SIM_JOBENV="label:K=V;label:K=V": extra environment for runtime jobs (experiments)
         for kv in filter(None, os.environ.get("X86SIM_JOBENV", "").split(";")):
             lab, _, ev = kv.partition(":")
