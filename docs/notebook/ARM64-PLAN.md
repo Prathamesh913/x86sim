@@ -1229,3 +1229,31 @@ Details in round-done/speed11.md. Single runs on a shared host.
   per device (v3 UUID tied to the LaunchServices DB; a fresh device made a random v4 one).
 - Results: home 28/33/24 s, Settings 11/4 s, PSS 2.41-2.42 GB (43 procs; InputUI 85 MB, assistantd 136 MB and the
   cloudd/nsurlsessiond/securityd/tccd it pulls in), 3 consecutive clean boots + the three apps.
+
+## Speed 13 (2026-10-31): assistantd off the boot path, zero-on-free heap, site as services
+
+Details in round-done/speed13.md.
+- **assistantd**: its LaunchEvents and ~30 MachServices (not dictation) started it at boot, and it pulled in cloudd and
+  securityd. mksimdevice (arm64) keeps only com.apple.assistant.dictation (`X86SIM_ASSISTANTD=full`: Apple's plist;
+  `X86SIM_ASSISTANTD_MACH=a,b`: the services kept). Typing in Settings search still works, Preferences doesn't spin,
+  and assistantd isn't even launched. PSS 2.41 -> 2.27-2.31 GB (40 procs). InputUI (90 MB) still starts at boot
+  (SpringBoard's osservice request, as on a device).
+- **Zero on free**: the arm64 guest malloc is gheap (libsystem_malloc is replaced), so libmalloc's zero-on-free never
+  ran and `MallocZeroOnAlloc` did nothing. A fresh small block kept its free-list link in word 0: exactly what
+  assetsd's LEOTokenizerCreate released. gheap now zeroes small blocks (<=32 KB) on free and clears the 16-byte header
+  on alloc; calloc skips its memset for small sizes. `X86CODE_A64_GHEAP_ZERO=0` turns it off. assetsd's env removed.
+- **Home**: 21-35 s. Fast runs (22-26 s) have ~0% iowait; slow ones 26-39% iowait from t=7-19 s (page-cache misses
+  under host memory pressure; the boot scope's IO cap is 40 MB/s and the prefetch early set is ~885 MB). SpringBoard's
+  main thread is in guest code then, at 20-60% CPU. Next: a smaller, ordered early set.
+- **Image beyond the dyld cache**: not done. SpringBoard.framework loaded at the same address in two boots, but 78 of
+  115 non-cache r-xp mappings (SB, Preferences, backboardd, InputUI) moved. Needs deterministic placement (a shared
+  path->address table applied in the mmap path, MAP_FIXED_NOREPLACE) plus a per-range guard before non-cache blocks go
+  live, a .bin section listing the files, and the AOT builder mapping them; or guest-PC relocations in emitted code.
+- **mtlvk** (heaptrack): ~150 MB live heap: NVIDIA libnvidia-glcore 91 MB (679 live command buffers = 9.4 MB, kept by
+  metal2vulkan's spares/replays), libcuda 19 MB, Rust 21.5 MB. malloc_trim frees nothing (tried, reverted).
+- **Maps in the background** (pre-existing): ~80% CPU and launchd_sim ~120%:
+  -[MNNavigationServiceRemoteProxy _openConnection] reconnects to the missing navd. A navd job loops on locationd/
+  routined itself (63%); a parked navd stops the loop but Maps' sheet stays empty. `A64_PARK_EXTRA`, `A64_DROP` knobs.
+- **Progress site** died with the shell's cgroup scope (agent session teardown: SIGTERM to all four parts at once). Each
+  part is now a transient systemd user service (`x86sim-site-<name>`, Restart=on-failure); it survived 8 sim restarts
+  with the same URL.

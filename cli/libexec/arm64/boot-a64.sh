@@ -197,7 +197,7 @@ R="/Volumes/SystemRoot$X86SIM_RUNTIME"
 # Default slim park list: path substrings matched in arm64host before dyld. A64_SLIM=0 clears it.
 # Do not park MachServices daemons (cloudd, diagnosticd): lookup succeeds then clients block forever
 # on the unreplied port. Those are in MIN so securityd's lookups resolve to real (lean) processes.
-PARK_LIST='Spotlight.app,WidgetRenderer'
+PARK_LIST='Spotlight.app,WidgetRenderer'${A64_PARK_EXTRA:+,$A64_PARK_EXTRA}
 if [ "${A64_SLIM:-1}" = 1 ] && [ "${A64_JOBS:-std}" != full ]; then
 	if grep -q '^X86CODE_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null; then
 		sed -i "s|^X86CODE_A64_SLIM_PARK=.*|X86CODE_A64_SLIM_PARK=$PARK_LIST|" "$D/sim.env"
