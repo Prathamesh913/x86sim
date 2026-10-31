@@ -246,24 +246,36 @@ cat > "$CMDFILE" <<CMDEOF
 exec "$H" /usr/bin/env $ENVS "$R/sbin/launchd_sim" "/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist"
 CMDEOF
 
+# Speed 14: the early set (pages in first-touch order up to ~home) is read in that order here, outside the IO-capped
+# scope: ~1-2 s of sequential reads instead of ~10-20 s at 40 MB/s, competing with the boot's own faults. The rest
+# (prefetch.hot) stays a capped WILLNEED inside the scope. A64_PREFETCH_EARLY_CAPPED=1: the early set capped too.
+PF_INNER="$ST/prefetch.early $ST/prefetch.hot"
+if [ "${A64_PREFETCH:-1}" != 0 ] && [ "${A64_PREFETCH_EARLY_CAPPED:-0}" != 1 ] && [ -f "$ST/prefetch.early" ]; then
+	(python3 -I "$X/cli/libexec/arm64/prefetch.py" read "$ST/prefetch.early" > "$ST/prefetch-read.log" 2>&1 &)
+	PF_INNER="$ST/prefetch.hot"
+fi
 (cli/libexec/limited.sh env \
 	DPREFIX="$DPREFIX" \
 	X86SIM_DARLING="$X86SIM_DARLING" \
 	A64_TZNAME="$TZNAME" \
 	A64_TIMEOUT="$A64_TIMEOUT" \
 	A64_CMDFILE="$CMDFILE" \
-	A64_PREFETCH_HOT="$([ "${A64_PREFETCH:-1}" != 0 ] && echo "$ST/prefetch.early $ST/prefetch.hot")" \
+	A64_PREFETCH_HOT="$([ "${A64_PREFETCH:-1}" != 0 ] && echo "$PF_INNER")" \
 	"$X/cli/libexec/arm64/boot-inner.sh" > "$ST/lsim.out" 2>&1 &)
 # Speed 11: 60 s in (home is up), record which ranges of the dyld cache and the AOT image this boot's processes
 # have mapped in; the next boot prefetches them (boot-inner.sh). A64_PREFETCH=0: neither.
 if [ "${A64_PREFETCH:-1}" != 0 ]; then
 	JC=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
-	# the pages mapped 12 s in are read first (prefetch.early), then the rest: the reads share the boot's IO cap
-	# with its own page faults, so the order decides what the first processes wait for
-	pf_record() { python3 -I "$X/cli/libexec/arm64/prefetch.py" record "$1" \
-		"$X86SIM_RUNTIME"/System/Library/Caches/com.apple.dyld/dyld_sim_shared_cache_arm64* \
-		"$JC"/*.map "$JC"/*.map.idx; }
-	(sleep 12; pf_record "$ST/prefetch.early"; sleep 48; pf_record "$ST/prefetch.hot") > "$ST/prefetch.log" 2>&1 &
+	# Speed 14: prefetch.early = the pages present up to A64_PREFETCH_EARLY_SECS (default 24, ~home), snapshotted
+	# every 3 s and saved by first-touch time; prefetch.hot = everything mapped 60 s in (read after, capped)
+	PF_FILES=("$X86SIM_RUNTIME"/System/Library/Caches/com.apple.dyld/dyld_sim_shared_cache_arm64* "$JC"/*.map "$JC"/*.map.idx)
+	pf_record() { python3 -I "$X/cli/libexec/arm64/prefetch.py" record "$1" "${PF_FILES[@]}"; }
+	PF_ES=${A64_PREFETCH_EARLY_SECS:-24}
+	# early: also every other mapped file of the runtime, the jitcache dir and the darling prefix (non-cache dylibs,
+	# app executables, the .aot itself): what the boot otherwise faults in at the scope's 40 MB/s
+	(nice -n 19 python3 -I "$X/cli/libexec/arm64/prefetch.py" record-seq "$ST/prefetch.early" "$PF_ES" 3 "${PF_FILES[@]}" \
+		"$X86SIM_RUNTIME/" "$JC/" "$X/darling-prefix/"
+	 sleep $((60 - PF_ES)); pf_record "$ST/prefetch.hot") > "$ST/prefetch.log" 2>&1 &
 fi
 sleep 3
 (timeout $((SECS + 2)) tail -n +1 -F "$L" 2>/dev/null | grep --line-buffered -v -E "failed lookup|Last log repeated" > "$ST/launchd.log" &)
