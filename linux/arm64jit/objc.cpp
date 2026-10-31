@@ -221,21 +221,6 @@ void sim_service_patches(GuestThread &t) {
     if (const char *e = getenv("X86CODE_A64_UISENSOR"); e && atoi(e) == 1) return;
     // sub sp, sp, #0xb0 -> mov x0, #0
     patch_return(t, kUISensorConnect, 0xd102c3ffu, 0xd2800000u, "BKS UI sensor connect -> nil");
-    maps_service_patches(t);
-}
-
-// Speed 14: Maps retries two daemons that aren't in the job set (navd, geod) without backoff. Backgrounded Maps then
-// held ~85% CPU and launchd_sim ~120% answering the failed lookups. -[MNNavigationServiceRemoteProxy _openConnection]
-// reconnects from its invalidation handler, and -[GEOOfflineService _fetchCurrentState:]'s reply block calls it again
-// on the XPC error. Both are objc_direct. Without the daemons the proxy keeps a nil connection (messages to nil) and
-// offline state stays unknown. A parked navd stub stops the first loop, then the second shows up. A real geod costs
-// ~78 MB PSS, and Maps' cold launch blocked on it. X86CODE_A64_MAPS_RETRY=1 leaves both alone.
-constexpr u64 kNavOpenConnection = 0x1feb892e4ull;  // -[MNNavigationServiceRemoteProxy _openConnection]
-constexpr u64 kGeoOfflineFetch = 0x1cc225504ull;    // -[GEOOfflineService _fetchCurrentState:]
-void maps_service_patches(GuestThread &t) {
-    if (const char *e = getenv("X86CODE_A64_MAPS_RETRY"); e && atoi(e) == 1) return;
-    patch_return(t, kNavOpenConnection, 0xd10243ffu, 0xd2800000u, "navd _openConnection -> no-op");
-    patch_return(t, kGeoOfflineFetch, 0xb4000500u, 0xd2800000u, "GEOOffline _fetchCurrentState: -> no-op");
 }
 
 void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {

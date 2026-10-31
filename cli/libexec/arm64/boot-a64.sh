@@ -98,8 +98,10 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # check posts "availability changed", the keyboard dock (mic key) re-checks, and the app's main thread spins at 100%
 # from the first text field tap, so InputUI's keyboard arbiter times the app out and no keyboard appears.
 # assetsd (on demand): the photo library; without it Photos throws in its library view's viewDidLoad.
+# geod + navd (Speed 15, on demand): Maps' GeoServices and navigation services. Without them Maps retried both lookups
+# without backoff (~85% CPU backgrounded); Speed 14 no-op patched the retry instead, which turned the features off.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
-	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd"
+	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
