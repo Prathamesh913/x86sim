@@ -1,12 +1,12 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 10: home 42 -> 29-32 s (AOT image fast load: every process parsed the 1.2M-entry index under a lock), memory 2.40 -> 2.29 GB PSS for one sim (anon without mtlvk 769 -> 674-680 MB: lf_map at 75% load, adaptive guest-heap refill, image trained on every daemon), fresh second instances via A64_CLONE_FROM reach home in 25 s (was ~5 min with a SpringBoard relaunch on the LaunchServices build), Apple's 125/3 guest timebase implemented behind X86CODE_A64_TIMEBASE=apple (Swift sleeps right without the patch; a Darling workqueue spin keeps it off). Settings cold 9 s / warm 3 s, 3 consecutive clean boots. Speed 9: Swift sleeps fixed (libswift_Concurrency inlined Apple-silicon timebase: every Task.sleep fired at once; Preferences idle 90% -> 0% CPU, 10k -> 2 wakeups/s), GetBlock FastDispatch probe on by default (its Speed 7/8 crashes were a torn 16-byte read), metalhostd NULL-context guard and back on the image, shared prelude (-46 MB anon), no 6.5 GB of .bin autosaves per boot, fresh devices without blank widget tiles. Home 42 s, Settings cold 9-12 s / warm 3 s, 3 consecutive clean boots. Settings search 'Time' overlap is iOS 27 Liquid Glass (matches Xcode's simulator). Speed 8: memory 2.74 -> 2.32 GB PSS for one sim (38 procs); second instance boots side by side (shared mtlvk, private /dev/shm): two instances 3.27 GB, marginal ~0.93 GB. Home 36 s, Settings cold 12 s / warm 3 s, zero crashes. Speed 7: memory 3.92 -> 2.70 GB PSS (SpringBoard 748->~490, Preferences 596->~300, backboardd 466->~135, daemons ~65->~28 MB each); home 37 s, Settings cold 10-16 s / warm 2-3 s, zero crashes. Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
+ "now": "Speed 11: home 29-32 -> 20/20/24 s, PSS 2.29 -> 2.15-2.16 GB for one sim (anon without mtlvk 674-680 -> 597-604 MB). iconservicesagent wiped its icon store, and with it the Metal shader cache IconServices keeps there, at every launch: it keeps the store only if the directory's owner is _iconservices. So every boot re-rendered every icon, and MTLCompilerService spent 11.9 CPU-s compiling RenderBox pipelines, which also held SpringBoard's main queue on a FrontBoard lock for ~4.5 s. The arm64 simshim now reports _iconservices for our own files in that daemon only, so MTLCompilerService no longer starts on a warm boot. Apple's 125/3 guest timebase is now the default: the Speed 10 spin was libdispatch timer re-arms handed back from the workqueue callbacks unconverted. Boots prefetch the last boot's hot dyld-cache and image pages: with an evicted page cache, home 57-60 s -> 30-52 s. dynarmic maps run at 0.9 load: SpringBoard -11 MB. Settings cold 10 s / warm 3 s, 3 consecutive clean boots, idle <=1%. Speed 10: home 42 -> 29-32 s (AOT image fast load: every process parsed the 1.2M-entry index under a lock), memory 2.40 -> 2.29 GB PSS for one sim (anon without mtlvk 769 -> 674-680 MB: lf_map at 75% load, adaptive guest-heap refill, image trained on every daemon), fresh second instances via A64_CLONE_FROM reach home in 25 s (was ~5 min with a SpringBoard relaunch on the LaunchServices build), Apple's 125/3 guest timebase implemented behind X86CODE_A64_TIMEBASE=apple (Swift sleeps right without the patch; a Darling workqueue spin keeps it off). Settings cold 9 s / warm 3 s, 3 consecutive clean boots. Speed 9: Swift sleeps fixed (libswift_Concurrency inlined Apple-silicon timebase: every Task.sleep fired at once; Preferences idle 90% -> 0% CPU, 10k -> 2 wakeups/s), GetBlock FastDispatch probe on by default (its Speed 7/8 crashes were a torn 16-byte read), metalhostd NULL-context guard and back on the image, shared prelude (-46 MB anon), no 6.5 GB of .bin autosaves per boot, fresh devices without blank widget tiles. Home 42 s, Settings cold 9-12 s / warm 3 s, 3 consecutive clean boots. Settings search 'Time' overlap is iOS 27 Liquid Glass (matches Xcode's simulator). Speed 8: memory 2.74 -> 2.32 GB PSS for one sim (38 procs); second instance boots side by side (shared mtlvk, private /dev/shm): two instances 3.27 GB, marginal ~0.93 GB. Home 36 s, Settings cold 12 s / warm 3 s, zero crashes. Speed 7: memory 3.92 -> 2.70 GB PSS (SpringBoard 748->~490, Preferences 596->~300, backboardd 466->~135, daemons ~65->~28 MB each); home 37 s, Settings cold 10-16 s / warm 2-3 s, zero crashes. Speed 5: crash elimination. Cold boot + Settings + 4 reopens with zero process crashes/restarts (was ~245 s with 3 SpringBoard restarts). Fixed: UI-sensor abort, objc cache UAF + bucket race, 16K-page unmaps spilling into stub images/neighbours, hanging fault handler, AOT image fault, saver thread aborting metalhostd. Persistent JIT cache now autosaves; linked AOT image loaded by backboardd/SpringBoard/Preferences by default.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
-   "2.29 GB (38 procs)",
-   "anon without the shared mtlvk 769 -> 674-680 MB (Speed 10); dyld cache file pages ~670 MB vary with host reclaim; goal <1 GB not met"
+   "2.15 GB (37 procs)",
+   "anon without the shared mtlvk 674-680 -> 597-604 MB (Speed 11); mtlvk 425-430 MB, of which an idle device with one connection is 262 MB; goal <1 GB not met"
   ],
   [
    "Process crashes per cold boot + Settings",
@@ -68,7 +68,7 @@
   {
    "name": "2. Boot to the home screen",
    "status": "done",
-   "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+   "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
   },
   {
    "name": "3. Fast and lean",
@@ -117,7 +117,7 @@
   ],
   [
    "32-speed1c-gpu-home.png",
-   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
+   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID — wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
   ],
   [
    "31-speed1b-gpu-home.png",
@@ -125,19 +125,19 @@
   ],
   [
    "15-stage3-compact-maps-home.png",
-   "Stage 3: compact patch+fastmem maps \u2014 SB 1.4\u21921.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
+   "Stage 3: compact patch+fastmem maps — SB 1.4→1.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
   ],
   [
    "14-stage3-pagemap-home.png",
-   "Stage 3: page-map cold boot home \u2014 host_heap 137\u219279 MB; 448 MB anon VMA remains"
+   "Stage 3: page-map cold boot home — host_heap 137→79 MB; 448 MB anon VMA remains"
   ],
   [
    "13-stage3-idle-cpu-fix-home.png",
-   "Stage 3: idle CPU fix \u2014 home with icons, whole-sim ~1.3% core, PSS\u22483.7 GB"
+   "Stage 3: idle CPU fix — home with icons, whole-sim ~1.3% core, PSS≈3.7 GB"
   ],
   [
    "12-stage3-slim-park-home.png",
-   "Stage 3: slim-park home \u2014 PSS\u22483.9 GB, WR parked 12 MB, reaper gone, bright\u22480.21"
+   "Stage 3: slim-park home — PSS≈3.9 GB, WR parked 12 MB, reaper gone, bright≈0.21"
   ],
   [
    "03-home-screen.png",
@@ -219,5 +219,15 @@
   "anon_without_mtlvk_mb": "674-680 (Speed 9 end-state re-measured 769)",
   "crashes": 0,
   "notes": "AOT image fast load (map the published .idx: ~300 ms serialized per process -> 1-2 ms), boot-inner cgroup scan without ~35k forks, lf_map 75% load, adaptive gheap refill, image trained on every daemon (25 profiles), A64_CLONE_FROM for fresh devices (home 25 s instead of ~5 min with a SpringBoard relaunch), X86CODE_A64_TIMEBASE=apple (125/3 at the thunks; off: Darling's workqueue manager spins in 8 processes), sampler fixes (GSAMPLE_OUT/ALL). Boot is latency-bound (host ~80% idle); remaining: MTLCompilerService recompiles shaders every boot (11.9 CPU-s), host page-cache misses."
+ },
+ "speed11": {
+  "date": "2026-10-31",
+  "home_s": "20/20/24 (fin4-6; Speed 10 29/29/32; 26 s on the icon fix alone)",
+  "settings_cold_s": "10",
+  "settings_warm_s": "3",
+  "pss_total_gb": 2.15,
+  "anon_without_mtlvk_mb": "597-604 (Speed 10 674-680; base1 this round 677)",
+  "crashes": 0,
+  "notes": "Icon store (and its __METAL_CACHE__) kept across boots: simshim fileOwnerAccountName=_iconservices in iconservicesagent; MTLCompilerService not started on warm boots; the SpringBoard FrontBoard lock wait went with it. X86CODE_A64_TIMEBASE defaults to apple (=1to1 old mode): the workqueue kevent/workloop callbacks return timer changes that Darling's native libpthread passes to __workq_kernreturn, now converted. boot-a64 prefetch (A64_PREFETCH=0 off). dynarmic block_descriptors/patch heads at 0.9 load. Darling kevent manager event log behind /private/var/tmp/x86code-wqdbg."
  }
 }

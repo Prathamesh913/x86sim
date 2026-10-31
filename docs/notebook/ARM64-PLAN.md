@@ -1158,3 +1158,49 @@ Details in round-done/speed10.md. Single runs on a shared host (30 GB RAM, ~33 G
 - Sampler: `X86CODE_A64_GSAMPLE` now starts at dyld_sim on the main thread and names the thunk a thread is in.
   `_OUT=<linux path>` writes a file (logf dropped the samples on that thread). `_ALL=1|2` samples all threads (running
   only | also blocked).
+
+## Speed 11 (2026-10-31): icon store kept, Apple timebase by default, boot prefetch, memory
+
+Details in round-done/speed11.md. Single runs on a shared host.
+- **MTLCompilerService** (11.9 CPU-s every boot):
+  - The client was iconservicesagent: IconRendering -> RenderBox -> Metal pipeline compiles, in sync XPC.
+  - Its "launch" log line explained it: "one or more preconditions have been met to delete previous cache". The
+    agent keeps its store (IconsCache/<uuid>/) only if `__cache_info__` has the current ProductBuildVersion, the
+    directory has no ACL, and the directory's owner account name is `_iconservices`.
+  - Here every process runs as the host user, so the store was wiped at every launch, together with
+    `__METAL_CACHE__`: IconServices points MTLSetShaderCachePath there, which is why the Metal caches "stayed
+    empty". Every boot re-rendered every icon and recompiled every pipeline.
+  - Fix: the arm64 simshim reports `_iconservices` as the owner of files owned by our own uid, in iconservicesagent
+    only.
+  - Result: MTLCompilerService doesn't start on a warm boot, iconservicesagent 6.9 -> 1.2 CPU-s, home 32 -> 26 s,
+    -113 MB PSS (also mtlvk's anon 187 -> 147 MB). A fresh device still compiles once.
+- **SpringBoard's ~5 s FrontBoard lock wait**: gone with the fix above. With the old shim, the main thread waits
+  24.3-28.4 s in os_unfair_recursive_lock under FrontBoard scene code on the main queue; with the fix, lock waits
+  total <0.5 s.
+- **Apple timebase**: the default now (`X86CODE_A64_TIMEBASE=1to1` for Darling's 1/1 plus the Swift deadline patch).
+  - Darling's kevent manager got an event log (`/private/var/tmp/x86code-wqdbg` in the prefix enables it). It showed
+    libdispatch's event-manager EVFILT_TIMER knotes (NOTE_ABSOLUTE|NOTE_LEEWAY|NOTE_MACHTIME) firing ~400k times a
+    second, with the leeway still in guest ticks.
+  - Cause: a workqueue thread hands its changes back by returning from the kevent/workloop callback. Darling's native
+    libpthread then calls `__workq_kernreturn` itself, so no thunk saw those deadlines; they were 41x early, i.e.
+    already past.
+  - Fix: pthread_workqueue_setup wraps the callbacks and converts the returned timer changes in place (Darling
+    finds the batch by its address).
+  - Result: no spin, every sim process <=1% idle, 3 consecutive clean boots (fin1-3), then fin4-6 with everything.
+- **Prefetch** (`cli/libexec/arm64/prefetch.py`):
+  - What it reads: boot-a64 records the ranges of the dyld cache and the image .map/.idx that the sim's processes
+    have mapped in (/proc/PID/pagemap; 12 s in for the early set, 60 s in for the rest; ~930 MB). The next boot
+    fadvises them WILLNEED from inside its IO-capped scope while the container starts. kyber ignores ioprio, so the
+    early set goes first.
+  - Measured with these files evicted from the page cache (per-file fadvise DONTNEED): home 57/59/60 s without,
+    49/30/33/52/34 s with.
+  - No effect when the files are already cached. `A64_PREFETCH=0` turns it off.
+- **Memory**:
+  - dynarmic block_descriptors and patch heads at 0.9 load: SpringBoard 16 -> 8 MB and 9 -> 6 MB.
+  - Anon PSS without mtlvk 677 -> 597-604 MB; total 2302 -> 2145-2161 MB (37 procs).
+  - mtlvk 425-430 MB. An idle mtlvk with one empty connection is already 262 MB: nvidiactl 126, driver libraries 50,
+    anon 76. Ours on top of that is ~140 MB: host-visible buffers ~44 MB (38 MB reported), anon ~30 MB, more driver
+    code paged in ~30 MB, shared surfaces 19 MB, the binary.
+  - SpringBoard still JIT-translates ~210k blocks (774k guest instructions, 34 MB code) that are not in the image.
+    That is the next memory and launch item.
+- Home 29-32 -> **20/20/24 s** (fin4-6), Settings 10 s cold / 3 s warm.
