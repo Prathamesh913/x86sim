@@ -92,9 +92,15 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # appprotectiond (Speed 5): without it SpringBoard's ServerBackedClientPolicyStore retries com.apple.appprotectiond.read
 # ~5x/s for the whole boot (on-demand, EnablePressuredExit: idle cost only once looked up).
 # openurl: com.x86code.openurl (arm64 build) so simtouch.py app/openurl works on the a64 device.
+# InputUI (Speed 12): the keyboard service (LaunchAngel, on demand: started at SpringBoard's first osservice request).
+# Without the job SpringBoard's bootstrap of osservice<com.apple.InputUI> fails ~60 times per boot and text fields get no
+# keyboard. assistantd (on demand) serves com.apple.assistant.dictation: without it each failed dictation availability
+# check posts "availability changed", the keyboard dock (mic key) re-checks, and the app's main thread spins at 100%
+# from the first text field tap, so InputUI's keyboard arbiter times the app out and no keyboard appears.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
-	com.apple.usernotificationsd"
-UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination"
+	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd"
+UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
+	com.apple.assistantd"
 FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
 OUR_JOBS="com.x86code.openurl=host/openurl/arm64/openurl"
 case "${A64_JOBS:-std}" in

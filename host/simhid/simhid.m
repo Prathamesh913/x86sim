@@ -104,6 +104,7 @@ typedef struct {
 } VService;
 
 static VService touch_svc, buttons_svc, keyboard_svc;
+static IOHIDEventSystemRef_ hid_system;
 
 static Boolean v_open(void* t, void* r, IOOptionBits o) {
 	slog("v_open %s", ((VService*)t)->name);
@@ -235,7 +236,14 @@ static void handle_line(char* line) {
 	if (sscanf(line, "touch2 %15s %lf %lf %lf %lf", a, &x, &y, &x2, &y2) == 5) { send_touch2(a, x, y, x2, y2); return; }
 	if (sscanf(line, "touch %15s %lf %lf", a, &x, &y) == 3) { send_touch(a, x, y); return; }
 	unsigned usage;
-	if (sscanf(line, "key %15s %i", a, &usage) == 2) { send_key(&keyboard_svc, 7, usage, !strcmp(a, "down")); return; }
+	if (sscanf(line, "key %15s %i", a, &usage) == 2) {
+#if __arm64__
+		// x86Code arm64: the keyboard service is attached at the first key command (see initUsingHIDService)
+		if (!keyboard_svc.service && hid_system) { add_service(hid_system, &keyboard_svc); usleep(300000); }
+#endif
+		send_key(&keyboard_svc, 7, usage, !strcmp(a, "down"));
+		return;
+	}
 	if (sscanf(line, "button %15s %15s", a, b) == 2) {
 		bool down = !strcmp(b, "down");
 		// consumer page: 0x40 menu (home), 0x30 power (lock), 0xe9/0xea volume
@@ -330,6 +338,13 @@ static void* listen_thread(void* arg) {
 	keyboard_svc = (VService){ "keyboard", 0x7863000000000003ull, make_props(@"x86Code keyboard", 0x01, 0x06, nil) };
 	add_service(system, &touch_svc);
 	add_service(system, &buttons_svc);
+#if __arm64__
+	// x86Code arm64: an attached keyboard service puts UIKit in hardware-keyboard mode, so a text field never shows the
+	// software keyboard. Attach it only when the host first types (like Xcode's simulator does); SIMHID_KEYBOARD=1: at start.
+	hid_system = system;
+	const char* kb = getenv("SIMHID_KEYBOARD");
+	if (kb && *kb == '1')
+#endif
 	add_service(system, &keyboard_svc);
 	pthread_t t;
 	pthread_create(&t, NULL, listen_thread, NULL);
