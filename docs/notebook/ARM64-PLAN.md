@@ -1313,3 +1313,20 @@ Details in round-done/speed15.md. New rule: turning features off is not a speed 
 - **gheap**: per-class 1 MB chunks are only partly resident (225-600 KB avg); SpringBoard ~37 MB small heap resident, of
   which ~7 MB free lists (3.5 released), ~2 MB thread caches, rest live 32-64 B objects. ~40 MB more in the guest range
   is guest mmaps (backing stores, IOSurfaces), not the allocator.
+
+## Speed 16 (2026-10-31): Siri works, Files Browse, wallpaper/widget cost measured
+
+Details in round-done/speed16.md.
+- **Siri**: SpringBoard asserted in SBApplicationSceneUpdateTransaction ("process was nil") because Campo's scene client
+  was a plain FBProcess: FrontBoard asks RunningBoard isIdentityAnAngel(osservice<com.apple.campo>) and got NO.
+  launchd_sim gives a job the angel type only if its plist path, read back with F_GETPATH (canonical), starts with
+  <SimulatorRuntimeRoot>/System/Library/LaunchAngels/. Ours were in the device dir and SimulatorRuntimeRoot was the
+  symlinked runtime path. arm64 mksimdevice now writes the selected angels to <real runtime>/System/Library/
+  LaunchAngels/.x86code-<device>/ and passes the realpath as SimulatorRuntimeRoot. Campo (com.apple.campo) is in the std
+  job set; RunningBoard launches it on the Siri tap. InputUI is now an angel too (as on a Mac). host/simshim/diag/siridiag.m.
+- **FileProvider**: com.apple.FileProvider + an arm64 build of host/fpsim2host (com.apple.FileProvider.sim2host) on
+  demand. Files Browse lists iCloud Drive / On My iPhone / Recently Deleted / Tags. Open: On My iPhone stays "Loading".
+  Photos now also starts 3 PhotosFileProvider extensions (~37 MB PSS each).
+- **Wallpaper/widgets measured** (A64_JOBS=full, widgets kept): 4.83 GB PSS over 103 procs vs ~2.55 GB. 15 poster
+  extensions 828 MB PSS (537 anon), 15 widget extensions 849 MB (553 anon); JIT code 483 MB (vs ~105): the extensions
+  are not on the AOT image. One MercuryPoster extension (what SpringBoard runs once a poster is chosen) costs 167 MB.

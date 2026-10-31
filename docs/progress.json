@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 15: features restored instead of disabled. Real geod + navd for Maps (a Darling workqueue-cap deadlock made geod hang Maps' first open: fixed), Spotlight unparked, Maps no-op patch removed; compact AOT block map (SpringBoard 16 -> 8 MB). Home 21-26 s, three clean default runs. Open: Siri (Campo/RunningBoard identity), wallpaper (PosterBoard) and widgets off for memory, memory goal (<1 GB per app).",
+ "now": "Speed 16: Siri works (Campo is a real LaunchAngel: launchd_sim classifies angels by canonical plist path under SimulatorRuntimeRoot; SpringBoard's 'process was nil' assert fixed). Files Browse shows its locations (fileproviderd + arm64 fpsim2host, on demand); On My iPhone listing still loads forever. Wallpaper/widgets measured: full set +2.5 GB PSS (30 extension procs, private JIT 483 MB); one poster extension 167 MB. Home 24-30 s, three clean default runs. Open: boot/stub CPU work, Settings Swift demangling, memory goal.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -287,5 +287,51 @@
   "idle_maps_backgrounded": "no sim process above 1% with real geod/navd",
   "crashes": 0,
   "notes": "Maps retry no-op removed; geod/navd jobs; xnu workqueue cap only for constrained requests; Spotlight unparked (~150 MB PSS); sl_map; image c6aecb79 (train5)"
+ },
+ "speed16": {
+  "date": "2026-10-31",
+  "siri": "works: Campo 'No Conversations' screen; compose shows Apple's 'Siri AI is Not Available'",
+  "files": "Browse: iCloud Drive, On My iPhone, Recently Deleted, Tags; On My iPhone stays Loading, New Folder not working yet",
+  "home_s": [
+   30,
+   24,
+   24
+  ],
+  "settings_cold_warm_s": [
+   11,
+   5
+  ],
+  "pss_mb": [
+   2549,
+   2570,
+   2565
+  ],
+  "pss_apps_mb": [
+   3352,
+   3288,
+   3278
+  ],
+  "anon_pss_mb": [
+   911,
+   918,
+   928
+  ],
+  "wallpaper_widgets": {
+   "full_total_pss_mb": 4829,
+   "procs": 103,
+   "poster_ext": {
+    "n": 15,
+    "pss": 828,
+    "anon": 537
+   },
+   "widget_ext": {
+    "n": 15,
+    "pss": 849,
+    "anon": 553
+   },
+   "jit_rwx_mb": 483,
+   "single_mercury_poster_pss_mb": 167
+  },
+  "report": "round-done/speed16.md"
  }
 }
