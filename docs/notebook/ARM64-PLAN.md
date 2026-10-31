@@ -1257,3 +1257,28 @@ Details in round-done/speed13.md.
 - **Progress site** died with the shell's cgroup scope (agent session teardown: SIGTERM to all four parts at once). Each
   part is now a transient systemd user service (`x86sim-site-<name>`, Restart=on-failure); it survived 8 sim restarts
   with the same URL.
+
+## Speed 14 (2026-10-31): Maps idles in the background, ordered prefetch, non-cache images in the AOT image
+
+Details in round-done/speed14.md.
+- **Maps background loop**: two client retry loops without backoff against daemons not in the job set:
+  -[MNNavigationServiceRemoteProxy _openConnection] (navd) and, once navd existed, -[GEOOfflineService
+  _fetchCurrentState:] (geod). Backgrounded Maps held ~85% and launchd_sim ~120% answering failed lookups. A real geod
+  costs ~78 MB PSS and blocked Maps' cold launch; a parked one blocked it too. Both objc_direct entries are now no-ops
+  (objc.cpp maps_service_patches; `X86CODE_A64_MAPS_RETRY=1` off). Backgrounded Maps and launchd_sim <=1%, sheet intact.
+  `X86SIM_NAVD_MACH`: navd (when added) serves only those services.
+- **Boot I/O**: the early prefetch set is recorded as first-touch order (pagemap snapshots every 3 s up to 24 s, every
+  mapped runtime/jitcache/darling-prefix file) and read in that order *outside* the 40 MB/s scope (~1 GB in <1 s on
+  this NVMe); prefetch.hot stays a capped WILLNEED. Home 23/23/23 then 25/20/25 s (was 21-35), iowait ~0-3%.
+  `A64_PREFETCH_EARLY_CAPPED=1`, `A64_PREFETCH_EARLY_SECS`. Note: evict.sh + boot is not a fair test (a separately
+  stopped container cold-starts darling: launchd_sim at 14 s instead of 4 s).
+- **Non-cache images**: they moved because dyld_sim's anywhere reservation (vm_allocate/mmap syscall helpers) was Linux
+  top-down placement, i.e. the order of every earlier host mapping. mkplacement.py writes jitcache/placement.txt (169
+  files, 197 MB; committed copy placement-24A434.txt) packed into the free top of the cache window [0x2ac000000,
+  0x2c0000000). The reservation after dyld_sim opens a listed file, and listed main executables (map_macho), go to its
+  slot (size/mtime checked, once per process; vm_allocate placement must be RW: dyld leaves bss tails in it). The table
+  hash is in the cache key; the AOT builder maps the files at their slots. Those PCs already pass cache_lo/hi, so the
+  existing persistence covers them. Retrained (s14/train4 = s12/train3 + 36 profiles): 2.36M blocks, 616 MB image.
+  JIT anon code after Settings 106-111 -> 55 MB (SpringBoard 35 -> 3.4 MB), anon PSS 809-819 -> 737-739 MB.
+- **Memory**: one sim 2.23-2.25 GB, with the three apps 2.84-2.90 GB. Largest anon: mtlvk 152 MB; per app ~40 MB guest
+  heap + ~30 MB host anon (SpringBoard/Maps: a 16 MB block, probably dynarmic's lf_map, and the 4 MB FastDispatch).

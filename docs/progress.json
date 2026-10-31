@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 13: assistantd no longer starts at boot (it serves only the dictation service), PSS 2.42 -> 2.29 GB, keyboard typing still works. Guest heap zeroes small blocks on free like Apple's libmalloc. Progress site survives sim restarts. Home 22-26 s on a warm page cache. Open: Maps background spin (navd), image for non-cache code, mtlvk is mostly NVIDIA driver memory.",
+ "now": "Speed 14: backgrounded Maps idles (navd/geod retry loops stopped), boot prefetch in first-touch order outside the IO cap (home 20-25 s), non-cache images (SpringBoard.framework, app executables) at fixed addresses and in the AOT image: JIT code 106 -> 55 MB, anon PSS 815 -> 738 MB. Open: memory goal (<1 GB per app), mtlvk driver memory.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -258,5 +258,20 @@
   "jit_rwx_after_settings_mb": "106-111",
   "crashes": 0,
   "notes": "assistantd serves only com.apple.assistant.dictation (no boot start, no cloudd/securityd: -130 MB PSS, keyboard typing still works); gheap zero-on-free for small blocks (assetsd special case dropped); progress site and simview as systemd user services; image beyond the dyld cache not done (non-cache images load at varying addresses); Maps in background spins on navd reconnects (pre-existing)"
+ },
+ "speed14": {
+  "date": "2026-10-31",
+  "home_s": "25/20/25 (fin1-3); 23/23/23 (pr5-7)",
+  "settings_cold_s": "9-14",
+  "settings_warm_s": "5",
+  "apps_cold_warm_s": "Calendar 4-6/2, Photos 4-6/2, Maps 6/2-7 (2 s poll)",
+  "pss_total_gb": 2.24,
+  "pss_with_three_apps_gb": 2.87,
+  "anon_pss_mb": "737-739",
+  "anon_without_mtlvk_mb": "584-587",
+  "jit_rwx_after_settings_mb": "55",
+  "idle_maps_backgrounded": "Maps, launchd_sim <=1% (was 85% / 120%)",
+  "crashes": 0,
+  "notes": "Maps retry loops patched out (no navd/geod); ordered uncapped early prefetch; placement table for non-cache Mach-Os + retrained image (2.36M blocks)"
  }
 }
