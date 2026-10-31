@@ -981,12 +981,12 @@ pub fn assemble(p: &Paths, plan: &Plan, man: &mut Manifest) -> Result<Image> {
     }
     // code: each chunk's bytes at its slot, absolute embeds rebased to the first chunk's bases, holes zero
     let mut at = 0u64;
-    let zeros = vec![0u8; 1 << 20];
     for f in &files {
-        while at < f.code_off {
-            let k = ((f.code_off - at) as usize).min(zeros.len());
-            w.write_all(&zeros[..k])?;
-            at += k as u64;
+        // slot headroom: a hole (sparse file; reads back as zeros) instead of written zeros
+        if at < f.code_off {
+            use std::io::Seek;
+            w.seek(std::io::SeekFrom::Current((f.code_off - at) as i64))?;
+            at = f.code_off;
         }
         let (co, cl) = f.code();
         let mut code = f.data[co..co + cl].to_vec();
