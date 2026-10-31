@@ -1204,3 +1204,28 @@ Details in round-done/speed11.md. Single runs on a shared host.
   - SpringBoard still JIT-translates ~210k blocks (774k guest instructions, 34 MB code) that are not in the image.
     That is the next memory and launch item.
 - Home 29-32 -> **20/20/24 s** (fin4-6), Settings 10 s cold / 3 s warm.
+
+## Speed 12 (2026-10-31): keyboard, Darling RPC fd fix, stock apps, retrained image
+- **Keyboard**: com.apple.InputUI added to the UI jobs (SpringBoard failed its osservice bootstrap ~60 times per boot).
+  The first text-field tap then made the app's main thread spin at 100%: AFDictationConnection "availability changed"
+  -> UIDictationController notification -> UISystemKeyboardDockController re-checks dictation -> again, because
+  com.apple.assistant.dictation (assistantd) wasn't in the job set; InputUI's arbiter timed the app out. assistantd is
+  now an on-demand job. simhid (arm64) attaches its keyboard HID service at the first `key` command, so UIKit isn't
+  in hardware-keyboard mode. Settings search: the software keyboard appears and typing "wifi" on it gives "Wifi"
+  with suggestions. (Dictation Enabled=false in com.apple.assistant.support does not stop the loop.)
+- **Darling RPC**: `dserver_rpc_hooks_receive_message` re-ran recvmsg after an S2C call with the msg_controllen the
+  previous recvmsg left (0 after munmap/msync), so a following S2C mmap's FD was truncated and the client aborted
+  ("Bad S2C call: no FD, but expected one"): backboardd on app launches (once at boot), then darlingserver threw and
+  the whole sim died. Fixed in the hook and the generated wrappers; libsystem_kernel installed in the arm64 prefix.
+- **Photos**: needs com.apple.assetsd (else NSAssert in PXCuratedLibraryUIViewController viewDidLoad). assetsd crashed
+  in LEOTokenizerCreate (ARC store into an uninitialised sqlite3_malloc(8)); it gets MallocZeroOnAlloc=1 (device
+  libmalloc zeroes on free; ours evidently doesn't: next step). Calendar and Maps work as is.
+- **Image**: retrained (s12/train.sh: Settings scroll, General, search typing; Calendar/Photos/Maps cold+warm) with
+  X86CODE_A64_AOT_AUTOSAVE=1 in an isolated jitcache dir; s10/train2 + 38 new profiles, 1.98M blocks, 530 MB. It
+  filled the 384 MB shared code cache ("shared code cache full", SpringBoard abort loop): default now 768 MB
+  (reserved). Uncovered JIT code after the apps 306 -> 139 MB. SpringBoard keeps ~35 MB: blocks outside the dyld
+  cache (SpringBoard.framework, the executable) are never persisted (a64_emit_x64 cache_lo/cache_hi filter).
+- Fresh device (no clone) reaches home in 91 s. Seeding the icon store doesn't carry over: the store dir is named
+  per device (v3 UUID tied to the LaunchServices DB; a fresh device made a random v4 one).
+- Results: home 28/33/24 s, Settings 11/4 s, PSS 2.41-2.42 GB (43 procs; InputUI 85 MB, assistantd 136 MB and the
+  cloudd/nsurlsessiond/securityd/tccd it pulls in), 3 consecutive clean boots + the three apps.
