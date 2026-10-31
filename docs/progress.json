@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 16: Siri works (Campo is a real LaunchAngel: launchd_sim classifies angels by canonical plist path under SimulatorRuntimeRoot; SpringBoard's 'process was nil' assert fixed). Files Browse shows its locations (fileproviderd + arm64 fpsim2host, on demand); On My iPhone listing still loads forever. Wallpaper/widgets measured: full set +2.5 GB PSS (30 extension procs, private JIT 483 MB); one poster extension 167 MB. Home 24-30 s, three clean default runs. Open: boot/stub CPU work, Settings Swift demangling, memory goal.",
+ "now": "Speed 17: wallpaper on by default (PosterBoard on demand builds a new device's poster store with MercuryPoster, as on a Mac); poster/widget/PosterBoard/chronod code in the AOT image (image 4ecf7640, 712 MB): JIT code one sim 105->74 MB, full widgets config 4.83->3.30 GB PSS. Guarded import-stub direct links (dynarmic). arm64 constrained workqueue requests queue instead of blocking (Maps/geod hang). Files: DesktopServicesHelper added; On My iPhone still Loading. Home 28-34 s, Settings cold 13 s (targets not met). Three clean default runs.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -333,5 +333,70 @@
    "single_mercury_poster_pss_mb": 167
   },
   "report": "round-done/speed16.md"
+ },
+ "speed17": {
+  "date": "2026-10-31",
+  "home_s": [
+   28,
+   34,
+   29
+  ],
+  "settings_cold_warm_s": [
+   13,
+   6
+  ],
+  "calendar_cold_warm_s": [
+   4,
+   2
+  ],
+  "photos_cold_warm_s": [
+   4,
+   2
+  ],
+  "maps_cold_warm_s": [
+   9,
+   2
+  ],
+  "pss_mb": [
+   2549,
+   2542,
+   2546
+  ],
+  "pss_apps_mb": [
+   3273,
+   3326,
+   3253
+  ],
+  "anon_pss_mb": [
+   903,
+   894,
+   894
+  ],
+  "anon_pss_apps_mb": [
+   1327,
+   1356,
+   1319
+  ],
+  "wallpaper": {
+   "posterboard_pss_mb": 138,
+   "mercuryposter_pss_mb": 125,
+   "was_mercuryposter_pss_mb": 167
+  },
+  "widgets_full": {
+   "total_pss_mb": 3297,
+   "procs": 79,
+   "jit_rwx_mb": 136,
+   "home_s": 36,
+   "was": {
+    "total_pss_mb": 4829,
+    "procs": 103,
+    "jit_rwx_mb": 483,
+    "home_s": 54
+   }
+  },
+  "jit_rwx_one_sim_mb": 74,
+  "image": "4ecf7640, 2.75M blocks, 712 MB",
+  "files": "On My iPhone still Loading; DesktopServicesHelper (Mac uses its FileService) added; DS node setup never starts in our Files",
+  "report": "round-done/speed17.md"
  }
 }

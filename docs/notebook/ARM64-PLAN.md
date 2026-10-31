@@ -1330,3 +1330,29 @@ Details in round-done/speed16.md.
 - **Wallpaper/widgets measured** (A64_JOBS=full, widgets kept): 4.83 GB PSS over 103 procs vs ~2.55 GB. 15 poster
   extensions 828 MB PSS (537 anon), 15 widget extensions 849 MB (553 anon); JIT code 483 MB (vs ~105): the extensions
   are not on the AOT image. One MercuryPoster extension (what SpringBoard runs once a poster is chosen) costs 167 MB.
+
+## Speed 17 (2026-10-31): wallpaper by default, poster/widget code in the AOT image, stub links
+
+Details in round-done/speed17.md.
+- **Wallpaper**: com.apple.PosterBoard is in the std job set (on-demand angel). A device without a poster store gets
+  the store PosterBoard builds at first boot, with MercuryPoster in the lock/home role, which is what the Mac's iOS 27
+  devices have (checked by deleting the store here: the same ribbon wallpaper came back). SpringBoard asks for
+  PosterBoard every boot (+~138 MB PSS); the poster itself is one MercuryPosterExtension (~125 MB, was 167).
+- **AOT training** for PosterBoard, MercuryPoster, chronod and ~35 widget extensions (full-config boot with
+  `X86CODE_A64_AOT_AUTOSAVE=1` in the boot env: every `X86CODE_A64_*` variable goes into sim.env; A64_ENV only reaches
+  launchd_sim). SIGUSR1 saves only when it lands on a guest thread, and guest threads block SIGUSR1, so a
+  process-directed signal mostly hits a host thread: use autosave. Image 4ecf7640: s17/train6 = s15/train5 + 45
+  profiles, 2.75M blocks, 712 MB. JIT code one sim 105 -> 74 MB; full config with widgets 4.83 GB / 103 procs ->
+  3.30 GB / 79 procs, JIT 483 -> 136 MB, home 54 -> 36 s.
+- **Import-stub links** (dynarmic A64StubLinkPass): a block ending in `br` to a value loaded from a constant address
+  links straight to the slot's current value (UserCallbacks::MemoryReadConstant64: only slots and targets in the
+  persisted window, read with process_vm_readv), guarded by check bit = (loaded == expected), else FastDispatch.
+  `X86CODE_A64_STUBLINK=0` off. No measurable boot change this round (home 26-28 s, PosterBoard now also boots).
+- **Workqueue (darling xnu 5c178c6)**: arm64 constrained requests made while the 24-thread constrained pool is full
+  are queued and started when a worker's run ends, instead of blocking the requester in sem_down (Maps black for
+  good once in run fb: geod had 33 threads in futex waits).
+- **Files**: com.apple.DesktopServicesHelper (on demand) added: on a Mac, Files lists On My iPhone (LocalStorage
+  domain, no extension in iOS 27) through DesktopServices (FIDSNode_AllFPProviders, DesktopServicesHelper.FileService).
+  Our Files no longer fails that lookup, but still shows "Loading": its DesktopServices node setup (OpenSync /
+  startObserving, logged at default level on the Mac at launch) never appears in our log. Open.
+- **Not done**: GetBlock/FastDispatch cost, Swift type-name fast path; home 26-28 s, Settings cold 12-13 s.
