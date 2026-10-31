@@ -80,9 +80,8 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
 	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
 	com.apple.cloudd com.apple.diagnosticd com.apple.nsurlsessiond com.apple.appprotectiond"
-# x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No PosterBoard: it spawns a flock of
-# poster extensions (~450 MB each, 10+ processes, +5 GB) that push SHARED=0 past 13 GB before home. No chronod
-# (widget extensions) and no FileProvider. A64_JOBS=full adds PosterBoard + chronod + FileProvider.
+# x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No chronod (widget extensions, +~0.8 GB);
+# A64_JOBS=full adds it (A64_KEEP_WIDGETS=1 keeps the home widgets).
 # A64_JOBS=slim drops sleepd + usernotificationsd (~400-450 MB RSS each under the JIT); home + one app
 # does not need them. Default std keeps them for cold-boot stability (BKS XPC). A64_SLIM=1 (default)
 # parks Spotlight / WidgetRenderer before dyld (X86CODE_A64_SLIM_PARK). Without cloudd+diagnosticd
@@ -102,15 +101,21 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # without backoff (~85% CPU backgrounded); Speed 14 no-op patched the retry instead, which turned the features off.
 # campo (Speed 16): the Siri UI (Campo.app LaunchAngel, launched by RunningBoard as osservice<com.apple.campo> on the
 # Siri tap; mksimdevice puts angels where launchd_sim classifies them as angels, see there).
+# PosterBoard (Speed 17, on-demand angel): the wallpaper. On a device without a poster store, SpringBoard asks for it and
+# it builds the store and selects MercuryPoster for the lock/home screen, as a real sim's first boot does (checked
+# against the Mac's iOS 27 devices). Once a poster is chosen SpringBoard hosts that one MercuryPoster extension itself
+# (~167 MB PSS before Speed 17's AOT training, see ARM64-PLAN). FULLUI adds chronod (widgets).
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
-	com.apple.campo com.apple.FileProvider"
+	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
-FULLUI="com.apple.PosterBoard com.apple.chronod"
+FULLUI="com.apple.chronod"
 # FileProvider (Speed 16, on demand: started when Files opens): fileproviderd + the sim2host stand-in (as rundev's x86
 # fpsim2host) give Files its Browse locations (iCloud Drive, On My iPhone, Recently Deleted). Without them Files only
-# showed Recents. Open: the On My iPhone listing stays "Loading".
+# showed Recents. DesktopServicesHelper (Speed 17, on demand): Files lists On My iPhone (the LocalStorage domain, no
+# extension in iOS 27) through DesktopServices, whose com.apple.DesktopServicesHelper.FileService does the file
+# operations. Without it the folder stayed "Loading" and New Folder did nothing.
 OUR_JOBS="com.x86code.openurl=host/openurl/arm64/openurl
 	com.x86code.fpsim2host=host/fpsim2host/arm64/fpsim2host|mach:com.apple.FileProvider.sim2host"
 case "${A64_JOBS:-std}" in

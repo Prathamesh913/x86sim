@@ -240,6 +240,18 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
     uint16_t MemoryRead16(u64 a) override { return GuestThread::rd<uint16_t>(a); }
     uint32_t MemoryRead32(u64 a) override { return GuestThread::rd<uint32_t>(a); }
     u64 MemoryRead64(u64 a) override { return GuestThread::rd<u64>(a); }
+    // Speed 17: an import stub's GOT slot, for the guarded direct link (A64StubLinkPass). Only slots and targets in
+    // the persisted window (shared cache + placed images: fixed per cache key), read without faulting. Unbound
+    // slots (chained-fixup encodings in the AOT builder's unbound placed images) fall outside the window.
+    std::optional<u64> MemoryReadConstant64(u64 a) override {
+        constexpr u64 lo = 0x1c0000000ull, hi = 0x2c0000000ull;
+        if (a < lo || a + 8 > hi || (a & 7)) return std::nullopt;
+        u64 v = 0;
+        iovec l{&v, 8}, r{(void *)a, 8};
+        if (process_vm_readv(getpid(), &l, 1, &r, 1, 0) != 8) return std::nullopt;
+        if (v < lo || v >= hi) return std::nullopt;
+        return v;
+    }
     Dynarmic::A64::Vector MemoryRead128(u64 a) override { return GuestThread::rd<Dynarmic::A64::Vector>(a); }
     void MemoryWrite8(u64 a, uint8_t v) override { GuestThread::wr(a, v); }
     void MemoryWrite16(u64 a, uint16_t v) override { GuestThread::wr(a, v); }
@@ -374,6 +386,8 @@ GuestThread::GuestThread() {
     // Hybrid svc;ret (frontend): a thunk block ends in FastDispatchHint instead of PopRSBHint. With RSB off
     // (shared translations) PopRSBHint is ReturnFromRunCode, so every libsystem call left Run(). Opt-in for now.
     c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;
+    // Speed 17: guarded direct links for import stubs (X86CODE_A64_STUBLINK=0: off)
+    c.link_import_stubs = !(getenv("X86CODE_A64_STUBLINK") && atoi(getenv("X86CODE_A64_STUBLINK")) == 0);
     native_objc_configure_jit(c);
     // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
     // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
