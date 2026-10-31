@@ -101,6 +101,7 @@ std::vector<uint8_t> write_trie(std::vector<Entry> entries) {
 
 // Is a native address inside an instruction section of its (Darling x86_64) Mach-O image?
 bool native_is_code(const void *addr) {
+    if (is_fast_fill(addr)) return true;  // our replacements for Darling's fills (host.cpp dsym)
     struct { const char *fname; void *fbase; const char *sname; void *saddr; } info{};
     if (!g_darwin->dladdr(addr, &info) || !info.fbase) return false;
     auto *mh = (const mach_header_64 *)info.fbase;

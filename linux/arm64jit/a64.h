@@ -28,7 +28,8 @@ struct DarwinApi {
     int *(*error)(void);                  // __error
 };
 extern const DarwinApi *g_darwin;
-void *dsym(const char *name);  // native Darwin symbol (no leading underscore), searched in the three host libraries
+void *dsym(const char *name);
+bool is_fast_fill(const void *fn);  // dsym's replacements for Darling's bzero/memset/memset_pattern (host.cpp)  // native Darwin symbol (no leading underscore), searched in the three host libraries
 
 // Native results of a guest->native call: rax, rdx, xmm0, xmm1.
 struct NRet { u64 rax, rdx, xmm0, xmm1; };

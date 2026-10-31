@@ -110,6 +110,7 @@ void gsample_start(GuestThread *t) {
         const u32 period = getenv("X86CODE_A64_GSAMPLE_PERIOD") ? atoi(getenv("X86CODE_A64_GSAMPLE_PERIOD")) : 2000;
         const char *sk = getenv("X86CODE_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
         const u64 skip = sk ? strtoull(sk, nullptr, 16) : 0;
+        const bool trace = getenv("X86CODE_A64_GSAMPLE_TRACE") != nullptr;
         const int depth = getenv("X86CODE_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86CODE_A64_GSAMPLE_DEPTH")) : 6;
         // logf skips the per-process log on this (non-Darling) thread: X86CODE_A64_GSAMPLE_OUT=<Linux path> writes
         // <path>.<pid> with glibc instead (a job's stderr is often gone)
@@ -148,6 +149,16 @@ void gsample_start(GuestThread *t) {
                 const u64 next = rd(fp);
                 if (next <= fp) break;
                 fp = next;
+            }
+            if (trace) {  // X86CODE_A64_GSAMPLE_TRACE=1: every sample with its CLOCK_REALTIME ns (lines up with simhid/ring)
+                timespec tr; clock_gettime(CLOCK_REALTIME, &tr);
+                char line[1024];
+                int o = snprintf(line, sizeof line, "T %llu", (unsigned long long)tr.tv_sec * 1000000000ull + tr.tv_nsec);
+                for (u64 a : st) {
+                    if (a >> 60 == 0xF) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " [%s]", g_thunks[a & 0xffffffff].name.c_str());
+                    else o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " %#lx", (unsigned long)a);
+                }
+                if (out) { fputs(line, out); fputc('\n', out); }
             }
             counts[st]++;
             for (size_t i = 0; i < st.size(); i++)

@@ -30,7 +30,41 @@ namespace a64 {
 bool g_step = getenv("X86CODE_A64_STEP") != nullptr;  // one instruction per Run (exact fault PCs)
 
 const DarwinApi *g_darwin;
-void *dsym(const char *name) { return g_darwin->dlsym((void *)-2 /* RTLD_DEFAULT */, name); }
+// Speed 19: Darling's x86_64 libsystem_platform fills generically: bzero and memset are memset_pattern4, which calls
+// memmove once per 4 bytes (a 12.6 MB full-screen bitmap clear = 3.1M calls; ~25% of SpringBoard's main thread when an
+// app opens). Guest calls bind to these instead (glibc memset; pattern fills double in place with memcpy). Darling's
+// own native callers keep theirs (the x86_64 runtime is unchanged).
+namespace {
+void fast_bzero(void *p, size_t n) { memset(p, 0, n); }
+void *fast_memset(void *p, int c, size_t n) { return memset(p, c, n); }
+template <size_t W> void fast_pattern(void *dst, const void *pat, size_t n) {
+    auto *d = static_cast<unsigned char *>(dst);
+    if (n <= W) { memcpy(d, pat, n); return; }
+    memcpy(d, pat, W);
+    size_t done = W;
+    while (done < n) {  // double the filled prefix (it stays pattern-aligned)
+        const size_t k = done < n - done ? done : n - done;
+        memcpy(d + done, d, k);
+        done += k;
+    }
+}
+const struct { const char *n; void *f; } kFast[] = {
+    {"_platform_bzero", (void *)fast_bzero}, {"bzero", (void *)fast_bzero}, {"__bzero", (void *)fast_bzero},
+    {"_platform_memset", (void *)fast_memset}, {"memset", (void *)fast_memset},
+    {"_platform_memset_pattern4", (void *)fast_pattern<4>}, {"memset_pattern4", (void *)fast_pattern<4>},
+    {"_platform_memset_pattern8", (void *)fast_pattern<8>}, {"memset_pattern8", (void *)fast_pattern<8>},
+    {"_platform_memset_pattern16", (void *)fast_pattern<16>}, {"memset_pattern16", (void *)fast_pattern<16>},
+};
+}  // namespace
+bool is_fast_fill(const void *fn) {
+    for (const auto &f : kFast) if (f.f == fn) return true;
+    return false;
+}
+void *dsym(const char *name) {
+    if (!(getenv("X86CODE_A64_FASTFILL") && atoi(getenv("X86CODE_A64_FASTFILL")) == 0))
+        for (const auto &f : kFast) if (!strcmp(name, f.n)) return f.f;
+    return g_darwin->dlsym((void *)-2 /* RTLD_DEFAULT */, name);
+}
 
 static int (*d_open)(const char *, int, ...);
 static timespec g_t0;

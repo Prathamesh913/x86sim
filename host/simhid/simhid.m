@@ -27,6 +27,7 @@ typedef uint32_t IOOptionBits;
 #include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
 
 typedef struct __IOHIDEvent* IOHIDEventRef;
 typedef struct __IOHIDService* IOHIDServiceRef;
@@ -85,6 +86,10 @@ static void slog(const char* fmt, ...) {
 		if (g_logf) setvbuf(g_logf, NULL, _IOLBF, 0);
 	}
 	if (g_logf) {
+#if __arm64__
+		// wall-clock ns (same clock as the frame ring's slot t_ns) so touches line up with frames (simrecord.py)
+		{ struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); fprintf(g_logf, "%llu ", (unsigned long long)ts.tv_sec * 1000000000ull + ts.tv_nsec); }
+#endif
 		fprintf(g_logf, "simhid: ");
 		va_list ap2; va_start(ap2, fmt);
 		vfprintf(g_logf, fmt, ap2);

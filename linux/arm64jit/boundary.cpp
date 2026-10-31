@@ -11,6 +11,11 @@
 #include <cstdio>
 #include <mutex>
 #include <set>
+#include <map>
+#include <tuple>
+#include <algorithm>
+#include <ctime>
+#include <sys/stat.h>
 #include <unordered_map>
 #include <sys/mman.h>
 
@@ -62,10 +67,44 @@ static void set_result(GuestThread &t, const NRet &r) {
     t.set_x(0, r.rax); t.set_x(1, r.rdx); t.set_d(0, r.xmm0); t.set_d(1, r.xmm1);
 }
 
+// X86CODE_A64_BIGCOPY=<bytes> (debug): memmove/memcpy/memset/bzero/memset_pattern calls of at least that size are
+// summed per (function, guest return address, caller one frame up); touching $X86SIM_SCRATCH-style path
+// X86CODE_A64_BIGCOPY_DUMP (a Linux path) makes the process log its top 20 by bytes and reset (who fills/copies bitmaps)
+static const u64 g_bigcopy = getenv("X86CODE_A64_BIGCOPY") ? strtoull(getenv("X86CODE_A64_BIGCOPY"), nullptr, 0) : 0;
+static void bigcopy(GuestThread &t, u32 i, const u64 *ints) {
+    const std::string &n = g_thunks[i].name;
+    const bool bz = n.find("bzero") != std::string::npos;
+    if (!bz && n.find("memmove") == std::string::npos && n.find("memcpy") == std::string::npos && n.find("memset") == std::string::npos) return;
+    const u64 len = bz ? ints[1] : ints[2];
+    if (len < g_bigcopy) return;
+    const u64 fp = t.x(29);
+    struct Agg { u64 calls, bytes; };
+    static std::mutex mu; static std::map<std::tuple<u32, u64, u64>, Agg> agg; static time_t last;
+    std::lock_guard l(mu);
+    auto &e = agg[{i, t.x(30), fp > 0x10000 && !(fp & 7) ? *(u64 *)(fp + 8) : 0}];
+    e.calls++; e.bytes += len;
+    const time_t now = time(nullptr);
+    if (now == last) return;
+    last = now;
+    const char *dp = getenv("X86CODE_A64_BIGCOPY_DUMP");
+    struct stat st;
+    if (!dp || stat(dp, &st) != 0 || now - st.st_mtime > 2) return;
+    std::vector<std::pair<u64, decltype(agg)::const_iterator>> v;
+    for (auto it = agg.begin(); it != agg.end(); ++it) v.push_back({it->second.bytes, it});
+    std::sort(v.begin(), v.end(), [](auto &x, auto &y) { return x.first > y.first; });
+    for (size_t k = 0; k < v.size() && k < 20; k++)
+        logf("bigcopy %s calls=%lu bytes=%lu lr=%#lx up=%#lx", g_thunks[std::get<0>(v[k].second->first)].name.c_str(),
+             (unsigned long)v[k].second->second.calls, (unsigned long)v[k].first, (unsigned long)std::get<1>(v[k].second->first),
+             (unsigned long)std::get<2>(v[k].second->first));
+    logf("bigcopy end");
+    agg.clear();
+}
+
 void h_generic(GuestThread &t, u32 i) {
     u64 ints[16];
     for (int k = 0; k < 8; k++) ints[k] = t.x(k);
     for (int k = 8; k < 16; k++) ints[k] = t.stack_slot(k - 8);
+    if (g_bigcopy) [[unlikely]] bigcopy(t, i, ints);
     NRet r; ncall(t, g_thunks[i].native, ints, r); set_result(t, r);
 }
 void h_generic_bool(GuestThread &t, u32 i) {
