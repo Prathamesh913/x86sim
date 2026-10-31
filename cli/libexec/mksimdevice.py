@@ -174,6 +174,12 @@ def main():
             plist.pop("LaunchEvents", None)
             keep = os.environ.get("X86SIM_ASSISTANTD_MACH", "com.apple.assistant.dictation").split(",")
             plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
+        # x86Code arm64 (Speed 14): navd, when in the job set, serves only X86SIM_NAVD_MACH (default the one service
+        # Maps' MNNavigationServiceRemoteProxy reconnects to without backoff while it is missing). No LaunchEvents.
+        if ARM64 and job == "com.apple.navd" and os.environ.get("X86SIM_NAVD_MACH") != "full":
+            plist.pop("LaunchEvents", None)
+            keep = os.environ.get("X86SIM_NAVD_MACH", "com.apple.navigationService").split(",")
+            plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
         # x86Code: X86SIM_JOBENV="label:K=V;label:K=V": extra environment for runtime jobs (experiments)
         for kv in filter(None, os.environ.get("X86SIM_JOBENV", "").split(";")):
             lab, _, ev = kv.partition(":")

@@ -180,6 +180,7 @@ void native_objc_prepare(const std::string &cache_path);
 void native_objc_install();
 void objc_cache_gc_guard(GuestThread &t);
 void sim_service_patches(GuestThread &t);
+void maps_service_patches(GuestThread &t);
 extern std::atomic<bool> g_stub_guard_armed;
 void jitcache_save_on_exit();
 extern thread_local bool g_non_darling_thread;  // logf: stderr only (plain std::thread, e.g. the cache saver)
