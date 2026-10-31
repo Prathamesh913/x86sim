@@ -80,6 +80,15 @@ Tests
 
 Build
   build [target]       make [target] in the repo root (mtlvk, darling, ...; see `make help`)
+
+Repos (every submodule is a fork in the x86code GitHub org; repos.sh)
+  repos [status]       dirty / unpushed submodules
+  repos commit -m MSG [--dry-run]
+                       commit tracked changes in every dirty submodule (deepest first), push each, then commit
+                       and push the bumped pointers in x86code
+  upstream-sync [--apply] [PATH...]
+                       fetch each fork's GitHub parent and rebase our x86code branch onto it (dry run reports
+                       behind/ahead and conflicts; --apply rebases, force-with-lease pushes, aborts on conflict)
 U
 }
 
@@ -264,5 +273,7 @@ case $c in
 		*) usage ;;
 		esac ;;
 	build) exec make -C "$X" "$@" ;;
+	repos) exec "$L/repos.sh" "$@" ;;
+	upstream-sync) exec "$L/repos.sh" upstream-sync "$@" ;;
 	*) echo "x86sim: unknown command $c" >&2; usage >&2; exit 2 ;;
 esac
