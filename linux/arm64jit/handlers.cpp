@@ -105,6 +105,18 @@ static void h_workqueue_setup(GuestThread &t, u32 i) {  // (struct pthread_workq
     size_t n = t.x(1) < sizeof c ? t.x(1) : sizeof c;
     memcpy(&c, (void *)t.x(0), n);
     c.kevent_cb = cb(c.kevent_cb); c.workloop_cb = cb(c.workloop_cb); c.workq_cb = cb(c.workq_cb);
+    if (timebase_apple()) {  // convert the timer changes the callbacks hand back (tb_convert_qos_changes)
+        static u64 kev, wl;
+        kev = c.kevent_cb; wl = c.workloop_cb;
+        if (kev) c.kevent_cb = (u64)+[](void **ev, int *n) {
+            ((void (*)(void **, int *))kev)(ev, n);
+            if (ev && n && *n > 0) tb_convert_qos_changes(*ev, *n);
+        };
+        if (wl) c.workloop_cb = (u64)+[](u64 *id, void **ev, int *n) {
+            ((void (*)(u64 *, void **, int *))wl)(id, ev, n);
+            if (ev && n && *n > 0) tb_convert_qos_changes(*ev, *n);
+        };
+    }
     auto *fn = (int (*)(Cfg *, size_t))g_thunks[i].native;
     t.set_x(0, (u32)fn(&c, t.x(1)));
 }
@@ -409,9 +421,11 @@ static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends h
 // 1/1 (mach time in ns). Code compiled for arm64 inlines 125/3 in places (libswift_Concurrency's deadline conversion,
 // libdispatch's dispatch_time_to_nsecs/_from_nsec), so with 1/1 those deadlines were ~41x off. Values cross at the
 // thunks: returned mach times are scaled down (ns * 3 / 125), mach-time arguments up (ticks * 125 / 3) before Darling
-// sees them (mach_wait_until, mk_timer_arm*, EVFILT_TIMER with NOTE_MACHTIME). CNTVCT_EL0 counts at 24 MHz (jit.cpp).
+// sees them (mach_wait_until, mk_timer_arm*, EVFILT_TIMER with NOTE_MACHTIME, and the changes workqueue threads hand
+// back). CNTVCT_EL0 counts at 24 MHz (jit.cpp). Default since Speed 11; X86CODE_A64_TIMEBASE=1to1 gives the guest
+// Darling's 1/1 again (with the Swift deadline patch, jit.cpp; rebuild the image).
 bool timebase_apple() {
-    static const bool on = [] { const char *e = getenv("X86CODE_A64_TIMEBASE"); return e && strcmp(e, "apple") == 0; }();
+    static const bool on = [] { const char *e = getenv("X86CODE_A64_TIMEBASE"); return !e || strcmp(e, "1to1") != 0; }();
     return on;
 }
 u64 tb_ns_to_ticks(u64 ns) { return (u64)((unsigned __int128)ns * 3 / 125); }
@@ -483,6 +497,26 @@ static void h_tb_kevent(GuestThread &t, u32 i) {
     }
     t.set_x(1, (u64)copy.data());
     h_generic(t, i);
+}
+// Speed 11: a workqueue thread hands its changes back (libdispatch's timer re-arms, mostly the event manager's) by
+// returning from the kevent/workloop callback that Darling's native libpthread called: the native thread then passes
+// them to __workq_kernreturn itself, past every thunk. Unconverted, each NOTE_MACHTIME deadline was ~41x early, i.e.
+// already past: the oneshot timer fired at once and was re-armed, and Darling's kevent manager thread spun at 100% in
+// 8 processes (its event log: the same EVFILT_TIMER idents ~400k times a second). Converted in place after the
+// callback (the list is the thread's own buffer; Darling finds it again by its address).
+void tb_convert_qos_changes(void *list, int n) {
+    constexpr int16_t kTimer = -7;
+    constexpr uint32_t kMachTime = 0x100, kLeeway = 0x10;
+    for (int k = 0; list && k < n; k++) {
+        uint8_t *e = (uint8_t *)list + k * 72;
+        int16_t f; uint32_t ff;
+        memcpy(&f, e + 8, 2); memcpy(&ff, e + 24, 4);
+        if (f != kTimer || !(ff & kMachTime)) continue;
+        int64_t d; memcpy(&d, e + 32, 8);
+        if (tb_debug()) logf("tb: workq return ident %#lx fflags %#x data %ld", (unsigned long)*(u64 *)e, ff, (long)d);
+        if (d > 0) { d = (int64_t)std::min<u64>(tb_ticks_to_ns((u64)d), (u64)INT64_MAX); memcpy(e + 32, &d, 8); }
+        if (ff & kLeeway) { u64 l; memcpy(&l, e + 48, 8); l = tb_ticks_to_ns(l); memcpy(e + 48, &l, 8); }
+    }
 }
 static Handler timebase_handler(const std::string &n) {
     if (!timebase_apple()) return nullptr;

@@ -140,6 +140,7 @@ uint32_t thunk_count();                // acquire-load of published thunk count 
 
 // Generic handlers: integer/pointer/fp arguments straight through (x0-x7 -> rdi..r9 + stack, d0-d7 -> xmm0-7).
 bool timebase_apple();       // X86CODE_A64_TIMEBASE=apple: guest mach time at 24 MHz (handlers.cpp)
+void tb_convert_qos_changes(void *list, int n);  // kevent_qos_s timer changes: guest ticks -> ns (handlers.cpp)
 u64 tb_ns_to_ticks(u64 ns);
 void gsample_start(GuestThread *t);
 void gsample_forget(GuestThread *t);  // X86CODE_A64_GSAMPLE (jit.cpp)
