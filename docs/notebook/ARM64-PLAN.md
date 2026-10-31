@@ -1282,3 +1282,34 @@ Details in round-done/speed14.md.
   JIT anon code after Settings 106-111 -> 55 MB (SpringBoard 35 -> 3.4 MB), anon PSS 809-819 -> 737-739 MB.
 - **Memory**: one sim 2.23-2.25 GB, with the three apps 2.84-2.90 GB. Largest anon: mtlvk 152 MB; per app ~40 MB guest
   heap + ~30 MB host anon (SpringBoard/Maps: a 16 MB block, probably dynarmic's lf_map, and the 4 MB FastDispatch).
+
+## Speed 15 (2026-10-31): features restored, not disabled; geod deadlock fixed; compact image block map
+
+Details in round-done/speed15.md. New rule: turning features off is not a speed or memory win.
+- **Maps retry no-op removed** (objc.cpp maps_service_patches, `X86CODE_A64_MAPS_RETRY` gone). geod and navd are on-demand
+  UI jobs with Apple's MachServices (the `X86SIM_NAVD_MACH` restriction is gone). The black first open with a real geod
+  was our bug: Darling's arm64 workqueue cap (24 threads, wq_spawn) applied to every thread request and blocked the
+  *requester* in sem_down. geod's GEOConfig server sat with ~20 workers in synchronous XPC waits (NanoRegistry's
+  sharedInstance dispatch_sync among them) whose wakeups needed one more workloop thread: _dispatch_event_loop_poke ->
+  kevent_id -> wq_spawn blocked forever, and Maps' main thread (viewDidLoad -> GEOConfigGetDictionary -> sendSync)
+  waited ~60 s. The cap now covers constrained requests only; overcommit / kevent / workloop / manager requests keep
+  the 64 limit (XNU's constrained pool). Maps cold 9-11 s with the full UI; backgrounded Maps, geod, navd <=1%.
+  geod ~75 MB PSS, navd ~51 MB.
+- **Audit** of disabled features: Spotlight was parked (home Search pill showed nothing) -> unparked by default
+  (`A64_PARK` overrides; ~150 MB PSS settled). Siri is broken with or without full assistantd: its UI is
+  osservice<com.apple.campo> (Campo.app LaunchAngel, not in the job set); with the job added, Campo is started by a
+  Mach lookup before RunningBoard launches it, RBS has no identity for it, and SpringBoard asserts in
+  SBApplicationSceneUpdateTransaction ("process was nil"). Not default; open. PosterBoard (wallpaper: home is black),
+  chronod/WidgetRenderer (widgets) remain off for memory (+several GB, Speed 8): reported, not decided silently.
+  UI-sensor patch: the sim backboardd has no such server (Mac end state). objc cache GC guard: correctness.
+- **Image block map**: registered AOT image blocks live in an 8-byte-slot map (fingerprint + image index, key checked in
+  the shared image table) instead of lf_map's 16-byte entries: SpringBoard 16 -> 8 MB, anon -4..-8 MB per app process.
+- **Retrained**: s15/train5 = train4 + 5 live profiles (keyboard/search code, 124K Preferences blocks were missing),
+  image c6aecb79, 648 MB.
+- **More apps**: Reminders, Contacts, Files cold 4 s / warm 2 s, clean. Notes is a stub bundle in this runtime.
+- **Profiles**: SpringBoard boot ~25 CPU-s; ~12% of image samples are cross-library import stubs (adrp/ldr/br x16,
+  indirect dispatch): a guarded direct link at translation is the next CPU win. Settings cold: main thread ~50% idle;
+  Swift type demangling (swift_getTypeByMangledName) the largest active item (~9%).
+- **gheap**: per-class 1 MB chunks are only partly resident (225-600 KB avg); SpringBoard ~37 MB small heap resident, of
+  which ~7 MB free lists (3.5 released), ~2 MB thread caches, rest live 32-64 B objects. ~40 MB more in the guest range
+  is guest mmaps (backing stores, IOSurfaces), not the allocator.

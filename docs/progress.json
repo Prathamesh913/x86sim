@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 14: backgrounded Maps idles (navd/geod retry loops stopped), boot prefetch in first-touch order outside the IO cap (home 20-25 s), non-cache images (SpringBoard.framework, app executables) at fixed addresses and in the AOT image: JIT code 106 -> 55 MB, anon PSS 815 -> 738 MB. Open: memory goal (<1 GB per app), mtlvk driver memory.",
+ "now": "Speed 15: features restored instead of disabled. Real geod + navd for Maps (a Darling workqueue-cap deadlock made geod hang Maps' first open: fixed), Spotlight unparked, Maps no-op patch removed; compact AOT block map (SpringBoard 16 -> 8 MB). Home 21-26 s, three clean default runs. Open: Siri (Campo/RunningBoard identity), wallpaper (PosterBoard) and widgets off for memory, memory goal (<1 GB per app).",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -273,5 +273,19 @@
   "idle_maps_backgrounded": "Maps, launchd_sim <=1% (was 85% / 120%)",
   "crashes": 0,
   "notes": "Maps retry loops patched out (no navd/geod); ordered uncapped early prefetch; placement table for non-cache Mach-Os + retrained image (2.36M blocks)"
+ },
+ "speed15": {
+  "date": "2026-10-31",
+  "home_s": "26/21/22 (fa/fb/fc)",
+  "settings_cold_s": "10",
+  "settings_warm_s": "5",
+  "apps_cold_warm_s": "Calendar 4/2, Photos 4-6/2, Maps 9-11/2; Reminders, Contacts, Files 4/2",
+  "pss_total_gb": 2.32,
+  "pss_with_three_apps_gb": 3.0,
+  "anon_pss_mb": "768-779",
+  "anon_without_mtlvk_mb": "620-630",
+  "idle_maps_backgrounded": "no sim process above 1% with real geod/navd",
+  "crashes": 0,
+  "notes": "Maps retry no-op removed; geod/navd jobs; xnu workqueue cap only for constrained requests; Spotlight unparked (~150 MB PSS); sl_map; image c6aecb79 (train5)"
  }
 }
