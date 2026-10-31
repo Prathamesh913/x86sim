@@ -246,6 +246,10 @@ cat > "$CMDFILE" <<CMDEOF
 exec "$H" /usr/bin/env $ENVS "$R/sbin/launchd_sim" "/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist"
 CMDEOF
 
+# Speed 14: fixed placement of non-cache Mach-Os (libarm64jit; mkplacement.py): the jitcache dir gets the committed
+# table when it has none (the table is part of the JIT cache key: the AOT image must be built with the same one)
+JCD=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
+[ -f "$JCD/placement.txt" ] || cp "$X/cli/libexec/arm64/placement-24A434.txt" "$JCD/placement.txt" 2>/dev/null
 # Speed 14: the early set (pages in first-touch order up to ~home) is read in that order here, outside the IO-capped
 # scope: ~1-2 s of sequential reads instead of ~10-20 s at 40 MB/s, competing with the boot's own faults. The rest
 # (prefetch.hot) stays a capped WILLNEED inside the scope. A64_PREFETCH_EARLY_CAPPED=1: the early set capped too.

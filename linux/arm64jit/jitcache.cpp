@@ -19,6 +19,9 @@
 // absolute host Imm64s (objc counters, RSB patch sites, …). Relative jumps to terminal handlers
 // stay valid when prelude_size matches. FastDispatch is cleared and refills on use.
 #include "a64.h"
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -38,6 +41,8 @@
 #include <sys/syscall.h>
 #include <sys/resource.h>
 #include <atomic>
+#include <mutex>
+#include <vector>
 #include <thread>
 
 namespace a64 {
@@ -96,6 +101,34 @@ u32 self_hash() {
     return c.found ? c.h : 0;
 }
 
+// Speed 14: placement.txt lines "addr slot fsize mtime key" (hex addr/slot; key = path from RuntimeRoot/ on, or the
+// app bundle path from Containers/ on). The table's hash is part of the key: another layout drops the image.
+std::vector<Placement> g_place;
+std::string g_runtime_root;  // Linux path of RuntimeRoot/ (from the cache path)
+std::vector<bool> g_place_used;
+std::mutex g_place_mu;
+u32 placement_load(const std::string &dir) {
+    if (const char *e = getenv("X86CODE_A64_PLACEMENT"); e && atoi(e) == 0) return 0;
+    FILE *f = fopen((dir + "/placement.txt").c_str(), "r");
+    if (!f) return 0;
+    u32 h = 2166136261u;
+    char line[4096];
+    while (fgets(line, sizeof line, f)) {
+        for (char *c = line; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+        Placement p{};
+        int n = 0;
+        if (sscanf(line, "%lx %lx %lu %lu %n", &p.addr, &p.slot, &p.fsize, &p.mtime, &n) != 4 || !n) continue;
+        p.key = line + n;
+        while (!p.key.empty() && (p.key.back() == '\n' || p.key.back() == '\r')) p.key.pop_back();
+        // inside the cache window's free top only (reserved PROT_NONE by host.cpp; nothing else maps there)
+        if (p.addr < 0x2ac000000ull || p.addr + p.slot > kCacheHi || (p.addr & 0x3fff) || p.key.empty()) continue;
+        g_place.push_back(p);
+    }
+    fclose(f);
+    g_place_used.assign(g_place.size(), false);
+    return g_place.empty() ? 0 : h;
+}
+
 bool aot_eligible(const std::string &exe) {
     if (const char *a = getenv("X86CODE_A64_AOT"); a && atoi(a) == 0) return false;
     const char *b = strrchr(exe.c_str(), '/');
@@ -122,6 +155,25 @@ bool aot_eligible(const std::string &exe) {
 
 }  // namespace
 
+const Placement *placement_find(const char *path) {
+    const size_t n = strlen(path);
+    for (const auto &p : g_place)
+        if (n >= p.key.size() && !memcmp(path + n - p.key.size(), p.key.data(), p.key.size()) &&
+            (n == p.key.size() || path[n - p.key.size() - 1] == '/'))
+            return &p;
+    return nullptr;
+}
+
+bool placement_claim(const Placement *p, int fd) {
+    struct stat st;
+    if (fstat(fd, &st) || (u64)st.st_size != p->fsize || (u64)st.st_mtime != p->mtime) return false;
+    std::lock_guard<std::mutex> l(g_place_mu);
+    const size_t i = p - g_place.data();
+    if (g_place_used[i]) return false;
+    g_place_used[i] = true;
+    return true;
+}
+
 void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     // Speed 7: FastDispatch table per process: 256K entries (4 MB) for apps and backboardd, whose hot sets need it;
     // 64K (1 MB) for daemons. X86CODE_A64_FD_ENTRIES=n overrides.
@@ -140,6 +192,8 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     // Collapse accidental double slashes in the directory join from host.cpp.
     while (linux_path.find("//") != std::string::npos)
         linux_path.replace(linux_path.find("//"), 2, "/");
+    if (size_t r = linux_path.find("/System/Library/Caches/com.apple.dyld/"); r != std::string::npos)
+        g_runtime_root = linux_path.substr(0, r + 1);
     FILE *f = fopen(linux_path.c_str(), "rb");
     if (!f) {
         logf("jitcache: cannot open %s", linux_path.c_str());
@@ -161,6 +215,10 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     g_build = kBuildId | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
               (u64)timebase_apple() << 18 |  // CNTFRQ and the Swift deadline patch are in the code
               (u64)h << 32;
+    if (u32 ph = placement_load(g_dir)) {
+        g_build ^= (u64)ph << 32;
+        if (getenv("X86CODE_A64_STATS")) logf("placement: %zu files, table %08x", g_place.size(), ph);
+    }
     char bh[24];
     snprintf(bh, sizeof bh, "%016llx", (unsigned long long)g_build);
     g_key = std::string(hex) + "-" + bh;
@@ -286,6 +344,51 @@ void jitcache_save_on_exit() {
 
 // X86CODE_A64_AOT_BUILD=1, at the builder's exit: translate the union of every training .bin's blocks (same key)
 // on this thread and save them as the AOT image. Stops short of the code cache's end (a full cache is cleared).
+// The AOT builder translates blocks of placed files too: map each file's segments (read-only; code needs no fixups)
+// at its slot, as dyld_sim would in a sim process. Returns the number mapped.
+int placement_map_all() {
+    int n = 0;
+    for (const auto &p : g_place) {
+        if (g_runtime_root.empty() || p.key.rfind("Containers/", 0) == 0) continue;
+        const std::string path = g_runtime_root + p.key;
+        int fd = open(path.c_str(), O_RDONLY);
+        if (fd < 0) continue;
+        struct stat st;
+        uint8_t hdr[0x10000];
+        u64 slice = 0;
+        ssize_t got = fstat(fd, &st) == 0 && (u64)st.st_size == p.fsize ? pread(fd, hdr, sizeof hdr, 0) : -1;
+        if (got >= 8 && !memcmp(hdr, "\xca\xfe\xba\xbe", 4)) {  // fat: the arm64 slice
+            const uint32_t nf = __builtin_bswap32(*(const uint32_t *)(hdr + 4));
+            for (uint32_t i = 0; i < nf && 8 + 20 * (i + 1) <= (uint32_t)got; i++)
+                if (__builtin_bswap32(*(const u32 *)(hdr + 8 + 20 * i)) == 0x0100000Cu) slice = __builtin_bswap32(*(const u32 *)(hdr + 16 + 20 * i));
+            got = slice ? pread(fd, hdr, sizeof hdr, slice) : -1;
+        }
+        if (got < 32 || *(const u32 *)hdr != 0xfeedfacfu) { close(fd); continue; }
+        const u32 ncmds = *(const u32 *)(hdr + 16);
+        u64 lo = ~0ull;
+        for (int pass = 0; pass < 2; pass++) {
+            u32 off = 32;
+            for (u32 i = 0; i < ncmds && off + 72 <= (u32)got; i++) {
+                const u32 cmd = *(const u32 *)(hdr + off), cs = *(const u32 *)(hdr + off + 4);
+                if (cmd == 0x19) {
+                    u64 vm, vs, fo, fs; memcpy(&vm, hdr + off + 24, 8); memcpy(&vs, hdr + off + 32, 8);
+                    memcpy(&fo, hdr + off + 40, 8); memcpy(&fs, hdr + off + 48, 8);
+                    const int ip = *(const int *)(hdr + off + 60);
+                    if (!(ip == 0 && fs == 0)) {
+                        if (pass == 0) lo = std::min(lo, vm);
+                        else if (fs) mmap((void *)(p.addr + vm - lo), fs, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, slice + fo);
+                    }
+                }
+                if (!cs) break;
+                off += cs;
+            }
+        }
+        close(fd);
+        n++;
+    }
+    return n;
+}
+
 void jitcache_aot_build(GuestThread &t) {
     auto sp = g_shared.lock();
     if (!g_uuid_ok || !sp) { logf("aot: no shared code / cache key"); return; }
@@ -307,6 +410,7 @@ void jitcache_aot_build(GuestThread &t) {
         closedir(d);
     }
     const u64 limit = (u64)(getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256) * 7 / 8 << 20;
+    if (!g_place.empty()) logf("aot: mapped %d of %zu placed files", placement_map_all(), g_place.size());
     size_t done = 0;
     for (u64 ld : descs) {
         if (Dynarmic::A64::Jit::GetSharedStats(*sp).code_bytes > limit) { logf("aot: code cache limit reached"); break; }

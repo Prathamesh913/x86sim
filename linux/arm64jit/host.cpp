@@ -71,9 +71,16 @@ static Mapped map_macho(const std::string &path, bool want_unixthread) {
             pc = *(const u64 *)(lc + 16 + 32 * 8);  // ARM_THREAD_STATE64: x0-x28, fp, lr, sp, pc
         } else if (sg->cmd == LC_MAIN) entryoff = ((const entry_point_command *)lc)->entryoff;
     }
-    // Prefer the link address (slide 0); otherwise anywhere.
+    // Prefer the link address (slide 0); otherwise anywhere. Speed 14: an executable in the placement table goes to
+    // its slot in the cache window (reserved by then), so its translations persist like the cache's.
     u64 size = hi - lo;
-    void *base = mmap((void *)lo, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (lo ? MAP_FIXED_NOREPLACE : 0), -1, 0);
+    void *base = MAP_FAILED;
+    if (const Placement *pl = want_unixthread ? nullptr : placement_find(path.c_str()); pl && size <= pl->slot && placement_claim(pl, fd)) {
+        base = mmap((void *)pl->addr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
+        if (getenv("X86CODE_A64_STATS")) logf("placement: exe %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
+    }
+    if (base == MAP_FAILED)
+        base = mmap((void *)lo, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (lo ? MAP_FIXED_NOREPLACE : 0), -1, 0);
     if (base == MAP_FAILED) base = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (base == MAP_FAILED) die("no address space for %s", path.c_str());
     Mapped m; m.slide = (u64)base - lo;
@@ -124,12 +131,49 @@ static void map_commpage() {
 }
 
 // ---- SyscallHelpers (dyld_sim's view of the host dyld) -------------------------------------------------------------
+// Speed 14: dyld_sim opens an image, reads its header, then reserves the image's whole range "anywhere" and maps the
+// segments into it. Anywhere was Linux's top-down placement, so the address depended on every earlier host mapping
+// (78 of 115 non-cache code mappings moved between boots). The reservation that follows the open of a file in the
+// placement table goes to that file's slot instead (file size/mtime checked; once per process).
+static thread_local const Placement *tl_open_place;
+static thread_local int tl_open_fd = -1;
 static void h_helper_open(GuestThread &t, u32) {
     const char *path = (const char *)t.x(0);
     int fd = stub_fd_for_path(path);
     if (fd < 0) fd = d_open(path, (int)t.x(1), (int)t.stack_slot(0));
     if (g_trace) logf("dyld_sim open %s -> %d", path, fd);
+    tl_open_place = fd >= 0 ? placement_find(path) : nullptr;
+    tl_open_fd = fd;
     t.set_x(0, (u64)(int64_t)fd);
+}
+static u64 place_reservation(u64 size, int prot) {
+    const Placement *pl = tl_open_place;
+    tl_open_place = nullptr;
+    if (!pl || !size || size > pl->slot || !placement_claim(pl, tl_open_fd)) {
+        if (pl && getenv("X86CODE_A64_STATS")) logf("placement: %s not placed (reserve %#lx, slot %#lx)", pl->key.c_str(), (unsigned long)size, (unsigned long)pl->slot);
+        return 0;
+    }
+    void *p = mmap((void *)pl->addr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
+    if (p == MAP_FAILED) return 0;
+    if (getenv("X86CODE_A64_STATS")) logf("placement: %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
+    return pl->addr;
+}
+// vm_allocate(task, addr*, size, flags)
+static void h_helper_vm_allocate(GuestThread &t, u32 i) {
+    if ((t.x(3) & 1) && t.x(1))
+        // vm_allocate memory is zeroed read/write (dyld leaves zero-fill tails of segments in it)
+        if (u64 a = place_reservation(t.x(2), PROT_READ | PROT_WRITE)) { *(u64 *)t.x(1) = a; t.set_x(0, 0); return; }
+    h_generic(t, i);
+}
+// mmap(addr, len, prot, flags, fd, off): an anonymous non-fixed reservation
+static void h_helper_mmap(GuestThread &t, u32 i) {
+    constexpr u64 kFixed = 0x10, kAnon = 0x1000;
+    if (!t.x(0) && !(t.x(3) & kFixed) && (t.x(3) & kAnon))
+        if (u64 a = place_reservation(t.x(1), (int)t.x(2) & 7)) {
+            t.set_x(0, a);
+            return;
+        }
+    h_generic(t, i);
 }
 static void h_helper_stat(GuestThread &t, u32) {
     static auto *dstat = (int (*)(const char *, void *))dsym("stat$INODE64");
@@ -162,9 +206,9 @@ static void h_helper_notify_get(GuestThread &t, u32 i) {
 static u64 build_syscall_helpers() {
     struct H { const char *native; Handler h; };
     static const H table[] = {
-        {"open", h_helper_open}, {"close", nullptr}, {"pread", nullptr}, {"write", nullptr}, {"mmap", nullptr},
+        {"open", h_helper_open}, {"close", nullptr}, {"pread", nullptr}, {"write", nullptr}, {"mmap", h_helper_mmap},
         {"munmap", nullptr}, {"madvise", nullptr}, {"stat", h_helper_stat}, {"fcntl", h_variadic}, {"ioctl", h_variadic},
-        {"issetugid", nullptr}, {"getcwd", nullptr}, {"realpath$DARWIN_EXTSN", nullptr}, {"vm_allocate", nullptr},
+        {"issetugid", nullptr}, {"getcwd", nullptr}, {"realpath$DARWIN_EXTSN", nullptr}, {"vm_allocate", h_helper_vm_allocate},
         {"vm_deallocate", nullptr}, {"vm_protect", nullptr}, {"vlog", h_helper_vlog}, {"vwarn", h_helper_vlog},
         {"pthread_mutex_lock", nullptr}, {"pthread_mutex_unlock", nullptr}, {"mach_thread_self", nullptr},
         {"mach_port_deallocate", nullptr}, {"task_self_trap", nullptr}, {"mach_timebase_info", nullptr},

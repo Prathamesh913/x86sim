@@ -194,6 +194,11 @@ void native_objc_configure_jit(Dynarmic::A64::UserConfig &c);  // wire inline_* 
 void native_objc_stats();  // hits/misses into the process log
 // Persistent JIT cache (dyld shared-cache translations). Keyed by cache UUID + build id.
 void jitcache_prepare(const std::string &cache_path, const std::string &exe);  // read UUID; call before first Jit
+// Speed 14: fixed placement of non-cache Mach-Os (dylibs, bundles, app executables) in the free top of the cache
+// window, from <jitcache dir>/placement.txt, so their translations can be persisted by address like the cache's.
+struct Placement { u64 addr, slot, fsize, mtime; std::string key; };
+const Placement *placement_find(const char *path);  // entry whose key ends `path` (nullptr: none)
+bool placement_claim(const Placement *p, int fd);   // file matches (size, mtime) and the slot is unused here
 void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &sp);
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared);
 void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string &to = "");
