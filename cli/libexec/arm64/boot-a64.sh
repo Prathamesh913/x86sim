@@ -104,11 +104,15 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # Siri tap; mksimdevice puts angels where launchd_sim classifies them as angels, see there).
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
-	com.apple.campo"
+	com.apple.campo com.apple.FileProvider"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
-FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
-OUR_JOBS="com.x86code.openurl=host/openurl/arm64/openurl"
+FULLUI="com.apple.PosterBoard com.apple.chronod"
+# FileProvider (Speed 16, on demand: started when Files opens): fileproviderd + the sim2host stand-in (as rundev's x86
+# fpsim2host) give Files its Browse locations (iCloud Drive, On My iPhone, Recently Deleted). Without them Files only
+# showed Recents. Open: the On My iPhone listing stays "Loading".
+OUR_JOBS="com.x86code.openurl=host/openurl/arm64/openurl
+	com.x86code.fpsim2host=host/fpsim2host/arm64/fpsim2host|mach:com.apple.FileProvider.sim2host"
 case "${A64_JOBS:-std}" in
 	min) JOBS="$MIN $OUR_JOBS" ;;
 	slim) JOBS="$MIN $UI_SLIM $OUR_JOBS" ;;
