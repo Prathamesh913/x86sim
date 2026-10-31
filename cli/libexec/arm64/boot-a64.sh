@@ -243,7 +243,19 @@ CMDEOF
 	A64_TZNAME="$TZNAME" \
 	A64_TIMEOUT="$A64_TIMEOUT" \
 	A64_CMDFILE="$CMDFILE" \
+	A64_PREFETCH_HOT="$([ "${A64_PREFETCH:-1}" != 0 ] && echo "$ST/prefetch.early $ST/prefetch.hot")" \
 	"$X/cli/libexec/arm64/boot-inner.sh" > "$ST/lsim.out" 2>&1 &)
+# Speed 11: 60 s in (home is up), record which ranges of the dyld cache and the AOT image this boot's processes
+# have mapped in; the next boot prefetches them (boot-inner.sh). A64_PREFETCH=0: neither.
+if [ "${A64_PREFETCH:-1}" != 0 ]; then
+	JC=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
+	# the pages mapped 12 s in are read first (prefetch.early), then the rest: the reads share the boot's IO cap
+	# with its own page faults, so the order decides what the first processes wait for
+	pf_record() { python3 -I "$X/cli/libexec/arm64/prefetch.py" record "$1" \
+		"$X86SIM_RUNTIME"/System/Library/Caches/com.apple.dyld/dyld_sim_shared_cache_arm64* \
+		"$JC"/*.map "$JC"/*.map.idx; }
+	(sleep 12; pf_record "$ST/prefetch.early"; sleep 48; pf_record "$ST/prefetch.hot") > "$ST/prefetch.log" 2>&1 &
+fi
 sleep 3
 (timeout $((SECS + 2)) tail -n +1 -F "$L" 2>/dev/null | grep --line-buffered -v -E "failed lookup|Last log repeated" > "$ST/launchd.log" &)
 sleep "$SECS"

@@ -1,8 +1,13 @@
 #!/bin/bash
 # Runs inside cli/libexec/limited.sh (see boot-a64.sh). First darling touch creates darlingserver in
 # this scope; join_prefix_cgroup moves any escapees so MemoryMax counts real guest RSS.
-# Env: DPREFIX, X86SIM_DARLING, A64_TZNAME, A64_TIMEOUT, A64_CMDFILE
+# Env: DPREFIX, X86SIM_DARLING, A64_TZNAME, A64_TIMEOUT, A64_CMDFILE, A64_PREFETCH_HOT
 set -e
+# Speed 11: warm the host page cache with the last boot's hot file ranges (prefetch.py, A64_PREFETCH_HOT from
+# boot-a64.sh) while the container starts; from inside this scope, so the reads count against its IO cap
+if [ -n "${A64_PREFETCH_HOT:-}" ]; then
+	(python3 -I "$(dirname "$0")/prefetch.py" apply $A64_PREFETCH_HOT > /dev/null 2>&1 &)
+fi
 join_prefix_cgroup() {
 	local self_cg p cmd cgfile pid
 	self_cg=$(awk -F: '/^0::/{print $NF; exit}' /proc/self/cgroup 2>/dev/null)
