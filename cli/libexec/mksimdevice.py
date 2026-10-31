@@ -167,6 +167,18 @@ def main():
             else:
                 # no logd here either: without this libtrace streams to diagnosticd anyway
                 plist.setdefault("EnvironmentVariables", {})["OS_ACTIVITY_MODE"] = "disable"
+        # x86Code arm64 (Speed 12): assetsd's photo search store (PhotoLibraryServices PLLeoLexiconStore ->
+        # LEOTokenizerCreate) ARC-stores into an uninitialised sqlite3_malloc(8) and releases the old garbage. That
+        # works on a device, where libmalloc zeroes freed memory; here assetsd crashed (SIGSEGV in objc_release) at
+        # every Photos launch. Zero its allocations instead.
+        if ARM64 and job == "com.apple.assetsd":
+            plist.setdefault("EnvironmentVariables", {})["MallocZeroOnAlloc"] = "1"
+        # x86Code: X86SIM_JOBENV="label:K=V;label:K=V": extra environment for runtime jobs (experiments)
+        for kv in filter(None, os.environ.get("X86SIM_JOBENV", "").split(";")):
+            lab, _, ev = kv.partition(":")
+            if lab == job and "=" in ev:
+                k, v = ev.split("=", 1)
+                plist.setdefault("EnvironmentVariables", {})[k] = v
         with open(os.path.join(dst, job + ".plist"), "wb") as f:
             plistlib.dump(plist, f)
 

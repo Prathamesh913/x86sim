@@ -97,8 +97,9 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # keyboard. assistantd (on demand) serves com.apple.assistant.dictation: without it each failed dictation availability
 # check posts "availability changed", the keyboard dock (mic key) re-checks, and the app's main thread spins at 100%
 # from the first text field tap, so InputUI's keyboard arbiter times the app out and no keyboard appears.
+# assetsd (on demand): the photo library; without it Photos throws in its library view's viewDidLoad.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
-	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd"
+	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.PosterBoard com.apple.chronod com.apple.FileProvider"
