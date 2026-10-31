@@ -1,7 +1,7 @@
 // libarm64jit: persistent translation cache for the dyld shared cache's code.
 //
-// Two kinds of file in the cache dir, both keyed <uuid>-<build> (build: kBuildId, code-shaping flags and a hash of
-// libarm64jit.so's ELF build-id, so any rebuild refuses old files):
+// Two kinds of file in the cache dir, both keyed <uuid>-<build> (build: kCodegenVersion, code-shaping flags and the
+// placement table's hash):
 //   <key>.<exe>.bin  per process (warm start / AOT training), written on SIGUSR1 (memlog) or at exit with STATS.
 //   <key>.aot        Stage 4 AOT image: the union of every .bin's blocks, translated by one builder process
 //                    (X86CODE_A64_AOT_BUILD=1, at its exit). Every ASLR-off process (Speed 7; otherwise .app/
@@ -51,11 +51,14 @@ namespace {
 
 constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x2c0000000ull;
-// Bump when emitted code shape / cache format changes (StackLayout, fuse_svc, inline objc, reloc table).
-constexpr u64 kBuildId = 0x00000013ull;  // Speed 6: compact metadata, mapped AOT image
-// kBuildId (bits 0-15), code-shaping env flags (16-18), libarm64jit build-id hash (32-63). The load base is no longer
+// CODEGEN_VERSION: bump whenever translated code would change (emitter, IR passes, StackLayout, fuse_svc, inline objc,
+// the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
+// alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
+// Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
+constexpr u64 kCodegenVersion = 0x00000014ull;  // Speed 18: chunked image, pool regions
+// kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
-u64 g_build = kBuildId;
+u64 g_build = kCodegenVersion;
 std::string g_key, g_aot_path;
 bool g_aot_eligible = false;
 bool g_aot_loaded = false;
@@ -70,35 +73,6 @@ std::string default_dir() {
     if (const char *d = getenv("X86CODE_A64_JITCACHE_DIR")) return d;
     if (const char *s = getenv("X86SIM_SCRATCH")) return std::string(s) + "/jitcache";
     return "/home/bobby/scratch/x86code/jitcache";
-}
-
-// FNV-1a over libarm64jit.so's NT_GNU_BUILD_ID note (and, with ADDR_NO_RANDOMIZE, its load base).
-u32 self_hash() {
-    struct Ctx { u64 self; u32 h; bool found; } c{(u64)(uintptr_t)&self_hash, 2166136261u, false};
-    dl_iterate_phdr([](dl_phdr_info *info, size_t, void *p) -> int {
-        auto &c = *(Ctx *)p;
-        bool mine = false;
-        for (int i = 0; i < info->dlpi_phnum; i++) {
-            const auto &ph = info->dlpi_phdr[i];
-            u64 lo = info->dlpi_addr + ph.p_vaddr;
-            if (ph.p_type == PT_LOAD && c.self >= lo && c.self < lo + ph.p_memsz) mine = true;
-        }
-        if (!mine) return 0;
-        auto mix = [&](const uint8_t *b, size_t n) { for (size_t i = 0; i < n; i++) c.h = (c.h ^ b[i]) * 16777619u; };
-        for (int i = 0; i < info->dlpi_phnum; i++) {
-            const auto &ph = info->dlpi_phdr[i];
-            if (ph.p_type != PT_NOTE) continue;
-            auto *n = (const uint8_t *)(info->dlpi_addr + ph.p_vaddr), *end = n + ph.p_memsz;
-            while (n + sizeof(ElfW(Nhdr)) <= end) {
-                auto *nh = (const ElfW(Nhdr) *)n;
-                const uint8_t *desc = n + sizeof *nh + ((nh->n_namesz + 3) & ~3u);
-                if (nh->n_type == NT_GNU_BUILD_ID) { mix(desc, nh->n_descsz); c.found = true; }
-                n = desc + ((nh->n_descsz + 3) & ~3u);
-            }
-        }
-        return 1;
-    }, &c);
-    return c.found ? c.h : 0;
 }
 
 // Speed 14: placement.txt lines "addr slot fsize mtime key" (hex addr/slot; key = path from RuntimeRoot/ on, or the
@@ -210,13 +184,10 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     char hex[40];
     for (int i = 0; i < 16; i++) sprintf(hex + 2 * i, "%02x", g_uuid[i]);
     auto on = [](const char *e, bool dflt) { const char *v = getenv(e); return v ? atoi(v) == 1 : dflt; };
-    const u32 h = self_hash();
-    if (!h) { g_uuid_ok = false; logf("jitcache: no build-id in libarm64jit.so; cache off"); return; }
-    g_build = kBuildId | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
-              (u64)timebase_apple() << 18 |  // CNTFRQ and the Swift deadline patch are in the code
-              (u64)h << 32;
+    g_build = kCodegenVersion | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
+              (u64)timebase_apple() << 18;  // CNTFRQ and the Swift deadline patch are in the code
     if (u32 ph = placement_load(g_dir)) {
-        g_build ^= (u64)ph << 32;
+        g_build |= (u64)ph << 32;
         if (getenv("X86CODE_A64_STATS")) logf("placement: %zu files, table %08x", g_place.size(), ph);
     }
     char bh[24];
@@ -228,6 +199,16 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     g_aot_eligible = aot_eligible(exe);
     if (getenv("X86CODE_A64_STATS"))
         logf("jitcache: path %s", g_path.c_str());
+}
+
+u64 jitcache_image_code_bytes() {
+    if (!g_uuid_ok || !g_aot_eligible || (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0)) return 0;
+    u64 code = 0;
+    if (FILE *f = fopen(g_aot_path.c_str(), "rb")) {
+        if (fseek(f, 32, SEEK_SET) || fread(&code, 8, 1, f) != 1) code = 0;  // PersistHeader::code_size
+        fclose(f);
+    }
+    return code;
 }
 
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
@@ -389,9 +370,128 @@ int placement_map_all() {
     return n;
 }
 
+// Speed 18: the chunked AOT image (tools/launcher, x86code-aot). X86CODE_A64_AOT_JOB=<job file>: this builder translates
+// the listed chunks, one library / executable each, every one into its own slot of the slab, and saves each as a chunk
+// file (A64CK01). x86code-aot assembles the chunks into the <key>.aot image (its own assembler).
+// Job file lines:
+//   progress <file>                 JSON lines appended per chunk (and every ~100K blocks)
+//   pool <file>                     union the constant pool of an existing chunk (every chunk kept in the image)
+//   region <bytes>                  new constants go from this pool offset on (disjoint per parallel builder)
+//   chunk <name> <slot_off> <slot_size> <out> <entries>
+// Entries file (u64 LE): n_ranges, n_ranges x (lo, hi), n_hot, hot descriptors (hottest first), n_static, static PCs.
+// Hot blocks are emitted first (contiguous at the slot start); then the static entries and every direct successor
+// inside the ranges, breadth first. A block is only ever entered at its exact guest PC, so a guess that lands in
+// data is translated but never runs: the guest must branch to that PC, i.e. it is code (immutable cache pages; a
+// written page invalidates as before).
+static void aot_job(GuestThread &t, Dynarmic::A64::Jit::SharedCode &sc, const char *job) {
+    FILE *jf = fopen(job, "r");
+    if (!jf) { logf("aot job: cannot open %s", job); return; }
+    FILE *prog = nullptr;
+    std::vector<uint8_t> pool;
+    size_t region = 0;
+    struct Chunk { std::string name, out, entries; u64 off, size; };
+    std::vector<Chunk> chunks;
+    char line[8192];
+    while (fgets(line, sizeof line, jf)) {
+        char a[4096], b[4096], c[4096];
+        unsigned long long x, y;
+        if (sscanf(line, "progress %4095s", a) == 1) prog = fopen(a, "a");
+        else if (sscanf(line, "pool %4095s", a) == 1) {
+            auto p = Dynarmic::A64::Jit::ReadPersistentPool(a);
+            if (p.size() > pool.size()) pool.resize(p.size(), 0);
+            for (size_t i = 0; i < p.size(); i++) if (p[i]) pool[i] = p[i];
+        } else if (sscanf(line, "region %llu", &x) == 1) region = x;
+        else if (sscanf(line, "chunk %4095s %llu %llu %4095s %4095s", a, &x, &y, b, c) == 5) chunks.push_back({a, b, c, x, y});
+    }
+    fclose(jf);
+    auto emit = [&](const char *fmt, auto... args) {
+        if (!prog) return;
+        fprintf(prog, fmt, args...);
+        fputc('\n', prog);
+        fflush(prog);
+    };
+    if (!pool.empty() || region) Dynarmic::A64::Jit::SetConstantPoolRegion(sc, pool, std::max(region, pool.size()));
+    if (!g_place.empty()) logf("aot job: mapped %d of %zu placed files", placement_map_all(), g_place.size());
+    const u64 cap = Dynarmic::A64::Jit::CodeCapacity(sc);
+    timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    emit("{\"event\":\"start\",\"chunks\":%zu,\"pid\":%d,\"codegen\":%llu}", chunks.size(), getpid(), (unsigned long long)kCodegenVersion);
+    for (size_t ci = 0; ci < chunks.size(); ci++) {
+        const Chunk &ch = chunks[ci];
+        timespec c0, c1;
+        clock_gettime(CLOCK_MONOTONIC, &c0);
+        std::vector<u64> ranges, hot, stat;
+        if (FILE *ef = fopen(ch.entries.c_str(), "rb")) {
+            auto rd = [&](std::vector<u64> &v, u64 mul) {
+                u64 n = 0;
+                if (fread(&n, 8, 1, ef) != 1 || n > (1ull << 28)) return false;
+                v.resize(n * mul);
+                return fread(v.data(), 8, v.size(), ef) == v.size();
+            };
+            const bool ok = rd(ranges, 2) && rd(hot, 1) && rd(stat, 1);
+            fclose(ef);
+            if (!ok) { emit("{\"event\":\"chunk\",\"name\":\"%s\",\"i\":%zu,\"state\":\"error\",\"why\":\"entries\"}", ch.name.c_str(), ci); continue; }
+        }
+        if (ch.off + ch.size > cap) { emit("{\"event\":\"chunk\",\"name\":\"%s\",\"i\":%zu,\"state\":\"error\",\"why\":\"slot beyond slab\"}", ch.name.c_str(), ci); continue; }
+        auto in_range = [&](u64 pc) {
+            if (pc & 3) return false;
+            for (size_t i = 0; i < ranges.size(); i += 2) if (pc >= ranges[i] && pc + 4 <= ranges[i + 1]) return true;
+            return false;
+        };
+        Dynarmic::A64::Jit::BeginChunk(sc, ch.off);
+        std::set<u64> seen;
+        std::vector<u64> work, succ;
+        u64 blocks = 0, tick = 0;
+        bool overflow = false;
+        const u64 limit = ch.off + ch.size - std::min<u64>(ch.size / 8, 256 << 10);  // a block is far below this margin
+        // to: where the successors go (nullptr: not followed)
+        auto one = [&](u64 d, std::vector<u64> *to) {
+            if (!in_range(d & ((1ull << 56) - 1)) || !seen.insert(d).second) return;
+            if (Dynarmic::A64::Jit::ChunkCodeEnd(sc) > limit) { overflow = true; return; }
+            succ.clear();
+            if (t.jit->PretranslateCollect(d, succ)) blocks++;
+            if (to) for (u64 s : succ) if (!seen.count(s)) to->push_back(s);
+            if (blocks - tick >= 100000) {
+                tick = blocks;
+                emit("{\"event\":\"progress\",\"name\":\"%s\",\"i\":%zu,\"blocks\":%llu,\"used\":%llu}", ch.name.c_str(), ci,
+                     (unsigned long long)blocks, (unsigned long long)(Dynarmic::A64::Jit::ChunkCodeEnd(sc) - ch.off));
+            }
+        };
+        // hot blocks first (contiguous at the slot start), then their successors and the static entries, depth first
+        // from each entry (a function's blocks stay together)
+        std::vector<u64> next;
+        for (u64 d : hot) { if (overflow) break; one(d, &next); }
+        const u64 hot_used = Dynarmic::A64::Jit::ChunkCodeEnd(sc) - ch.off, hot_blocks = blocks;
+        work.assign(next.rbegin(), next.rend());
+        for (size_t i = 0; !overflow; i++) {
+            while (!work.empty() && !overflow) {
+                const u64 d = work.back();
+                work.pop_back();
+                one(d, &work);
+            }
+            if (i >= stat.size()) break;
+            work.push_back(stat[i]);
+        }
+        const u64 used = Dynarmic::A64::Jit::ChunkCodeEnd(sc) - ch.off;
+        const std::string tmp = ch.out + ".tmp." + std::to_string(getpid());
+        size_t bytes = blocks ? Dynarmic::A64::Jit::SaveChunk(sc, tmp, g_uuid, g_build, kCacheLo, kCacheHi, ch.off) : 0;
+        if (bytes && rename(tmp.c_str(), ch.out.c_str()) != 0) { unlink(tmp.c_str()); bytes = 0; }
+        Dynarmic::A64::Jit::DiscardCode(sc, ch.off, ch.off + used);
+        clock_gettime(CLOCK_MONOTONIC, &c1);
+        emit("{\"event\":\"chunk\",\"name\":\"%s\",\"i\":%zu,\"state\":\"%s\",\"blocks\":%llu,\"used\":%llu,\"bytes\":%zu,\"overflow\":%s,\"secs\":%.2f,\"pool\":%zu,\"hot_used\":%llu,\"hot_blocks\":%llu}",
+             ch.name.c_str(), ci, bytes ? "done" : (blocks ? "error" : "empty"), (unsigned long long)blocks, (unsigned long long)used, bytes,
+             overflow ? "true" : "false", (c1.tv_sec - c0.tv_sec) + (c1.tv_nsec - c0.tv_nsec) / 1e9, Dynarmic::A64::Jit::ConstantPoolUsed(sc),
+             (unsigned long long)hot_used, (unsigned long long)hot_blocks);
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    emit("{\"event\":\"end\",\"secs\":%.2f}", (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9);
+    if (prog) fclose(prog);
+}
+
 void jitcache_aot_build(GuestThread &t) {
     auto sp = g_shared.lock();
     if (!g_uuid_ok || !sp) { logf("aot: no shared code / cache key"); return; }
+    if (const char *job = getenv("X86CODE_A64_AOT_JOB")) { aot_job(t, *sp, job); return; }
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     std::set<u64> descs;

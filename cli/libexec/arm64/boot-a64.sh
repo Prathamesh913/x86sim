@@ -124,8 +124,33 @@ case "${A64_JOBS:-std}" in
 	full) JOBS="$MIN $UI $FULLUI $OUR_JOBS" ;;
 	*) JOBS="$MIN $UI $OUR_JOBS" ;;
 esac
-# A64_DROP="label ...": leave these jobs out (experiments)
-for j in ${A64_DROP:-}; do JOBS=$(echo " $JOBS " | sed "s/[[:space:]]$j[[:space:]]/ /"); done
+# Speed 18: the device's feature toggles ($D/features.json; definitions, costs and presets in features-def.json, edited
+# by tools/launcher: x86code-aot features, the launcher GUI, x86code-mcp). A job is left out only when every feature
+# listing it is off; boot-critical jobs are never listed. Applied at boot, so changes take effect at the next boot.
+eval "$(python3 - "$D/features.json" "$X/cli/libexec/arm64/features-def.json" <<'PY'
+import json, sys
+try:
+	prof = json.load(open(sys.argv[1])).get("features", {})
+except Exception:
+	prof = {}
+d = json.load(open(sys.argv[2]))["features"]
+on = {f["id"]: prof.get(f["id"], f.get("default", False)) for f in d}
+keep = {j for f in d if on[f["id"]] for j in f.get("jobs", [])}
+drop = sorted({j for f in d if not on[f["id"]] for j in f.get("jobs", [])} - keep)
+add = [j for f in d if on[f["id"]] for j in f.get("add_jobs", [])]
+park = [p for f in d if not on[f["id"]] for p in f.get("park", [])]
+unpark = [p for f in d if on[f["id"]] for p in f.get("unpark", [])]
+keepw = any(on[f["id"]] and f.get("keep_widgets") for f in d)
+off = [f["id"] for f in d if on[f["id"]] != f.get("default", False)]
+print(f'FEAT_DROP="{" ".join(drop)}" FEAT_ADD="{" ".join(add)}" FEAT_PARK="{",".join(park)}" FEAT_UNPARK="{" ".join(unpark)}" FEAT_KEEPW={int(keepw)} FEAT_CHANGED="{" ".join(off)}"')
+PY
+)"
+[ -n "$FEAT_CHANGED" ] && echo "  features changed from the defaults: $FEAT_CHANGED"
+JOBS="$JOBS $FEAT_ADD"
+[ "$FEAT_KEEPW" = 1 ] && A64_KEEP_WIDGETS=${A64_KEEP_WIDGETS:-1}
+[ -n "$FEAT_PARK" ] && A64_PARK_EXTRA=${A64_PARK_EXTRA:+$A64_PARK_EXTRA,}$FEAT_PARK
+# A64_DROP="label ...": leave these jobs out (experiments). Matches a label or a label=executable entry.
+for j in ${A64_DROP:-} $FEAT_DROP; do JOBS=$(echo " $JOBS " | sed "s/[[:space:]]$j\(=[^[:space:]]*\)\?[[:space:]]/ /"); done
 # Speed 10: A64_CLONE_FROM=<device dir> starts a new device (no data/ yet) from a copy of that device's data/, like
 # simctl clone. A fresh device's first boot otherwise builds the LaunchServices database (lsd) while SpringBoard's icon
 # requests wait on it: ~80 s, and SpringBoard was killed and relaunched at ~90 s (home after ~5 min). The store refers
@@ -214,6 +239,7 @@ R="/Volumes/SystemRoot$X86SIM_RUNTIME"
 # Speed 15: Spotlight is no longer parked (the home screen's Search pill showed nothing). It costs ~320 MB PSS.
 # A64_PARK overrides the list (old default: Spotlight.app,WidgetRenderer).
 PARK_LIST=${A64_PARK-WidgetRenderer}${A64_PARK_EXTRA:+,$A64_PARK_EXTRA}
+for u in $FEAT_UNPARK; do PARK_LIST=$(echo ",$PARK_LIST," | sed "s/,$u,/,/g; s/^,//; s/,$//"); done
 if [ "${A64_SLIM:-1}" = 1 ] && [ "${A64_JOBS:-std}" != full ]; then
 	if grep -q '^X86CODE_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null; then
 		sed -i "s|^X86CODE_A64_SLIM_PARK=.*|X86CODE_A64_SLIM_PARK=$PARK_LIST|" "$D/sim.env"

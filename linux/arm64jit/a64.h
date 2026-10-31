@@ -200,6 +200,7 @@ const Placement *placement_find(const char *path);  // entry whose key ends `pat
 bool placement_claim(const Placement *p, int fd);   // file matches (size, mtime) and the slot is unused here
 void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &sp);
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared);
+u64 jitcache_image_code_bytes();  // Speed 18: code size of the image this process will load (0: none)
 void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string &to = "");
 void jitcache_aot_build(GuestThread &t);  // X86CODE_A64_AOT_BUILD=1: union of training .bins -> .aot
 void jitcache_save_if_shared();  // no-op when SHARED=0 or no live shared code

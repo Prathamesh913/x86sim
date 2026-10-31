@@ -1,0 +1,37 @@
+{
+  "_comment": "x86Code Speed 18: optional features of the arm64 device. A device's features.json ({\"features\": {\"id\": bool}}) overrides the defaults; boot-a64.sh applies it at boot, tools/launcher (x86code-aot features, the GUI, the MCP server) edits it. A job is left out only when every feature listing it is off. Boot-critical jobs (MIN set, backboardd, SpringBoard, kbd, FileCoordination, sleepd, usernotificationsd) are never listed. cost_mb: PSS measured on a booted device (Speed 17/18 runs); when = boot (paid at every boot) or use (on demand: paid once the feature is used).",
+  "features": [
+    {"id": "wallpaper", "title": "Wallpaper", "default": true,
+     "desc": "PosterBoard and the MercuryPoster extension (lock and home wallpaper). Off: black wallpaper.",
+     "jobs": ["com.apple.PosterBoard"], "park": ["MercuryPosterExtension"],
+     "chunks": ["PosterBoard", "MercuryPoster"], "cost_mb": 207, "when": "boot"},
+    {"id": "spotlight", "title": "Spotlight search", "default": true,
+     "desc": "The Spotlight UI process (home screen Search pill, pull-down search). Off: search shows nothing.",
+     "park": ["Spotlight.app"], "chunks": ["Spotlight.app"], "cost_mb": 142, "when": "boot"},
+    {"id": "keyboard", "title": "Keyboard", "default": true,
+     "desc": "InputUI (the on-screen keyboard service) and assistantd (dictation availability, shared with Siri). Off: text fields get no keyboard.",
+     "jobs": ["com.apple.InputUI", "com.apple.assistantd"], "chunks": ["InputUI.app"], "cost_mb": 55, "when": "use"},
+    {"id": "siri", "title": "Siri", "default": true,
+     "desc": "Campo (the Siri UI angel) and assistantd. Off: the Siri app does nothing.",
+     "jobs": ["com.apple.campo", "com.apple.assistantd"], "chunks": ["Campo.app"], "cost_mb": 60, "when": "use"},
+    {"id": "maps", "title": "Maps services", "default": true,
+     "desc": "geod and navd (GeoServices, navigation). Off: Maps cannot load its map or search.",
+     "jobs": ["com.apple.geod", "com.apple.navd"], "chunks": ["/geod", "/navd"], "cost_mb": 116, "when": "use"},
+    {"id": "photos", "title": "Photos services", "default": true,
+     "desc": "assetsd (the photo library) and its helpers. Off: Photos cannot open its library.",
+     "jobs": ["com.apple.assetsd"], "chunks": ["/assetsd"], "cost_mb": 151, "when": "use"},
+    {"id": "files", "title": "Files / FileProvider", "default": true,
+     "desc": "fileproviderd, the sim2host stand-in and DesktopServicesHelper. Off: Files shows only Recents.",
+     "jobs": ["com.apple.FileProvider", "com.apple.DesktopServicesHelper", "com.x86code.fpsim2host"],
+     "chunks": ["fileproviderd", "DesktopServicesHelper", "fpsim2host"], "cost_mb": 55, "when": "use"},
+    {"id": "widgets", "title": "Home screen widgets", "default": false,
+     "desc": "chronod, WidgetRenderer and the widget extensions (home screen widgets). Not on by default: about 750 MB more.",
+     "add_jobs": ["com.apple.chronod"], "unpark": ["WidgetRenderer"], "keep_widgets": true,
+     "chunks": ["chronod", "WidgetRenderer", "Widget"], "cost_mb": 750, "when": "boot"}
+  ],
+  "presets": {
+    "full": {},
+    "lean": {"wallpaper": false, "spotlight": false, "siri": false, "widgets": false},
+    "minimal": {"wallpaper": false, "spotlight": false, "siri": false, "widgets": false, "maps": false, "photos": false, "files": false}
+  }
+}
