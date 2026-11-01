@@ -1,10 +1,13 @@
-//! One phone: its screen (touch + keyboard) with Home/Lock, and the fold-out panel: Overview, Features, Logs,
-//! Performance, Advanced.
+//! One phone: a top bar (breadcrumb with a phone switcher, state, Start/Stop/Restart), its screen (touch + keyboard)
+//! with a small toolbar (Home, Lock, typing state, gesture help), and the inspector: Overview, then fold-out Features,
+//! Logs, Performance, Advanced.
 use crate::theme::*;
 use crate::{viewer, App, View};
 use eframe::egui;
 use std::time::{Duration, Instant};
 use x86code_core::{features, instance, instance::Phase, logs};
+
+const GESTURES: &str = "Click the screen to tap, drag to swipe.\nDrag in from an edge for system gestures (Home, Control Center, back).\nCtrl + drag to pinch, Shift + drag to scroll with two fingers.\nF1 Home · F2 Lock · F3/F4 volume";
 
 impl App {
     pub fn phone_view(&mut self, ctx: &egui::Context, id: &str) {
@@ -18,47 +21,59 @@ impl App {
             self.settings = Some((id.to_string(), instance::load_settings(&inst.dir)));
         }
 
-        egui::TopBottomPanel::top("phone-head").frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin { left: 20, right: 20, top: 12, bottom: 10 })).show(ctx, |ui| {
+        egui::TopBottomPanel::top("phone-head").frame(egui::Frame::new().fill(CANVAS).inner_margin(egui::Margin { left: 16, right: 16, top: 10, bottom: 10 })).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.add(small("←  Phones")).clicked() {
+                ui.set_min_height(32.0);
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if ui.add(Btn::ghost("Phones").icon(icon::CARET_LEFT)).clicked() {
                     self.view = View::Home;
                 }
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(&inst.name).size(19.0).strong());
-                ui.label(muted(format!("{} · {}", inst.model, inst.ios)));
-                match phase {
-                    Phase::Running => pill(ui, "Running", GREEN),
-                    Phase::Starting => pill(ui, "Starting…", ORANGE),
-                    Phase::Stopping => pill(ui, "Stopping…", ORANGE),
-                    Phase::Off if !inst.runtime_present => pill(ui, "iOS not downloaded", RED),
-                    Phase::Off => pill(ui, "Off", MUTED),
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    match phase {
-                        Phase::Off if !inst.runtime_present => {
-                            if ui.add(primary("Download iOS")).clicked() {
-                                self.view = View::Ios;
-                            }
+                ui.label(egui::RichText::new("/").size(T_TITLE).color(BORDER_STRONG));
+                // the phone's name doubles as a switcher
+                let txt = egui::RichText::new(format!("{}  {}", inst.name, icon::CARET_UP_DOWN)).size(T_TITLE).family(semibold()).color(INK);
+                let others: Vec<(String, String, Phase, bool)> = self.insts.iter().map(|i| (i.id.clone(), i.name.clone(), self.phase(&i.id), i.runtime_present)).collect();
+                let mut go = None;
+                egui::containers::menu::MenuButton::from_button(egui::Button::new(txt).frame_when_inactive(false)).ui(ui, |ui| {
+                    ui.set_min_width(220.0);
+                    for (oid, name, ph, present) in &others {
+                        let (_, col) = phase_look(*ph, *present);
+                        let t = egui::RichText::new(name).size(T_BODY).color(INK);
+                        let r = ui.add(egui::Button::selectable(oid == id, t).min_size(egui::vec2(ui.available_width(), 26.0)));
+                        ui.painter().circle_filled(r.rect.right_center() - egui::vec2(12.0, 0.0), 3.5, if col == INK_3 { RAISED } else { col });
+                        if r.clicked() {
+                            go = Some(oid.clone());
                         }
+                    }
+                });
+                if let Some(g) = go {
+                    self.view = View::Phone(g);
+                }
+                ui.add_space(6.0);
+                ui.label(muted(format!("{} · {}", inst.model, inst.ios)).size(T_BODY));
+                ui.add_space(8.0);
+                let (label, col) = phase_look(phase, inst.runtime_present);
+                badge(ui, label, col);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = S2;
+                    match phase {
+                        // not installed: the Download action lives in the screen area's empty state
+                        Phase::Off if !inst.runtime_present => {}
                         Phase::Off => {
-                            if ui.add(primary("▶  Start")).clicked() {
+                            if ui.add(Btn::primary("Start").icon(icon::PLAY).min_w(84.0)).clicked() {
                                 self.start(id);
                             }
                         }
                         Phase::Stopping => {
-                            ui.add_enabled(false, secondary("Stopping…"));
+                            ui.add_enabled(false, Btn::secondary("Stopping…").min_w(84.0));
                         }
                         _ => {
-                            if ui.add(danger("■  Stop")).clicked() {
+                            if ui.add(Btn::secondary("Stop").icon(icon::STOP).icon_color(CRIT_INK).min_w(84.0)).clicked() {
                                 self.stop(id);
                             }
-                            if ui.add(secondary("⟳  Restart")).clicked() {
+                            if ui.add(Btn::secondary("Restart").icon(icon::ARROW_CLOCKWISE)).clicked() {
                                 self.restart(id);
                             }
                         }
-                    }
-                    if !self.message.is_empty() && self.message_at.elapsed() < Duration::from_secs(6) {
-                        ui.label(muted(&self.message).size(12.5));
                     }
                 });
             });
@@ -66,157 +81,177 @@ impl App {
 
         egui::SidePanel::right("phone-side")
             .resizable(true)
-            .default_width(400.0)
-            .width_range(320.0..=720.0)
-            .frame(egui::Frame::new().fill(RAIL).inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 12 }).stroke(egui::Stroke::new(1.0_f32, BORDER)))
+            .default_width(392.0)
+            .width_range(340.0..=720.0)
+            .frame(egui::Frame::new().fill(WINDOW).inner_margin(egui::Margin { left: 16, right: 12, top: 16, bottom: 12 }))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_width(ui.available_width() - 4.0);
                     self.side_panel(ui, &inst, st.as_ref());
                 });
             });
 
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(20, 10))).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(CANVAS).inner_margin(egui::Margin { left: 24, right: 24, top: 20, bottom: 16 })).show(ctx, |ui| {
+            if !inst.runtime_present {
+                let busy = self.fetching.contains_key(&inst.build);
+                let h = ui.available_height();
+                ui.add_space((h / 2.0 - 110.0).max(0.0));
+                let mut dl = false;
+                empty_state(ui, icon::CLOUD_ARROW_DOWN, &format!("{} isn't installed", inst.ios), "Download it to start this phone. Its apps and data are kept.", |ui| {
+                    if busy {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(sub("Downloading…"));
+                        });
+                        ui.ctx().request_repaint_after(Duration::from_secs(2));
+                    } else {
+                        dl = ui.add(Btn::primary(format!("Download {}", inst.ios)).icon(icon::DOWNLOAD_SIMPLE)).clicked();
+                    }
+                });
+                if dl {
+                    let (b, l) = (inst.build.clone(), inst.ios.clone());
+                    self.download(&b, &l);
+                }
+                return;
+            }
             let live = matches!(phase, Phase::Running | Phase::Starting);
             let placeholder = match phase {
-                Phase::Off if !inst.runtime_present => format!("{} is not downloaded", inst.ios),
-                Phase::Off => "Off".into(),
-                Phase::Starting => "Starting…".into(),
-                Phase::Stopping => "Stopping…".into(),
-                Phase::Running => "Waiting for the screen…".into(),
+                Phase::Off => "Off",
+                Phase::Starting => "Starting…",
+                Phase::Stopping => "Stopping…",
+                Phase::Running => "Waiting for the screen…",
             };
-            let avail = ui.available_size() - egui::vec2(0.0, 44.0);
-            let (fps, seq) = {
-                let v = self.viewer(id);
-                (v.as_ref().map(|v| v.fps()).unwrap_or(0), v.as_ref().map(|v| v.shared.seq.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(0))
-            };
+            let avail = ui.available_size() - egui::vec2(0.0, 52.0);
             ui.vertical_centered(|ui| {
                 if let Some(v) = self.viewer(id) {
-                    v.show(ui, avail, live, &placeholder, true, viewer::FULL);
+                    v.show(ui, avail, live, placeholder, true, viewer::FULL);
                 }
-                ui.add_space(6.0);
+                ui.add_space(S3);
+                self.screen_toolbar(ui, id, live);
+            });
+        });
+    }
+
+    /// Home / Lock, typing state and gesture help, centred under the screen.
+    fn screen_toolbar(&mut self, ui: &mut egui::Ui, id: &str, live: bool) {
+        let tid = egui::Id::new(("toolbar-w", id));
+        let w: f32 = ui.data(|d| d.get_temp(tid)).unwrap_or(320.0);
+        let focused = self.viewers.get(id).is_some_and(|v| v.focused);
+        let compact = ui.available_width() < 420.0;
+        let r = ui.horizontal(|ui| {
+            ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+            egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(8).inner_margin(4).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let total = 3.0 * 90.0 + 2.0 * 8.0;
-                    ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
-                    let on = live;
-                    if ui.add_enabled(on, secondary("○  Home").min_size(egui::vec2(90.0, 30.0))).on_hover_text("F1").clicked() {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if ui.add_enabled(live, Btn::ghost(if compact { "" } else { "Home" }).icon(icon::HOUSE)).on_hover_text("F1").clicked() {
                         if let Some(v) = self.viewer(id) {
                             v.press("home");
                         }
                     }
-                    if ui.add_enabled(on, secondary("⏻  Lock").min_size(egui::vec2(90.0, 30.0))).on_hover_text("F2").clicked() {
+                    if ui.add_enabled(live, Btn::ghost(if compact { "" } else { "Lock" }).icon(icon::LOCK)).on_hover_text("F2").clicked() {
                         if let Some(v) = self.viewer(id) {
                             v.press("lock");
                         }
                     }
-                    let hint = if self.viewers.get(id).is_some_and(|v| v.focused) { "Keyboard goes to the phone" } else { "Click the screen to type" };
-                    ui.add_enabled(false, secondary(if live { hint } else { "" }).min_size(egui::vec2(90.0, 30.0)).frame(false));
+                    let (sep, _) = ui.allocate_exact_size(egui::vec2(13.0, H_MD), egui::Sense::hover());
+                    ui.painter().vline(sep.center().x, sep.y_range().shrink(6.0), egui::Stroke::new(1.0_f32, BORDER));
+                    let (t, c) = if !live { ("Not running", INK_3) } else if focused { ("Typing goes to the phone", ACCENT_INK) } else { ("Click the screen to type", INK_3) };
+                    ui.add_space(6.0);
+                    let k = ui.label(egui::RichText::new(icon::KEYBOARD).size(15.0).color(c));
+                    if compact {
+                        k.on_hover_text(t);
+                    } else {
+                        ui.label(egui::RichText::new(t).size(T_SMALL).color(if c == ACCENT_INK { INK } else { INK_2 }));
+                    }
+                    ui.add_space(4.0);
+                    ui.add(Btn::tool(icon::INFO)).on_hover_text(GESTURES);
                 });
-                if live && seq > 0 {
-                    ui.label(muted(format!("{fps} fps · drag from an edge for system gestures · Ctrl+drag pinch · Shift+drag two-finger scroll")).size(11.0));
-                }
-            });
+            })
+            .response
+            .rect
+            .width()
         });
+        ui.data_mut(|d| d.insert_temp(tid, r.inner));
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, st: Option<&instance::Status>) {
         let phase = st.map(|s| s.phase).unwrap_or(Phase::Off);
         let id = inst.id.clone();
-        // ---- Overview (always open)
-        ui.label(egui::RichText::new("Overview").size(14.5).strong());
-        ui.add_space(6.0);
-        let (state, col) = match phase {
-            Phase::Running => ("Running", GREEN),
-            Phase::Starting => ("Starting…", ORANGE),
-            Phase::Stopping => ("Stopping…", ORANGE),
-            Phase::Off if !inst.runtime_present => ("Needs iOS", RED),
-            Phase::Off => ("Off", MUTED),
-        };
         let on = phase != Phase::Off;
-        stat_row(ui, vec![
-            ("STATUS", state.into(), col),
-            ("MEMORY", if on { fmt_mb(st.map(|s| s.pss_mb).unwrap_or(0.0)) } else { "–".into() }, TEXT),
-            ("CPU", if on { format!("{:.0}%", st.map(|s| s.cpu_pct).unwrap_or(0.0)) } else { "–".into() }, TEXT),
-        ]);
-        ui.add_space(8.0);
-        egui::Grid::new("ov").num_columns(2).spacing([14.0, 5.0]).show(ui, |ui| {
-            ui.label(muted("Model").size(12.5));
-            ui.label(egui::RichText::new(&inst.model).size(12.5));
-            ui.end_row();
-            ui.label(muted("iOS").size(12.5));
-            ui.label(egui::RichText::new(if inst.runtime_present { inst.ios.clone() } else { format!("{} (not downloaded)", inst.ios) }).size(12.5).color(if inst.runtime_present { TEXT } else { RED }));
-            ui.end_row();
-            ui.label(muted("Screen").size(12.5));
-            ui.label(egui::RichText::new(format!("{} × {} @{:.0}x", inst.screen.0, inst.screen.1, inst.scale)).size(12.5));
-            ui.end_row();
-            if let Some(s) = st {
-                if let Some(u) = s.uptime_s {
-                    ui.label(muted("Up for").size(12.5));
-                    ui.label(egui::RichText::new(fmt_s(u)).size(12.5));
-                    ui.end_row();
-                }
-                if on {
-                    ui.label(muted("Processes").size(12.5));
-                    ui.label(egui::RichText::new(format!("{}{}", s.procs.len(), if s.mtlvk { " · GPU helper up" } else { "" })).size(12.5));
-                    ui.end_row();
-                }
+        // ---- Overview (always shown; live numbers only while it runs)
+        if on {
+            stat_row(ui, CARD, &[
+                ("Memory", fmt_mb(st.map(|s| s.pss_mb).unwrap_or(0.0)), ""),
+                ("CPU", format!("{:.0}%", st.map(|s| s.cpu_pct).unwrap_or(0.0)), ""),
+                ("Up for", st.and_then(|s| s.uptime_s).map(fmt_s).unwrap_or("–".into()), ""),
+            ]);
+            ui.add_space(S3);
+        }
+        ui.spacing_mut().item_spacing.y = 2.0;
+        let lw = 84.0;
+        kv_text(ui, lw, "Model", &inst.model);
+        kv_text(ui, lw, "iOS", if inst.runtime_present { inst.ios.clone() } else { format!("{} · not installed", inst.ios) });
+        kv_text(ui, lw, "Screen", format!("{} × {} pixels", inst.screen.0, inst.screen.1));
+        if let Some(s) = st.filter(|_| on) {
+            kv_text(ui, lw, "Processes", format!("{}{}", s.procs.len(), if s.mtlvk { " · GPU helper on" } else { "" }));
+        }
+        let prof = features::load(&inst.dir);
+        let off: Vec<String> = features::defs().features.iter().filter(|f| !prof.enabled(&f.id)).map(|f| f.title.clone()).collect();
+        kv(ui, lw, "Features", |ui| {
+            let t = if off.is_empty() { "Everything on".to_string() } else { format!("{} off", off.len()) };
+            let r = ui.label(egui::RichText::new(t).size(T_SMALL).color(INK));
+            if !off.is_empty() {
+                r.on_hover_text(format!("Off: {}", off.join(", ")));
             }
-            let prof = features::load(&inst.dir);
-            let off: Vec<String> = features::defs().features.iter().filter(|f| !prof.enabled(&f.id)).map(|f| f.title.clone()).collect();
-            ui.label(muted("Features").size(12.5));
-            ui.label(egui::RichText::new(if off.is_empty() { "Everything on".to_string() } else { format!("Off: {}", off.join(", ")) }).size(12.5));
-            ui.end_row();
         });
-        ui.add_space(10.0);
+        ui.spacing_mut().item_spacing.y = S2;
+        ui.add_space(S3);
         hline(ui);
-        ui.add_space(4.0);
 
         // ---- Features
-        let prof = features::load(&inst.dir);
         let preset = features::preset_of(&prof).map(|p| match p.as_str() { "full" => "Full", "lean" => "Lean", "minimal" => "Minimal", _ => "Custom" }).unwrap_or("Custom");
-        let open = self.open.contains("features");
-        if fold(ui, "Features", preset, open) != open {
-            if open { self.open.remove("features"); } else { self.open.insert("features"); }
-        }
-        if self.open.contains("features") {
+        if self.fold_section(ui, "features", "Features", preset) {
             self.features_section(ui, inst, phase);
         }
         hline(ui);
-        ui.add_space(4.0);
 
         // ---- Logs
-        let open = self.open.contains("logs");
         let nlines = self.logs.as_ref().filter(|l| l.0 == id).map(|l| l.1.lines.len()).unwrap_or(0);
-        if fold(ui, "Logs", &if open && nlines > 0 { format!("{nlines} lines") } else { String::new() }, open) != open {
-            if open { self.open.remove("logs"); } else { self.open.insert("logs"); }
-        }
-        if self.open.contains("logs") {
+        let summary = if self.open.contains("logs") && nlines > 0 { format!("{nlines} lines") } else { String::new() };
+        if self.fold_section(ui, "logs", "Logs", &summary) {
             self.logs_section(ui, inst, st);
         } else {
             self.logs = None;
         }
         hline(ui);
-        ui.add_space(4.0);
 
         // ---- Performance
-        let open = self.open.contains("perf");
         let summary = if on { format!("{} · {:.0}% CPU", fmt_mb(st.map(|s| s.pss_mb).unwrap_or(0.0)), st.map(|s| s.cpu_pct).unwrap_or(0.0)) } else { String::new() };
-        if fold(ui, "Performance", &summary, open) != open {
-            if open { self.open.remove("perf"); } else { self.open.insert("perf"); }
-        }
-        if self.open.contains("perf") {
-            self.perf_section(ui, st);
+        if self.fold_section(ui, "perf", "Performance", &summary) {
+            self.perf_section(ui, &id, st);
         }
         hline(ui);
-        ui.add_space(4.0);
 
         // ---- Advanced
-        let open = self.open.contains("adv");
-        if fold(ui, "Advanced", "", open) != open {
-            if open { self.open.remove("adv"); } else { self.open.insert("adv"); }
-        }
-        if self.open.contains("adv") {
+        if self.fold_section(ui, "adv", "Advanced", "") {
             self.advanced_section(ui, inst, st);
         }
+    }
+
+    fn fold_section(&mut self, ui: &mut egui::Ui, key: &'static str, title_text: &str, summary: &str) -> bool {
+        let open = self.open.contains(key);
+        if fold(ui, title_text, summary, open) != open {
+            if open {
+                self.open.remove(key);
+            } else {
+                self.open.insert(key);
+            }
+        }
+        let now = self.open.contains(key);
+        if now {
+            ui.add_space(2.0);
+        }
+        now
     }
 
     fn features_section(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, phase: Phase) {
@@ -225,59 +260,65 @@ impl App {
         let cur = features::preset_of(&prof);
         let presets = [("full", "Full"), ("lean", "Lean"), ("minimal", "Minimal")];
         let mut changed = false;
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            let sel = presets.iter().position(|p| cur.as_deref() == Some(p.0));
-            if let Some(i) = segmented(ui, &presets.map(|p| p.1), sel, true) {
-                let _ = features::apply_preset(&dev, presets[i].0);
-                changed = true;
-            }
-            ui.label(muted("Turn off what you don't use to save memory.").size(12.0));
-        });
-        ui.add_space(6.0);
+        ui.label(muted("Turn off what you don't use to save memory."));
+        ui.add_space(S1);
+        let sel = presets.iter().position(|p| cur.as_deref() == Some(p.0));
+        if let Some(i) = segmented(ui, &presets.map(|p| p.1), sel, true) {
+            let _ = features::apply_preset(&dev, presets[i].0);
+            changed = true;
+        }
+        ui.add_space(S2);
         let mut saving = 0u64;
         for f in features::list(&dev) {
             let mut on = f.enabled;
             let what = f.desc.split_once(" Off:").map(|(a, _)| a.trim().to_string()).unwrap_or(f.desc.clone());
             ui.horizontal(|ui| {
-                ui.add_space(8.0);
                 ui.vertical(|ui| {
-                    ui.set_width(ui.available_width() - 120.0);
+                    ui.set_width(ui.available_width() - 104.0);
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.label(egui::RichText::new(&f.title).size(13.5).strong());
-                    ui.add(egui::Label::new(muted(what).size(11.5)).wrap());
+                    ui.label(strong(&f.title));
+                    ui.add(egui::Label::new(muted(what)).wrap());
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if toggle(ui, &mut on).changed() {
                         let _ = features::set(&dev, &f.id, on);
                         changed = true;
                     }
-                    ui.label(muted(if f.cost_mb > 0 { format!("{} MB", f.cost_mb) } else { String::new() }).size(11.5));
+                    if f.cost_mb > 0 {
+                        ui.label(muted(format!("{} MB", f.cost_mb)));
+                    }
                 });
-            }).response.on_hover_text(&f.tech);
+            })
+            .response
+            .on_hover_text(&f.tech);
             if !on && f.default {
                 saving += f.cost_mb;
             }
-            ui.add_space(4.0);
+            ui.add_space(S1);
         }
         if changed {
             self.open.insert("features-changed");
         }
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            if saving > 0 {
-                pill(ui, &format!("Saving {saving} MB"), GREEN);
-            }
-            if self.open.contains("features-changed") && phase != Phase::Off {
-                ui.label(egui::RichText::new("Restart to apply").color(ORANGE).size(12.5));
-                if ui.add(small("⟳  Restart now")).clicked() {
-                    self.open.remove("features-changed");
-                    self.restart(&inst.id);
-                }
-            }
-        });
-        ui.add_space(6.0);
+        if saving > 0 {
+            dot_label(ui, &format!("Saving about {saving} MB"), GOOD);
+        }
+        if self.open.contains("features-changed") && phase != Phase::Off {
+            ui.add_space(S1);
+            egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(R_MD).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(icon::WARNING_CIRCLE).size(15.0).color(WARN));
+                    ui.label(body("Restart to apply"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(Btn::secondary("Restart now").small()).clicked() {
+                            self.open.remove("features-changed");
+                            self.restart(&inst.id);
+                        }
+                    });
+                });
+            });
+        }
+        ui.add_space(S3);
     }
 
     fn logs_section(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, st: Option<&instance::Status>) {
@@ -293,167 +334,196 @@ impl App {
             }
             ui.ctx().request_repaint_after(Duration::from_millis(1000));
         }
-        ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.add(egui::TextEdit::singleline(&mut self.log_filter).hint_text("🔍  Filter").desired_width(150.0));
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let rest = ui.available_width() - 132.0 - 2.0 * H_MD - 3.0 * 6.0 - 4.0;
+            search(ui, &mut self.log_filter, "Filter", rest.max(80.0));
             let sources = self.logs.as_ref().map(|l| l.1.sources.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("logsrc").width(130.0).selected_text(if self.log_source.is_empty() { "All sources".to_string() } else { truncate(&self.log_source, 18) }).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("logsrc").icon(caret).width(132.0).selected_text(egui::RichText::new(if self.log_source.is_empty() { "All sources".to_string() } else { truncate(&self.log_source, 15) }).size(T_SMALL)).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.log_source, String::new(), "All sources");
                 for s in sources {
                     ui.selectable_value(&mut self.log_source, s.clone(), s);
                 }
             });
-            let t = if self.log_paused { "▶" } else { "⏸" };
-            if ui.add(small(t)).on_hover_text(if self.log_paused { "Follow" } else { "Pause" }).clicked() {
+            let (ic, tip) = if self.log_paused { (icon::PLAY, "Follow") } else { (icon::PAUSE, "Pause") };
+            if ui.add(Btn::tool(ic)).on_hover_text(tip).clicked() {
                 self.log_paused = !self.log_paused;
             }
-            if ui.add(small("Clear")).clicked() {
+            if ui.add(Btn::tool(icon::TRASH)).on_hover_text("Clear").clicked() {
                 if let Some((_, t)) = &mut self.logs {
                     t.lines.clear();
                 }
             }
         });
-        ui.add_space(4.0);
+        ui.add_space(S1);
         let f = self.log_filter.to_lowercase();
         let src = self.log_source.clone();
         let paused = self.log_paused;
         if let Some((_, t)) = &self.logs {
             let rows: Vec<&logs::Line> = t.lines.iter().filter(|l| (src.is_empty() || l.source == src) && (f.is_empty() || l.text.to_lowercase().contains(&f) || l.source.to_lowercase().contains(&f))).collect();
-            egui::Frame::new().fill(egui::Color32::from_rgb(0x0b, 0x0d, 0x11)).corner_radius(8).inner_margin(8).show(ui, |ui| {
+            egui::Frame::new().fill(WELL).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(R_MD).inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let h = egui::TextStyle::Monospace.resolve(ui.style()).size + 4.0;
-                egui::ScrollArea::vertical().id_salt(("logscroll", &inst.id)).max_height(380.0).min_scrolled_height(380.0).stick_to_bottom(!paused).auto_shrink([false, false]).show_rows(ui, h, rows.len(), |ui, range| {
-                    for l in &rows[range] {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(egui::RichText::new(truncate(&l.source, 16)).monospace().color(ACCENT.gamma_multiply(0.8)).size(11.5));
-                            ui.add(egui::Label::new(egui::RichText::new(&l.text).monospace().size(11.5)).truncate());
-                        });
-                    }
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let h = 18.0;
+                let mono = egui::FontId::monospace(11.0);
+                egui::ScrollArea::vertical().id_salt(("logscroll", &inst.id)).max_height(400.0).min_scrolled_height(400.0).stick_to_bottom(!paused).auto_shrink([false, false]).show_rows(ui, h, rows.len().max(1), |ui, range| {
                     if rows.is_empty() {
-                        ui.label(muted("Nothing yet").size(12.0));
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(10.0);
+                            ui.label(muted(if f.is_empty() && src.is_empty() { "Nothing yet" } else { "Nothing matches" }));
+                        });
+                        return;
+                    }
+                    let srcw = 104.0;
+                    for l in &rows[range.start.min(rows.len())..range.end.min(rows.len())] {
+                        let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 0.0, egui::Color32::from_rgb(0x1b, 0x1c, 0x1f));
+                        }
+                        let g = galley_trunc(ui, &l.source, mono.clone(), INK_3, srcw - 8.0);
+                        ui.painter().galley(egui::pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, INK_3);
+                        let g = galley_trunc(ui, &l.text, mono.clone(), INK, r.width() - srcw - 16.0);
+                        ui.painter().galley(egui::pos2(r.left() + 10.0 + srcw, r.center().y - g.size().y / 2.0), g, INK);
+                        resp.on_hover_ui(|ui| {
+                            ui.set_max_width(520.0);
+                            ui.label(muted(&l.source));
+                            ui.label(egui::RichText::new(&l.text).monospace().size(11.0).color(INK));
+                        });
                     }
                 });
             });
         }
-        ui.add_space(6.0);
+        ui.add_space(S3);
     }
 
-    fn perf_section(&mut self, ui: &mut egui::Ui, st: Option<&instance::Status>) {
-        ui.add_space(4.0);
+    fn perf_section(&mut self, ui: &mut egui::Ui, id: &str, st: Option<&instance::Status>) {
         let Some(s) = st.filter(|s| s.phase != Phase::Off) else {
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                ui.label(muted("Start the phone to see what it uses.").size(12.5));
-            });
-            ui.add_space(6.0);
+            ui.label(muted("Start the phone to see what it uses."));
+            ui.add_space(S3);
             return;
         };
-        let top = s.procs.iter().take(25);
+        let fps = self.viewers.get(id).map(|v| v.fps()).unwrap_or(0);
+        let (fv, fnote) = if fps > 0 { (fps.to_string(), "fps") } else { ("Idle".to_string(), "") };
+        stat_row(ui, CARD, &[("Processes", s.procs.len().to_string(), ""), ("Screen updates", fv, fnote)]);
+        ui.add_space(S2);
+        let top: Vec<_> = s.procs.iter().take(25).collect();
         let max = s.procs.first().map(|p| p.pss_mb).unwrap_or(1.0).max(1.0);
-        egui::Frame::new().fill(CARD).corner_radius(8).inner_margin(8).show(ui, |ui| {
+        egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(R_MD).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            egui::Grid::new("perf").num_columns(3).spacing([10.0, 4.0]).min_col_width(40.0).show(ui, |ui| {
-                ui.label(muted("PROCESS").size(10.5));
-                ui.label(muted("MEMORY").size(10.5));
-                ui.label(muted("CPU").size(10.5));
-                ui.end_row();
-                for p in top {
-                    ui.horizontal(|ui| {
-                        ui.set_width(150.0);
-                        ui.add(egui::Label::new(egui::RichText::new(&p.comm).size(12.0)).truncate()).on_hover_text(format!("pid {}", p.pid));
-                    });
-                    ui.horizontal(|ui| {
-                        let (r, pt) = ui.allocate_painter(egui::vec2(80.0, 8.0), egui::Sense::hover());
-                        pt.rect_filled(r.rect, 3.0, CARD2);
-                        let w = (p.pss_mb / max) as f32 * r.rect.width();
-                        pt.rect_filled(egui::Rect::from_min_size(r.rect.min, egui::vec2(w, 8.0)), 3.0, ACCENT);
-                        ui.label(egui::RichText::new(format!("{:.0} MB", p.pss_mb)).size(12.0));
-                    });
-                    ui.label(egui::RichText::new(format!("{:.0}%", p.cpu_pct)).size(12.0).color(if p.cpu_pct > 50.0 { ORANGE } else { TEXT }));
-                    ui.end_row();
-                }
-            });
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let w = ui.available_width();
+            let (cpu_w, mem_w, bar_w) = (40.0, 58.0, 56.0);
+            let name_w = w - cpu_w - mem_w - bar_w - 16.0;
+            let (hr, _) = ui.allocate_exact_size(egui::vec2(w, 22.0), egui::Sense::hover());
+            let hf = font_sb(10.5);
+            let p = ui.painter();
+            p.text(hr.left_center(), egui::Align2::LEFT_CENTER, "PROCESS", hf.clone(), INK_3);
+            p.text(egui::pos2(hr.right() - cpu_w - 8.0, hr.center().y), egui::Align2::RIGHT_CENTER, "MEMORY", hf.clone(), INK_3);
+            p.text(egui::pos2(hr.right(), hr.center().y), egui::Align2::RIGHT_CENTER, "CPU", hf, INK_3);
+            for pr in top {
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 22.0), egui::Sense::hover());
+                let p = ui.painter();
+                p.hline(r.x_range(), r.top(), egui::Stroke::new(1.0_f32, BORDER));
+                let g = galley_trunc(ui, &pr.comm, font(T_SMALL), INK, name_w);
+                p.galley(egui::pos2(r.left(), r.center().y - g.size().y / 2.0), g, INK);
+                let bx = r.left() + name_w + 8.0;
+                let track = egui::Rect::from_min_size(egui::pos2(bx, r.center().y - 2.0), egui::vec2(bar_w, 4.0));
+                p.rect_filled(track, 2.0, RAISED);
+                p.rect_filled(egui::Rect::from_min_size(track.min, egui::vec2(((pr.pss_mb / max) as f32 * bar_w).max(2.0), 4.0)), 2.0, ACCENT);
+                p.text(egui::pos2(r.right() - cpu_w - 8.0, r.center().y), egui::Align2::RIGHT_CENTER, format!("{:.0} MB", pr.pss_mb), font(T_SMALL), INK_2);
+                p.text(egui::pos2(r.right(), r.center().y), egui::Align2::RIGHT_CENTER, format!("{:.0}%", pr.cpu_pct), font(T_SMALL), if pr.cpu_pct > 50.0 { WARN } else { INK_2 });
+                resp.on_hover_text(format!("{} · pid {}", pr.comm, pr.pid));
+            }
             if s.procs.len() > 25 {
-                ui.label(muted(format!("and {} smaller ones", s.procs.len() - 25)).size(11.5));
+                ui.add_space(6.0);
+                ui.label(muted(format!("and {} smaller ones", s.procs.len() - 25)));
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(S3);
     }
 
     fn advanced_section(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, st: Option<&instance::Status>) {
-        ui.add_space(4.0);
         let Some((_, s)) = &mut self.settings else { return };
         let mut save = false;
-        egui::Grid::new("adv").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label(muted("Graphics").size(12.5)).on_hover_text("X86CODE_METAL: GPU for everything (all), only the system (backboardd), or software rendering (0). Applies at the next start.");
-            let opts = [("all", "GPU"), ("backboardd", "System only"), ("0", "Software")];
-            let sel = opts.iter().position(|o| o.0 == s.metal);
-            if let Some(i) = segmented(ui, &opts.map(|o| o.1), sel, true) {
-                s.metal = opts[i].0.into();
-                save = true;
-            }
-            ui.end_row();
-            ui.label(muted("Services").size(12.5)).on_hover_text("A64_JOBS: which background services boot. Standard is right for daily use; Full adds widgets; Slim and Minimal are for tests.");
-            let opts = [("std", "Standard"), ("full", "Full"), ("slim", "Slim"), ("min", "Minimal")];
-            let sel = opts.iter().position(|o| o.0 == s.jobs);
-            if let Some(i) = segmented(ui, &opts.map(|o| o.1), sel, true) {
-                s.jobs = opts[i].0.into();
-                save = true;
-            }
-            ui.end_row();
-            ui.label(muted("Memory cap").size(12.5)).on_hover_text("X86SIM_MEM_MAX for this phone's processes (systemd MemoryMax)");
-            if ui.add(egui::TextEdit::singleline(&mut s.mem_max).desired_width(80.0)).lost_focus() {
-                save = true;
-            }
-            ui.end_row();
-            ui.label(muted("Share GPU helper").size(12.5)).on_hover_text("A64_MTLVK_SOCKET: use one mtlvk for all running phones instead of starting another");
-            if toggle(ui, &mut s.share_mtlvk).changed() {
-                save = true;
-            }
-            ui.end_row();
-            ui.label(muted("Extra environment").size(12.5)).on_hover_text("A64_ENV: K=V pairs for launchd_sim, e.g. X86CODE_A64_TRACE=1");
-            if ui.add(egui::TextEdit::singleline(&mut s.extra_env).hint_text("KEY=value …").desired_width(ui.available_width() - 10.0)).lost_focus() {
-                save = true;
-            }
-            ui.end_row();
+        let field = |ui: &mut egui::Ui, label: &str, tip: &str| {
+            ui.add_space(S1);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(egui::RichText::new(label).size(T_SMALL).family(medium()).color(INK_2));
+                ui.label(egui::RichText::new(icon::INFO).size(12.0).color(INK_3)).on_hover_text(tip);
+            });
+        };
+        ui.label(muted("These apply at the next start."));
+        field(ui, "Graphics", "X86CODE_METAL: GPU for everything (all), only the system (backboardd), or software rendering (0).");
+        let opts = [("all", "GPU"), ("backboardd", "System only"), ("0", "Software")];
+        let sel = opts.iter().position(|o| o.0 == s.metal);
+        if let Some(i) = segmented(ui, &opts.map(|o| o.1), sel, true) {
+            s.metal = opts[i].0.into();
+            save = true;
+        }
+        field(ui, "Background services", "A64_JOBS: which background services boot. Standard is right for daily use; Full adds widgets; Slim and Minimal are for tests.");
+        let opts = [("std", "Standard"), ("full", "Full"), ("slim", "Slim"), ("min", "Minimal")];
+        let sel = opts.iter().position(|o| o.0 == s.jobs);
+        if let Some(i) = segmented(ui, &opts.map(|o| o.1), sel, true) {
+            s.jobs = opts[i].0.into();
+            save = true;
+        }
+        field(ui, "Memory cap", "X86SIM_MEM_MAX for this phone's processes (systemd MemoryMax), e.g. 6G. Empty: no cap.");
+        if ui.add(egui::TextEdit::singleline(&mut s.mem_max).hint_text(egui::RichText::new("No cap").color(INK_3)).desired_width(120.0).margin(egui::Margin::symmetric(8, 6))).lost_focus() {
+            save = true;
+        }
+        ui.add_space(S1);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(egui::RichText::new("Share the GPU helper").size(T_SMALL).family(medium()).color(INK_2));
+            ui.label(egui::RichText::new(icon::INFO).size(12.0).color(INK_3)).on_hover_text("A64_MTLVK_SOCKET: use one mtlvk for all running phones instead of starting another");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if toggle(ui, &mut s.share_mtlvk).changed() {
+                    save = true;
+                }
+            });
         });
+        field(ui, "Extra environment", "A64_ENV: KEY=value pairs for launchd_sim, e.g. X86CODE_A64_TRACE=1");
+        if ui.add(egui::TextEdit::singleline(&mut s.extra_env).font(egui::TextStyle::Monospace).hint_text(egui::RichText::new("KEY=value …").color(INK_3)).desired_width(ui.available_width()).margin(egui::Margin::symmetric(8, 6))).lost_focus() {
+            save = true;
+        }
         if save {
             let _ = instance::save_settings(&inst.dir, s);
             self.say("Saved. Applies at the next start.");
         }
-        ui.add_space(8.0);
-        ui.label(muted("Paths").size(12.0));
-        let mono = |ui: &mut egui::Ui, k: &str, v: String| {
-            ui.label(muted(k).size(11.5));
-            ui.add(egui::Label::new(egui::RichText::new(v).monospace().size(11.0)).truncate().selectable(true));
-            ui.end_row();
+        ui.add_space(S3);
+        ui.label(overline("Paths"));
+        ui.add_space(2.0);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let row = |ui: &mut egui::Ui, k: &str, v: String| {
+            kv(ui, 84.0, k, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(&v).monospace().size(11.0).color(INK_2)).truncate().selectable(true)).on_hover_text(&v);
+            });
         };
-        egui::Grid::new("paths").num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
-            mono(ui, "Device", inst.dir.display().to_string());
-            mono(ui, "State", st.map(|s| s.state_dir.clone()).unwrap_or(inst.state_dir.clone()).display().to_string());
-            mono(ui, "Prefix", st.map(|s| s.prefix.clone()).unwrap_or(inst.prefix.clone()).display().to_string());
-            mono(ui, "Frame ring", inst.ring.display().to_string());
-            mono(ui, "Input socket", inst.sock.display().to_string());
-            mono(ui, "Runtime", inst.runtime_root.display().to_string());
-            mono(ui, "Cache", x86code_core::sim::jc_for(&inst.runtime_root).display().to_string());
-            mono(ui, "UDID", inst.udid.clone());
-            mono(ui, "Model id", inst.model_id.clone());
-        });
-        ui.add_space(6.0);
+        row(ui, "Device", inst.dir.display().to_string());
+        row(ui, "State", st.map(|s| s.state_dir.clone()).unwrap_or(inst.state_dir.clone()).display().to_string());
+        row(ui, "Prefix", st.map(|s| s.prefix.clone()).unwrap_or(inst.prefix.clone()).display().to_string());
+        row(ui, "Frame ring", inst.ring.display().to_string());
+        row(ui, "Input", inst.sock.display().to_string());
+        row(ui, "Runtime", inst.runtime_root.display().to_string());
+        row(ui, "Cache", x86code_core::sim::jc_for(&inst.runtime_root).display().to_string());
+        row(ui, "UDID", inst.udid.clone());
+        row(ui, "Model id", inst.model_id.clone());
+        ui.spacing_mut().item_spacing.y = S2;
+        ui.add_space(S3);
         ui.horizontal(|ui| {
-            if ui.add(small("Open in its own window")).on_hover_text("The standalone viewer (simview) follows the phone booted with the default dirs").clicked() {
+            if ui.add(Btn::secondary("Own window").icon(icon::APP_WINDOW).small()).on_hover_text("The standalone viewer (simview). It follows the phone booted with the default dirs.").clicked() {
                 match x86code_core::sim::show() {
                     Ok(()) => self.say("Window opened"),
                     Err(e) => self.say(format!("{e:#}")),
                 }
             }
-            if ui.add(small("Pre-translate for this iOS")).clicked() {
+            if ui.add(Btn::secondary("Pre-translate this iOS").icon(icon::LIGHTNING).small()).clicked() {
                 self.aot.select(inst.runtime_root.clone(), Some(inst.dir.clone()));
                 self.view = View::Aot;
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(S3);
     }
 }

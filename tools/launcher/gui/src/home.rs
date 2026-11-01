@@ -1,38 +1,164 @@
-//! Home: every phone as a card with its live screen, state, memory and CPU, Start/Stop; "Add phone".
+//! Phones: a grid of cards for phones that can start (live screen, state, memory/CPU, Start/Stop), and a compact list of
+//! phones waiting for an iOS version, grouped by version with one Download each. "Add phone" dialog.
 use crate::theme::*;
 use crate::{viewer, AddDialog, App, View};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use x86code_core::instance::Phase;
 
 impl App {
-    pub fn home(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            page_header(ui, "Phones", "");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                ui.add_space(4.0);
-                if ui.add(primary("＋  Add phone")).clicked() {
-                    let rt = self.runtimes.iter().position(|r| r.present).unwrap_or(0);
-                    self.add = Some(AddDialog { model: 0, runtime: rt, name: String::new(), busy: Arc::new(Mutex::new(None)), working: false });
-                }
-            });
-        });
-        if self.insts.is_empty() {
-            card(ui, |ui| ui.label(muted("No phones yet. Add one to get started.")));
+    /// Starts downloading an iOS build (unless it already is). Shared by every Download button.
+    pub fn download(&mut self, build: &str, label: &str) {
+        if build.is_empty() {
+            self.view = View::Ios;
             return;
         }
-        let cw = self.hub.card_w;
-        let gap = 14.0;
-        let per_row = ((ui.available_width() + gap) / (cw + gap)).floor().max(1.0) as usize;
-        let ids: Vec<String> = self.insts.iter().map(|i| i.id.clone()).collect();
-        for row in ids.chunks(per_row) {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for id in row {
-                    self.card(ui, id, cw);
-                }
+        if self.fetching.contains_key(build) {
+            return;
+        }
+        match x86code_core::host::fetch(build) {
+            Ok(pid) => {
+                self.fetching.insert(build.to_string(), pid);
+                self.say(format!("Downloading {label}. This takes a while (several GB)."));
+            }
+            Err(e) => self.say(format!("Couldn't start the download: {e:#}")),
+        }
+    }
+
+    pub fn open_add_dialog(&mut self) {
+        let rt = self.runtimes.iter().position(|r| r.present).unwrap_or(0);
+        self.add = Some(AddDialog { model: 0, runtime: rt, name: String::new(), busy: Arc::new(Mutex::new(None)), working: false });
+    }
+
+    pub fn home(&mut self, ui: &mut egui::Ui) {
+        let n = self.insts.len();
+        let running = self.insts.iter().filter(|i| self.phase(&i.id) != Phase::Off).count();
+        let subtitle = match (n, running) {
+            (0, _) => String::new(),
+            (n, 0) => format!("{n} phone{}", if n == 1 { "" } else { "s" }),
+            (n, r) => format!("{n} phone{} · {r} running", if n == 1 { "" } else { "s" }),
+        };
+        let mut add = false;
+        page_header(ui, "Phones", &subtitle, |ui| {
+            add = ui.add(Btn::primary("Add phone").icon(icon::PLUS)).clicked();
+        });
+        if add {
+            self.open_add_dialog();
+        }
+        if self.insts.is_empty() {
+            card(ui, |ui| {
+                empty_state(ui, icon::DEVICE_MOBILE, "No phones yet", "Add one to get started. Each phone has its own apps, data and settings.", |ui| {
+                    if ui.add(Btn::primary("Add phone").icon(icon::PLUS)).clicked() {
+                        add = true;
+                    }
+                });
             });
-            ui.add_space(gap);
+            if add {
+                self.open_add_dialog();
+            }
+            return;
+        }
+
+        let ready: Vec<String> = self.insts.iter().filter(|i| i.runtime_present).map(|i| i.id.clone()).collect();
+        if !ready.is_empty() {
+            let gap = S4;
+            let target = self.hub.card_w;
+            let avail = ui.available_width();
+            let cols = ((avail + gap) / (target + gap)).floor().max(1.0) as usize;
+            let w = ((avail - gap * (cols as f32 - 1.0)) / cols as f32).min(target * 1.25).floor();
+            for row in ready.chunks(cols) {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for id in row {
+                        self.card(ui, id, w);
+                    }
+                });
+                ui.add_space(gap);
+            }
+        }
+
+        // phones whose iOS isn't installed: one compact group per version
+        let mut groups: Vec<(String, String, Vec<String>)> = vec![]; // (ios, build, ids)
+        for i in self.insts.iter().filter(|i| !i.runtime_present) {
+            match groups.iter_mut().find(|g| g.0 == i.ios && g.1 == i.build) {
+                Some(g) => g.2.push(i.id.clone()),
+                None => groups.push((i.ios.clone(), i.build.clone(), vec![i.id.clone()])),
+            }
+        }
+        if groups.is_empty() {
+            return;
+        }
+        if !ready.is_empty() {
+            ui.add_space(S3);
+        }
+        section(ui, "Waiting for an iOS download", |_| {});
+        let cat = self.catalogue.lock().unwrap().clone().unwrap_or_default();
+        let mut open = None;
+        let mut fetch = None;
+        list_card(ui, |ui| {
+            for (gi, (ios, build, ids)) in groups.iter().enumerate() {
+                if gi > 0 {
+                    hline(ui);
+                }
+                let fetching = self.fetching.contains_key(build);
+                let gb = cat.iter().find(|c| &c.build == build).map(|c| c.gb);
+                egui::Frame::new().inner_margin(egui::Margin { left: 16, right: 16, top: 14, bottom: 10 }).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+                        ui.painter().rect_filled(r, 8.0, RAISED);
+                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, icon::CLOUD_ARROW_DOWN, font(17.0), INK_2);
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.label(strong(format!("{ios} isn't installed")));
+                            let need = format!("{} phone{} need{} it", ids.len(), if ids.len() == 1 { "" } else { "s" }, if ids.len() == 1 { "s" } else { "" });
+                            let line = if fetching {
+                                "Downloading…".to_string()
+                            } else if let Some(gb) = gb {
+                                format!("{need} · {gb:.1} GB download")
+                            } else {
+                                need
+                            };
+                            ui.label(muted(line));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if fetching {
+                                ui.spinner();
+                                ui.ctx().request_repaint_after(Duration::from_secs(2));
+                            } else if ui.add(Btn::secondary("Download").icon(icon::DOWNLOAD_SIMPLE)).on_hover_text(format!("Build {build}")).clicked() {
+                                fetch = Some((build.clone(), ios.clone()));
+                            }
+                        });
+                    });
+                });
+                for id in ids {
+                    let Some(inst) = self.inst(id) else { continue };
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+                    let p = ui.painter();
+                    if resp.hovered() {
+                        p.rect_filled(rect.shrink2(egui::vec2(8.0, 1.0)), R_MD, RAISED);
+                    }
+                    let x0 = rect.left() + 16.0 + 32.0 + 12.0;
+                    p.text(egui::pos2(x0, rect.center().y), egui::Align2::LEFT_CENTER, icon::DEVICE_MOBILE, font(14.0), INK_3);
+                    let name = galley_trunc(ui, &inst.name, font_m(T_BODY), INK, 220.0);
+                    let nw = name.size().x;
+                    p.galley(egui::pos2(x0 + 22.0, rect.center().y - name.size().y / 2.0), name, INK);
+                    p.text(egui::pos2(x0 + 22.0 + nw + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, &inst.model, font(T_SMALL), INK_3);
+                    p.text(rect.right_center() - egui::vec2(20.0, 0.0), egui::Align2::RIGHT_CENTER, icon::CARET_RIGHT, font(13.0), if resp.hovered() { INK_2 } else { INK_3 });
+                    if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        open = Some(id.clone());
+                    }
+                }
+                ui.add_space(6.0);
+            }
+        });
+        if let Some((b, l)) = fetch {
+            self.download(&b, &l);
+        }
+        if let Some(id) = open {
+            self.view = View::Phone(id);
         }
     }
 
@@ -42,91 +168,76 @@ impl App {
         let phase = st.as_ref().map(|s| s.phase).unwrap_or(Phase::Off);
         let thumbs = self.hub.thumbnails;
         let mut open = false;
-        egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(14).inner_margin(14).show(ui, |ui| {
-            ui.set_width(w - 28.0);
+        let frame = egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(R_LG);
+        let resp = frame.show(ui, |ui| {
+            ui.set_width(w);
             ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(&inst.name).size(15.5).strong()).truncate());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match phase {
-                        Phase::Running => pill(ui, "Running", GREEN),
-                        Phase::Starting => pill(ui, "Starting…", ORANGE),
-                        Phase::Stopping => pill(ui, "Stopping…", ORANGE),
-                        Phase::Off if !inst.runtime_present => pill(ui, "Needs iOS", RED),
-                        Phase::Off => pill(ui, "Off", MUTED),
-                    });
-                });
-                ui.label(muted(format!("{} · {}", inst.model, inst.ios)).size(12.0));
-                ui.add_space(6.0);
-                // the screen
-                let avail = egui::vec2(w - 28.0, (w - 28.0) * 1.35);
-                let live = matches!(phase, Phase::Running | Phase::Starting) && thumbs;
-                let placeholder = match phase {
-                    Phase::Off if !inst.runtime_present => format!("{} not downloaded", inst.ios),
-                    Phase::Off => "Off".into(),
-                    Phase::Starting => "Starting…".into(),
-                    Phase::Stopping => "Stopping…".into(),
-                    Phase::Running => if thumbs { "" } else { "Running" }.into(),
+            ui.spacing_mut().item_spacing.y = 0.0;
+            // the screen, in a well
+            let well_h = (w * 1.12).round();
+            let (well, wresp) = ui.allocate_exact_size(egui::vec2(w, well_h), egui::Sense::click());
+            ui.painter().rect_filled(well.shrink(1.0), egui::CornerRadius { nw: R_LG - 1, ne: R_LG - 1, sw: 0, se: 0 }, rgb_well());
+            ui.painter().hline(well.x_range(), well.bottom(), egui::Stroke::new(1.0_f32, BORDER));
+            let live = matches!(phase, Phase::Running | Phase::Starting) && thumbs;
+            let placeholder = match phase {
+                Phase::Off => "Off",
+                Phase::Starting => "Starting…",
+                Phase::Stopping => "Stopping…",
+                Phase::Running => if thumbs { "" } else { "Running" },
+            };
+            let inner = well.shrink2(egui::vec2(S4, S4));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Center)));
+            if let Some(v) = self.viewer(id) {
+                v.show(&mut child, inner.size(), live, placeholder, false, viewer::THUMB);
+            }
+            if wresp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                open = true;
+            }
+            // text + actions
+            egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 14 }).show(ui, |ui| {
+                ui.set_width(w - 28.0);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.add(egui::Label::new(title(&inst.name)).truncate());
+                ui.add(egui::Label::new(muted(format!("{} · {}", inst.model, inst.ios))).truncate());
+                ui.add_space(4.0);
+                let (label, col) = phase_look(phase, true);
+                let line = match &st {
+                    Some(s) if phase != Phase::Off => format!("{label} · {} · {:.0}% CPU", fmt_mb(s.pss_mb), s.cpu_pct),
+                    _ => label.to_string(),
                 };
-                let (rect, resp) = ui.allocate_exact_size(avail, egui::Sense::click());
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
-                if let Some(v) = self.viewer(id) {
-                    child.allocate_ui_with_layout(avail, egui::Layout::top_down(egui::Align::Center), |ui| {
-                        v.show(ui, avail, live, &placeholder, false, viewer::THUMB);
-                    });
+                let r = ui.horizontal(|ui| dot_label(ui, &line, col)).response;
+                if let Some(u) = st.as_ref().and_then(|s| s.uptime_s) {
+                    r.on_hover_text(format!("Up for {}", fmt_s(u)));
                 }
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                    open = true;
-                }
-                ui.add_space(8.0);
-                match &st {
-                    Some(s) if phase != Phase::Off => {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(fmt_mb(s.pss_mb)).size(13.0).strong());
-                            ui.label(muted("memory").size(11.5));
-                            ui.add_space(6.0);
-                            ui.label(egui::RichText::new(format!("{:.0}%", s.cpu_pct)).size(13.0).strong());
-                            ui.label(muted("CPU").size(11.5));
-                            if let Some(u) = s.uptime_s {
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.label(muted(format!("up {}", fmt_s(u))).size(11.5));
-                                });
-                            }
-                        });
-                    }
-                    _ => {
-                        ui.label(muted(format!("{} × {}", inst.screen.0, inst.screen.1)).size(11.5));
-                    }
-                }
-                ui.add_space(6.0);
+                ui.add_space(S3);
                 ui.horizontal(|ui| {
-                    let bw = (ui.available_width() - 8.0) / 2.0;
+                    ui.spacing_mut().item_spacing.x = S2;
+                    let bw = ((ui.available_width() - S2) / 2.0).floor();
                     match phase {
-                        Phase::Off if !inst.runtime_present => {
-                            if ui.add(primary("Download iOS").min_size(egui::vec2(bw, 32.0))).clicked() {
-                                self.view = View::Ios;
-                            }
-                        }
                         Phase::Off => {
-                            if ui.add(primary("▶  Start").min_size(egui::vec2(bw, 32.0))).clicked() {
+                            if ui.add(Btn::primary("Start").icon(icon::PLAY).min_w(bw)).clicked() {
                                 self.start(id);
                             }
                         }
                         Phase::Running | Phase::Starting => {
-                            if ui.add(danger("■  Stop").min_size(egui::vec2(bw, 32.0))).clicked() {
+                            if ui.add(Btn::secondary("Stop").icon(icon::STOP).icon_color(CRIT_INK).min_w(bw)).clicked() {
                                 self.stop(id);
                             }
                         }
                         Phase::Stopping => {
-                            ui.add_enabled(false, secondary("Stopping…").min_size(egui::vec2(bw, 32.0)));
+                            ui.add_enabled(false, Btn::secondary("Stopping…").min_w(bw));
                         }
                     }
-                    if ui.add(secondary("Open").min_size(egui::vec2(bw, 32.0))).clicked() {
+                    if ui.add(Btn::secondary("Open").min_w(bw)).clicked() {
                         open = true;
                     }
                 });
             });
+            });
         });
+        if resp.response.hovered() {
+            ui.painter().rect_stroke(resp.response.rect, R_LG, egui::Stroke::new(1.0_f32, BORDER_STRONG), egui::StrokeKind::Inside);
+        }
         if open {
             self.view = View::Phone(id.to_string());
         }
@@ -149,48 +260,55 @@ impl App {
                 Err(e) => self.say(format!("Couldn't add it: {e}")),
             }
         }
-        egui::Modal::new("add-phone".into()).frame(egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(14).inner_margin(22)).show(ctx, |ui| {
-            ui.set_width(420.0);
-            ui.label(egui::RichText::new("Add a phone").size(20.0).strong());
-            ui.label(muted("Pick a model and an iOS version. It gets its own data, settings and window."));
-            ui.add_space(12.0);
-            egui::Grid::new("addgrid").num_columns(2).spacing([14.0, 12.0]).show(ui, |ui| {
-                ui.label(muted("Model"));
-                egui::ComboBox::from_id_salt("addmodel").width(260.0).selected_text(self.models.get(d.model).map(|m| m.0.clone()).unwrap_or_default()).show_ui(ui, |ui| {
+        let modal = egui::Modal::new("add-phone".into())
+            .backdrop_color(egui::Color32::from_black_alpha(150))
+            .frame(egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER_STRONG)).corner_radius(12).inner_margin(24).shadow(egui::Shadow { offset: [0, 12], blur: 40, spread: 0, color: egui::Color32::from_black_alpha(140) }))
+            .show(ctx, |ui| {
+                ui.set_width(400.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(egui::RichText::new("Add a phone").size(T_TITLE + 1.0).family(semibold()).color(INK));
+                ui.label(sub("It gets its own apps, data and settings."));
+                ui.add_space(S5);
+                let fw = ui.available_width();
+                ui.label(egui::RichText::new("Model").size(T_SMALL).family(medium()).color(INK_2));
+                egui::ComboBox::from_id_salt("addmodel").icon(caret).width(fw).height(360.0).selected_text(body(self.models.get(d.model).map(|m| m.0.clone()).unwrap_or_default())).show_ui(ui, |ui| {
                     for (i, m) in self.models.iter().enumerate() {
                         ui.selectable_value(&mut d.model, i, &m.0);
                     }
                 });
-                ui.end_row();
-                ui.label(muted("iOS version"));
-                let label = |r: &x86code_core::host::Runtime| if r.present { format!("iOS {}", r.version) } else { format!("iOS {} (not downloaded)", r.version) };
-                egui::ComboBox::from_id_salt("addrt").width(260.0).selected_text(self.runtimes.get(d.runtime).map(label).unwrap_or("none downloaded".into())).show_ui(ui, |ui| {
+                ui.add_space(S3);
+                ui.label(egui::RichText::new("iOS version").size(T_SMALL).family(medium()).color(INK_2));
+                let label = |r: &x86code_core::host::Runtime| if r.present { format!("iOS {}", r.version) } else { format!("iOS {} · not installed", r.version) };
+                egui::ComboBox::from_id_salt("addrt").icon(caret).width(fw).selected_text(body(self.runtimes.get(d.runtime).map(label).unwrap_or("None installed".into()))).show_ui(ui, |ui| {
                     for (i, r) in self.runtimes.iter().enumerate() {
                         ui.add_enabled_ui(r.present, |ui| {
                             ui.selectable_value(&mut d.runtime, i, label(r));
                         });
                     }
                 });
-                ui.end_row();
-                ui.label(muted("Name"));
-                ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Optional, e.g. Test phone").desired_width(260.0));
-                ui.end_row();
+                ui.add_space(S3);
+                ui.label(egui::RichText::new("Name").size(T_SMALL).family(medium()).color(INK_2));
+                ui.add(egui::TextEdit::singleline(&mut d.name).hint_text(egui::RichText::new("Optional, e.g. Test phone").color(INK_3)).desired_width(fw).margin(egui::Margin::symmetric(8, 6)));
+                ui.add_space(S5);
+                ui.horizontal(|ui| {
+                    if d.working {
+                        ui.spinner();
+                        ui.label(muted("Setting it up…"));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let ok = self.runtimes.get(d.runtime).is_some_and(|r| r.present) && !d.working;
+                        if ui.add_enabled(ok, Btn::primary("Add phone").min_w(96.0)).clicked() {
+                            create = true;
+                        }
+                        if ui.add_enabled(!d.working, Btn::secondary("Cancel").min_w(80.0)).clicked() {
+                            close = true;
+                        }
+                    });
+                });
             });
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                let ok = self.runtimes.get(d.runtime).is_some_and(|r| r.present) && !d.working;
-                if ui.add_enabled(ok, primary("Add")).clicked() {
-                    create = true;
-                }
-                if ui.add_enabled(!d.working, secondary("Cancel")).clicked() {
-                    close = true;
-                }
-                if d.working {
-                    ui.spinner();
-                    ui.label(muted("Setting it up…"));
-                }
-            });
-        });
+        if modal.should_close() && !d.working {
+            close = true;
+        }
         if create {
             if let (Some(m), Some(r)) = (self.models.get(d.model).cloned(), self.runtimes.get(d.runtime).cloned()) {
                 d.working = true;
@@ -208,4 +326,8 @@ impl App {
             self.add = Some(d);
         }
     }
+}
+
+fn rgb_well() -> egui::Color32 {
+    egui::Color32::from_rgb(0x15, 0x16, 0x18)
 }

@@ -104,14 +104,32 @@ impl App {
             *c2.lock().unwrap() = Some(v);
         });
         let aot = global::Aot::new(runtimes.iter().find(|r| r.present).map(|r| r.root.clone()));
-        App {
+        // start view / open sections, for scripted screenshots: X86CODE_LAUNCHER_VIEW=ios|aot|settings|add|phone:<id>,
+        // X86CODE_LAUNCHER_OPEN=features,logs,perf,adv
+        let view = match std::env::var("X86CODE_LAUNCHER_VIEW").unwrap_or_default().as_str() {
+            "ios" => View::Ios,
+            "aot" => View::Aot,
+            "settings" => View::Settings,
+            v if v.starts_with("phone:") => View::Phone(v[6..].to_string()),
+            _ => View::Home,
+        };
+        let mut open = HashSet::new();
+        for k in std::env::var("X86CODE_LAUNCHER_OPEN").unwrap_or_default().split(',') {
+            for key in ["features", "logs", "perf", "adv"] {
+                if k == key {
+                    open.insert(key);
+                }
+            }
+        }
+        let add_on_start = std::env::var("X86CODE_LAUNCHER_VIEW").is_ok_and(|v| v == "add");
+        let mut app = App {
             shared,
             insts: instance::list(),
             status: HashMap::new(),
-            view: View::Home,
+            view,
             viewers: HashMap::new(),
             hub: host::load_hub(),
-            open: HashSet::new(),
+            open,
             add: None,
             models: x86code_core::sim::models(),
             message: String::new(),
@@ -131,7 +149,11 @@ impl App {
             disk: host::disk(&x86code_core::aot::scratch()),
             last_slow: Instant::now(),
             ctx: cc.egui_ctx.clone(),
+        };
+        if add_on_start {
+            app.open_add_dialog();
         }
+        app
     }
 
     pub fn say(&mut self, m: impl Into<String>) {
@@ -250,64 +272,56 @@ impl eframe::App for App {
         let (nrun, mb) = self.running_summary();
         egui::SidePanel::left("nav")
             .resizable(false)
-            .exact_width(224.0)
-            .frame(egui::Frame::new().fill(RAIL).inner_margin(egui::Margin { left: 12, right: 12, top: 18, bottom: 14 }).stroke(egui::Stroke::new(1.0_f32, BORDER)))
+            .exact_width(212.0)
+            .frame(egui::Frame::new().fill(WINDOW).inner_margin(egui::Margin { left: 10, right: 10, top: 16, bottom: 14 }).stroke(egui::Stroke::new(1.0_f32, BORDER)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    let (r, p) = ui.allocate_painter(egui::vec2(32.0, 32.0), egui::Sense::hover());
-                    p.rect_filled(r.rect, 9.0, ACCENT);
-                    p.text(r.rect.center(), egui::Align2::CENTER_CENTER, "x86", egui::FontId::proportional(12.0), egui::Color32::WHITE);
+                    ui.add_space(6.0);
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                    ui.painter().rect_filled(r, 7.0, ACCENT_FILL);
+                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, icon::DEVICE_MOBILE, font(17.0), egui::Color32::WHITE);
+                    ui.add_space(2.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(egui::RichText::new("x86Code").size(16.0).strong());
-                        ui.label(muted("iPhone hub").size(11.5));
+                        ui.label(egui::RichText::new("x86Code").size(T_LG).family(semibold()).color(INK));
+                        ui.label(muted("iPhone simulator").size(T_CAPTION));
                     });
                 });
-                ui.add_space(18.0);
+                ui.add_space(S5);
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if nav_item(ui, "▦", "Phones", self.view == View::Home, None) {
+                let n = self.insts.len();
+                let on_phones = matches!(self.view, View::Home | View::Phone(_));
+                if nav_item(ui, icon::SQUARES_FOUR, "Phones", on_phones, &if n > 0 { n.to_string() } else { String::new() }) {
                     self.view = View::Home;
                 }
-                let items: Vec<(String, String, instance::Phase)> = self.insts.iter().map(|i| (i.id.clone(), i.name.clone(), self.phase(&i.id))).collect();
-                for (id, name, ph) in items {
-                    let dot = match ph {
-                        instance::Phase::Running => Some(GREEN),
-                        instance::Phase::Starting | instance::Phase::Stopping => Some(ORANGE),
-                        instance::Phase::Off => None,
-                    };
-                    ui.horizontal(|ui| {
-                        ui.add_space(10.0);
-                        if nav_item(ui, "📱", &name, self.view == View::Phone(id.clone()), dot) {
-                            self.view = View::Phone(id.clone());
-                        }
-                    });
-                }
-                ui.add_space(12.0);
-                hline(ui);
-                ui.add_space(10.0);
-                if nav_item(ui, "⬇", "iOS versions", self.view == View::Ios, None) {
+                if nav_item(ui, icon::DOWNLOAD_SIMPLE, "iOS versions", self.view == View::Ios, "") {
                     self.view = View::Ios;
                     self.runtimes = host::runtimes();
                 }
-                if nav_item(ui, "⚡", "Pre-translate", self.view == View::Aot, None) {
+                if nav_item(ui, icon::LIGHTNING, "Pre-translate", self.view == View::Aot, if self.aot.building() { "•" } else { "" }) {
                     self.view = View::Aot;
                 }
-                if nav_item(ui, "⚙", "Settings", self.view == View::Settings, None) {
+                if nav_item(ui, icon::GEAR_SIX, "Settings", self.view == View::Settings, "") {
                     self.view = View::Settings;
                 }
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                // footer: host status, pinned to the bottom
+                let footer_h = 40.0 + if self.aot.building() { 30.0 } else { 0.0 };
+                ui.add_space((ui.available_height() - footer_h).max(S4));
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    ui.label(muted(format!("{:.0} GB free for caches", self.disk.free_gb)).size(11.5));
-                    if nrun > 0 {
-                        ui.label(muted(format!("{nrun} running · {}", fmt_mb(mb))).size(11.5));
-                    } else {
-                        ui.label(muted("Nothing running").size(11.5));
-                    }
                     if self.aot.building() {
                         let frac = self.aot.progress.as_ref().map(|p| if p.chunks_total > 0 { p.chunks_done as f32 / p.chunks_total as f32 } else { 0.0 }).unwrap_or(0.0);
-                        ui.label(muted(format!("Pre-translating… {:.0}%", frac * 100.0)).size(11.5));
-                        ui.add(egui::ProgressBar::new(frac).desired_height(5.0).fill(ACCENT).corner_radius(3));
+                        ui.label(muted(format!("Pre-translating · {:.0}%", frac * 100.0)));
+                        ui.add(egui::ProgressBar::new(frac).desired_height(4.0).fill(ACCENT).corner_radius(2));
+                        ui.add_space(4.0);
                     }
+                    if nrun > 0 {
+                        dot_label(ui, &format!("{nrun} running · {}", fmt_mb(mb)), GOOD);
+                    } else {
+                        dot_label(ui, "Nothing running", INK_3);
+                    }
+                    ui.label(muted(format!("{} free for caches", if self.disk.free_gb >= 1000.0 { format!("{:.1} TB", self.disk.free_gb / 1000.0) } else { format!("{:.0} GB", self.disk.free_gb) })));
                 });
             });
 
@@ -315,23 +329,38 @@ impl eframe::App for App {
         match view {
             View::Phone(id) => self.phone_view(ctx, &id),
             _ => {
-                egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(24, 14))).show(ctx, |ui| {
-                    egui::ScrollArea::vertical().id_salt(match &view { View::Home => "home", View::Ios => "ios", View::Aot => "aot", _ => "settings" }).auto_shrink([false, false]).show(ui, |ui| match view {
-                        View::Home => self.home(ui),
-                        View::Ios => self.ios_page(ui),
-                        View::Aot => self.aot_page(ui),
-                        View::Settings => self.settings_page(ui),
-                        View::Phone(_) => {}
+                egui::CentralPanel::default().frame(egui::Frame::new().fill(CANVAS)).show(ctx, |ui| {
+                    egui::ScrollArea::vertical().id_salt(match &view { View::Home => "home", View::Ios => "ios", View::Aot => "aot", _ => "settings" }).auto_shrink([false, false]).show(ui, |ui| {
+                        // the page owns its margins so the scrollbar sits in the gutter, not on the content
+                        egui::Frame::new().inner_margin(egui::Margin { left: S6 as i8, right: S6 as i8, top: S5 as i8, bottom: S6 as i8 }).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            match view {
+                                View::Home => self.home(ui),
+                                View::Ios => self.ios_page(ui),
+                                View::Aot => self.aot_page(ui),
+                                View::Settings => self.settings_page(ui),
+                                View::Phone(_) => {}
+                            }
+                        });
                     });
                 });
             }
         }
         self.add_dialog(ctx);
         if !self.message.is_empty() && self.message_at.elapsed() < Duration::from_secs(6) {
-            egui::Area::new("toast".into()).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(100.0, -18.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-                egui::Frame::new().fill(CARD2).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
-                    ui.label(&self.message);
-                });
+            egui::Area::new("toast".into()).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(106.0, -24.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(RAISED)
+                    .stroke(egui::Stroke::new(1.0_f32, BORDER_STRONG))
+                    .corner_radius(8)
+                    .shadow(egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: egui::Color32::from_black_alpha(120) })
+                    .inner_margin(egui::Margin::symmetric(14, 9))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(icon::INFO).size(15.0).color(INK_2));
+                            ui.label(body(&self.message));
+                        });
+                    });
             });
             ctx.request_repaint_after(Duration::from_secs(6));
         }
