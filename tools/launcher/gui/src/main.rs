@@ -84,6 +84,9 @@ pub struct App {
     pub fetching: HashMap<String, host::Fetch>,
     pub fetch_started: HashMap<String, Instant>,
     pub hub_show_betas: bool,
+    /// phones whose separate viewer window is open, and the GPU helper count (checked every few seconds, not per frame)
+    pub simview_open: HashSet<String>,
+    pub gpu_helpers: usize,
     pub sizes: Arc<Mutex<HashMap<std::path::PathBuf, u64>>>,
     pub measuring: bool,
     pub disk: host::Disk,
@@ -163,10 +166,12 @@ impl App {
             fetching: HashMap::new(),
             fetch_started: HashMap::new(),
             hub_show_betas: false,
+            simview_open: HashSet::new(),
+            gpu_helpers: 0,
             sizes: Arc::new(Mutex::new(HashMap::new())),
             measuring: false,
             disk: host::disk(&x86code_core::aot::scratch()),
-            last_slow: Instant::now(),
+            last_slow: Instant::now() - Duration::from_secs(60),
             ctx: cc.egui_ctx.clone(),
         };
         if add_on_start {
@@ -285,6 +290,10 @@ impl eframe::App for App {
         if self.last_slow.elapsed() > Duration::from_secs(10) {
             self.last_slow = Instant::now();
             self.disk = host::disk(&x86code_core::aot::scratch());
+            if self.view == View::Settings {
+                self.gpu_helpers = host::mtlvk_pids().len();
+                self.simview_open = self.insts.iter().filter(|i| self.status.get(&i.id).is_some_and(|s| s.phase != instance::Phase::Off) && x86code_core::sim::simview_running_for(i)).map(|i| i.id.clone()).collect();
+            }
             if self.view == View::Ios {
                 self.runtimes = host::runtimes();
             }
@@ -344,6 +353,7 @@ impl eframe::App for App {
                 }
                 if nav_item(ui, icon::GEAR_SIX, "Settings", self.view == View::Settings, "") {
                     self.view = View::Settings;
+                    self.last_slow = Instant::now() - Duration::from_secs(60);
                 }
                 // footer: host status, pinned to the bottom
                 let footer_h = 40.0 + if self.aot.building() { 30.0 } else { 0.0 };

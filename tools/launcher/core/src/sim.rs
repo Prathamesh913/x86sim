@@ -137,6 +137,52 @@ pub fn stop(device: &Path) -> Result<()> {
     crate::instance::stop(&inst, sts.first())
 }
 
+/// The standalone viewer's systemd unit for a phone (the main phone keeps the old name)
+pub fn simview_unit(inst: &crate::instance::Instance) -> String {
+    if inst.is_default {
+        "x86sim-simview".into()
+    } else {
+        format!("x86sim-simview-{}", inst.id.strip_prefix("device-").unwrap_or(&inst.id))
+    }
+}
+
+pub fn simview_running_for(inst: &crate::instance::Instance) -> bool {
+    Command::new("systemctl").args(["--user", "is-active", "--quiet", &simview_unit(inst)]).status().is_ok_and(|s| s.success())
+}
+
+/// The standalone viewer (simview, with its console pane) for one phone: its ring, input socket and logs, on the
+/// display this process runs on (DISPLAY / WAYLAND_DISPLAY), as a systemd user service.
+pub fn show_phone(inst: &crate::instance::Instance) -> Result<()> {
+    if simview_running_for(inst) {
+        return Ok(());
+    }
+    let mut cmd = Command::new("systemd-run");
+    cmd.args(["--user", "--unit", &simview_unit(inst), "--collect"]);
+    // the user manager's environment carries the desktop session's DISPLAY / WAYLAND_DISPLAY: override both, so the
+    // window opens where this hub is (an X-only hub, e.g. on Xvfb, gets GTK's X11 backend)
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    let wayland = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    cmd.args(["-E", &format!("DISPLAY={display}"), "-E", &format!("WAYLAND_DISPLAY={wayland}")]);
+    if wayland.is_empty() {
+        cmd.args(["-E", "GDK_BACKEND=x11"]);
+    }
+    if let Ok(v) = std::env::var("XDG_RUNTIME_DIR") {
+        cmd.args(["-E", &format!("XDG_RUNTIME_DIR={v}")]);
+    }
+    cmd.args(["-E", "SIMVIEW_FOLLOW=0"])
+        .args(["-E", &format!("SIMFB_RING_LINUX={}", inst.ring.display())])
+        .args(["-E", &format!("SIMHID_SOCKET={}", inst.sock.display())])
+        .args(["-E", &format!("SIMVIEW_LOGS={}", inst.log_dir.display())])
+        .args(["-E", &format!("SIMULATOR_MAINSCREEN_WIDTH={}", inst.screen.0)])
+        .args(["-E", &format!("SIMULATOR_MAINSCREEN_HEIGHT={}", inst.screen.1)])
+        .args(["-p", &format!("WorkingDirectory={}", repo_root().display())])
+        .args(["/usr/bin/python3", "cli/libexec/simview.py"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    anyhow::ensure!(cmd.status()?.success(), "systemd-run simview failed");
+    Ok(())
+}
+
 pub fn simview_running() -> bool {
     Command::new("systemctl").args(["--user", "is-active", "--quiet", "x86sim-simview"]).status().is_ok_and(|s| s.success())
 }

@@ -741,7 +741,7 @@ impl App {
         }
         ui.add_space(S5);
         let (nrun, mb) = self.running_summary();
-        let gpu = host::mtlvk_pids().len();
+        let gpu = self.gpu_helpers;
         section(ui, "This computer", |_| {});
         stat_row(ui, CARD, &[
             ("Phones running", nrun.to_string(), ""),
@@ -794,17 +794,28 @@ impl App {
             }
         });
         ui.add_space(S5);
-        section(ui, "Standalone window", |_| {});
+        section(ui, "Separate windows", |_| {});
+        let running: Vec<x86code_core::instance::Instance> = self.insts.iter().filter(|i| self.phase(&i.id) != x86code_core::instance::Phase::Off).cloned().collect();
         list_card(ui, |ui| {
-            form_row(ui, "Viewer window", "The separate viewer (simview) still works. It follows the main phone.", true, |ui| {
-                let open = sim::simview_running();
-                if ui.add(Btn::secondary(if open { "Window is open" } else { "Open window" }).icon(icon::APP_WINDOW)).clicked() {
-                    match sim::show() {
-                        Ok(()) => self.say("Window opened"),
-                        Err(e) => self.say(format!("{e:#}")),
+            if running.is_empty() {
+                egui::Frame::new().inner_margin(16).show(ui, |ui| {
+                    ui.label(sub("Start a phone to open its screen in a window of its own (with its logs)."));
+                });
+            }
+            for (k, inst) in running.iter().enumerate() {
+                let open = self.simview_open.contains(&inst.id);
+                form_row(ui, &inst.name, "Its screen and logs in a separate window (simview)", k + 1 == running.len(), |ui| {
+                    if ui.add_enabled(!open, Btn::secondary(if open { "Window is open" } else { "Open window" }).icon(icon::APP_WINDOW)).clicked() {
+                        match sim::show_phone(inst) {
+                            Ok(()) => {
+                                self.simview_open.insert(inst.id.clone());
+                                self.say(format!("Opened {} in its own window", inst.name));
+                            }
+                            Err(e) => self.say(format!("Couldn't open the window: {e:#}")),
+                        }
                     }
-                }
-            });
+                });
+            }
         });
         ui.add_space(S5);
     }
