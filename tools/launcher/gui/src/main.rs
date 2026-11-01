@@ -275,8 +275,7 @@ impl App {
         self.say(format!("Restarting {}", inst.name));
         let id = id.to_string();
         std::thread::spawn(move || {
-            let _ = instance::stop(&inst, st.as_ref());
-            let _ = instance::start(&inst, &others);
+            let _ = instance::restart(&inst, st.as_ref(), &others);
             let mut g = sh.lock().unwrap();
             g.monitor.stopping.remove(&id);
             g.monitor.starting.insert(id, Instant::now());

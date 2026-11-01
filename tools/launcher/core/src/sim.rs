@@ -322,7 +322,12 @@ pub fn home_frame() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Stop and start again, keeping the phone's GPU helper.
 pub fn restart(device: &Path) -> Result<u32> {
-    stop(device)?;
-    start(device)
+    let inst = crate::instance::load(device);
+    let all = crate::instance::list();
+    let sts = crate::instance::Monitor::default().poll(&all);
+    let st = sts.iter().find(|s| s.id == inst.id);
+    let others: Vec<_> = sts.iter().filter(|s| s.id != inst.id).cloned().collect();
+    crate::instance::restart(&inst, st, &others)
 }

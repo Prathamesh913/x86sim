@@ -504,8 +504,57 @@ pub fn start(inst: &Instance, others: &[Status]) -> Result<u32> {
     Ok(cmd.spawn().context("starting boot-a64.sh")?.id())
 }
 
-/// Stops a phone's container only (the dirs the running boot really uses, from its status).
+/// Stops a phone: its container, then its own GPU helper (mtlvk) unless a running phone still uses it. boot-a64.sh's
+/// A64_STOP_ONLY stops the container only, so every Stop left a ~370 MB mtlvk behind. A restart keeps it (`restart`).
 pub fn stop(inst: &Instance, st: Option<&Status>) -> Result<()> {
+    let state_dir = st.map(|s| s.state_dir.clone()).unwrap_or_else(|| inst.state_dir.clone());
+    stop_container(inst, st)?;
+    stop_gpu_helper(&state_dir);
+    Ok(())
+}
+
+/// Stop, then start with the same GPU helper (it stays up across the restart).
+pub fn restart(inst: &Instance, st: Option<&Status>, others: &[Status]) -> Result<u32> {
+    stop_container(inst, st)?;
+    start(inst, others)
+}
+
+/// Ends the mtlvk a boot started in `state_dir` if no running container uses its socket (a darlingserver's
+/// environment names the socket its phone renders through).
+pub fn stop_gpu_helper(state_dir: &Path) {
+    let Ok(pid) = read(&format!("{}/mtlvk.pid", state_dir.display())).trim().parse::<u32>() else { return };
+    if read(&format!("/proc/{pid}/comm")).trim() != "mtlvk" {
+        return;
+    }
+    let sock = state_dir.join("mtlvk.sock");
+    let want = format!("X86CODE_MTLVK_SOCKET={}", sock.display());
+    let used = std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
+        let p = e.path();
+        read(&format!("{}/comm", p.display())).trim() == "darlingserver" && read(&format!("{}/environ", p.display())).split('\0').any(|kv| kv == want)
+    });
+    if used {
+        return;
+    }
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+    for _ in 0..20 {
+        if read(&format!("/proc/{pid}/comm")).trim() != "mtlvk" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if read(&format!("/proc/{pid}/comm")).trim() == "mtlvk" {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+    }
+    let _ = std::fs::remove_file(state_dir.join("mtlvk.pid"));
+    let _ = std::fs::remove_file(sock);
+}
+
+/// Stops a phone's container only (the dirs the running boot really uses, from its status).
+fn stop_container(inst: &Instance, st: Option<&Status>) -> Result<()> {
     let state_dir = st.map(|s| s.state_dir.clone()).unwrap_or_else(|| inst.state_dir.clone());
     let prefix = st.map(|s| s.prefix.clone()).unwrap_or_else(|| inst.prefix.clone());
     let out = Command::new(boot_script())

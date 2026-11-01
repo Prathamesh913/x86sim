@@ -237,7 +237,7 @@ impl App {
                 ui.add_space(4.0);
                 let (label, col) = phase_look(phase, true);
                 let line = match &st {
-                    Some(s) if phase != Phase::Off => format!("{label} · {} · {:.0}% CPU", fmt_mb(s.pss_mb), s.cpu_pct),
+                    Some(s) if phase != Phase::Off && s.pss_mb >= 1.0 => format!("{label} · {} · {:.0}% CPU", fmt_mb(s.pss_mb), s.cpu_pct),
                     _ => label.to_string(),
                 };
                 let pending = x86code_core::instance::needs_restart(&inst, st.as_ref());
