@@ -424,6 +424,10 @@ static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends h
 // sees them (mach_wait_until, mk_timer_arm*, EVFILT_TIMER with NOTE_MACHTIME, and the changes workqueue threads hand
 // back). CNTVCT_EL0 counts at 24 MHz (jit.cpp). Default since Speed 11; X86CODE_A64_TIMEBASE=1to1 gives the guest
 // Darling's 1/1 again (with the Swift deadline patch, jit.cpp; rebuild the image).
+bool strict_monitor() {
+    static const bool on = getenv("X86CODE_A64_STRICT_MONITOR") && atoi(getenv("X86CODE_A64_STRICT_MONITOR")) == 1;
+    return on;
+}
 bool timebase_apple() {
     static const bool on = [] { const char *e = getenv("X86CODE_A64_TIMEBASE"); return !e || strcmp(e, "1to1") != 0; }();
     return on;

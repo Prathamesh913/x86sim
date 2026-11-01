@@ -140,6 +140,7 @@ size_t emit_guest_libc(const std::string &n, uint32_t *o, u32 slow);  // dyldsim
 uint32_t thunk_count();                // acquire-load of published thunk count (see add_thunk)
 
 // Generic handlers: integer/pointer/fp arguments straight through (x0-x7 -> rdi..r9 + stack, d0-d7 -> xmm0-7).
+bool strict_monitor();      // X86CODE_A64_STRICT_MONITOR=1: dynarmic's global exclusive monitor (handlers.cpp)
 bool timebase_apple();       // X86CODE_A64_TIMEBASE=apple: guest mach time at 24 MHz (handlers.cpp)
 void tb_convert_qos_changes(void *list, int n);  // kevent_qos_s timer changes: guest ticks -> ns (handlers.cpp)
 u64 tb_ns_to_ticks(u64 ns);

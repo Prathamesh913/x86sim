@@ -105,9 +105,12 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # it builds the store and selects MercuryPoster for the lock/home screen, as a real sim's first boot does (checked
 # against the Mac's iOS 27 devices). Once a poster is chosen SpringBoard hosts that one MercuryPoster extension itself
 # (~167 MB PSS before Speed 17's AOT training, see ARM64-PLAN). FULLUI adds chronod (widgets).
+# financed + passd (Speed 20, feature "wallet"): Wallet's FinanceKit opens its Core Data store over XPC from financed;
+# without it Wallet trapped ("Could not create CoreDataStore"). healthd/healthappd/finhealthd (feature "health"): on demand.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
-	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard"
+	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
+	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"

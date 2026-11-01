@@ -6,8 +6,9 @@
 use std::path::Path;
 
 /// Must equal kCodegenVersion in linux/arm64jit/jitcache.cpp (the builder reports its value; a mismatch is an error).
-pub const CODEGEN_VERSION: u64 = 0x14;
-/// inline objc (bit 17) and the Apple timebase (bit 18), the defaults; fuse_svc (bit 16) is off.
+pub const CODEGEN_VERSION: u64 = 0x15;
+/// inline objc (bit 17) and the Apple timebase (bit 18), the defaults; fuse_svc (bit 16) and the strict exclusive
+/// monitor (bit 19) are off.
 pub const FLAGS: u64 = 0x6 << 16;
 
 pub struct Fnv64(u64);

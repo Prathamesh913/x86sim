@@ -55,7 +55,7 @@ constexpr u64 kCacheHi = 0x2c0000000ull;
 // the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
 // alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
 // Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
-constexpr u64 kCodegenVersion = 0x00000014ull;  // Speed 18: chunked image, pool regions
+constexpr u64 kCodegenVersion = 0x00000015ull;  // Speed 20: lock-free exclusive monitor (0x14: Speed 18 chunked image)
 // kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kCodegenVersion;
@@ -185,7 +185,8 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     for (int i = 0; i < 16; i++) sprintf(hex + 2 * i, "%02x", g_uuid[i]);
     auto on = [](const char *e, bool dflt) { const char *v = getenv(e); return v ? atoi(v) == 1 : dflt; };
     g_build = kCodegenVersion | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
-              (u64)timebase_apple() << 18;  // CNTFRQ and the Swift deadline patch are in the code
+              (u64)timebase_apple() << 18 |
+              (u64)strict_monitor() << 19;  // CNTFRQ and the Swift deadline patch are in the code
     if (u32 ph = placement_load(g_dir)) {
         g_build |= (u64)ph << 32;
         if (getenv("X86CODE_A64_STATS")) logf("placement: %zu files, table %08x", g_place.size(), ph);

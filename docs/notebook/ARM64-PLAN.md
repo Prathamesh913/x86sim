@@ -1422,3 +1422,36 @@ Details in round-done/speed19.md.
 - **Sparse image files**: the launcher assembler seeks over slot holes, dynarmic writes the published .map without
   all-zero 64 KB pieces. .aot 1.2 GB -> 713 MB, .map 925 -> 514 MB on disk, byte-identical; jitcache 3.0 -> 2.2 GB.
 - Videos: ~/scratch/x86code/videos/speed19 (ours, mac, sbs) and the progress site's Videos section (not in git).
+
+## Speed 20 (2026-10-31): lock-free exclusive monitor, Wallet fixed, where tap latency and Health stand
+
+Details in round-done/speed20.md. Host under memory pressure (33 GB swap, ~35% IO wait at the start): wall-clock opens
+swung 2x between runs, so CPU-s per tap and sample shares are the primary measures this round.
+- **Exclusive monitor** (dynarmic `Unsafe_IgnoreGlobalMonitor`, now default; `X86CODE_A64_STRICT_MONITOR=1` restores the
+  old codegen, key bit 19; `kCodegenVersion` 0x15). With shared translations every STXR took the process-wide spinlock
+  and ran an unrolled 64-slot scan (~400 host instructions). objc retain/release are LDXR/STXR loops on the isa word, so
+  they were ~1/3 of SpringBoard's image samples on a tap. STXR is now a `lock cmpxchg` against the thread's own LDXR
+  value (QEMU user-mode semantics; only ABA differs from LL/SC), and the reservation lives in the thread's A64JitState
+  (monitor slots were shared by threads: processor_id is a counter mod 64). libobjc share on a tap: 32% -> 12%;
+  SpringBoard CPU per warm tap 0.92 (Speed 19 perf stat) -> 0.69-0.82 CPU-s. Tap -> first response still ~0.52 s.
+- **No ASTC encode on tap.** Guest stacks (GSAMPLE trace on SpringBoard's main thread): every libate sample is
+  `at_encoder_decompress_texels` under ImageIO's ATX reader, i.e. the app's SplashBoard snapshot (.ktx, LZFSE+ASTC)
+  being decoded for the zoom, then colour-converted by CoreGraphics/vImage. perfguest2's "EncodeASTC" was
+  nearest-symbol attribution in stripped libate code. Snapshots are encoded (written) on the home press, not on tap.
+  In [touch-down, +0.5 s]: ~20% waiting in mach_msg, ~7% snapshot decode, ~6% drawing it, ~4% colour conversion, ~5%
+  os_log formatting; the rest is spread (layout, CA commit).
+- **Wallet** (Swift trap at libswiftCore `_assertionFailure`): FinanceKit/FinanceDataStore.swift:54 "Could not create
+  CoreDataStore". FinanceKit's client opens an NSXPCStore on `com.apple.financed.service.coredatastore`; financed was not
+  in the device's job list. Added financed + passd (feature "wallet", default on; they start at boot via launch events,
+  +194 MB PSS) and Health's healthd/healthappd/finhealthd (feature "health", on demand). Wallet now shows its home
+  (What's New in Wallet, Passes and Tickets).
+- **Health blank**: not fixed. Its main thread blocks in `-[NSFileCoordinator coordinateWritingItemAtURL:...]`
+  (`_blockOnAccessClaim:withAccessArbiter:` semaphore) inside HealthPlatform's
+  `destroyStoreIfNeededAndMakePersistentContainer` dispatch_once during scene creation; SpringBoard's scene-create
+  watchdog fires at 10 s. filecoordinationd is running (started on demand) but never grants the write claim and is idle;
+  it logs "unable to mark itself as an nspace resolver". Files' On My iPhone LOADING is the prime suspect for the same
+  arbiter problem (not yet confirmed).
+- **Memory** (g3 idle, 2760 MB / 46 procs): anon 899, dyld shared cache 484, other files 314, nvidia driver 310, AOT .map
+  275, memfd surfaces 121, JIT code 95, .idx 46. Top processes: mtlvk 475, SpringBoard 431, Preferences 224, Spotlight
+  190, backboardd 158, PosterBoard 131, MercuryPoster 122, passd 113, financed 81.
+- Gates g1-g3 (cold boot + Settings + Calendar/Photos/Maps + keyboard + Siri + Files): 3 consecutive clean.

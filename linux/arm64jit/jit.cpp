@@ -360,6 +360,14 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         if (getenv("X86CODE_A64_FASTDISPATCH") && atoi(getenv("X86CODE_A64_FASTDISPATCH")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
         }
+        // Speed 20: LDXR/STXR without the process-wide monitor: STXR is a lock cmpxchg against the value its LDXR
+        // read, with a reservation private to the thread (QEMU user-mode semantics; only ABA differs from real LL/SC).
+        // The global monitor took a spinlock and scanned all 64 slots on every STXR: objc retain/release were ~1/3 of
+        // SpringBoard's CPU on a tap. X86CODE_A64_STRICT_MONITOR=1 restores it (a code-shaping flag: key bit 19).
+        if (!strict_monitor()) {
+            c.unsafe_optimizations = true;
+            c.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreGlobalMonitor;
+        }
         c.recompile_on_fastmem_failure = false;
         c.recompile_on_exclusive_fastmem_failure = false;
         // Per process (reserved; only emitted pages are resident). Stage 2's per-thread 8 MB is too small here.

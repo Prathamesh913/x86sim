@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 19: frame-accurate open timing (ring t_ns vs simhid touch timestamps) against Xcode's iOS 27.0 simulator on the Mac. Warm opens were held up by SpringBoard's main thread clearing bitmaps through Darling's memset_pattern4 (one memmove per 4 bytes); guest fills now use glibc: warm tap-to-content ~1.15 -> 0.9 s. Cold opens are close to the Mac's. Next: SpringBoard's ASTC encode / vImage work on tap.",
+ "now": "Speed 20: lock-free exclusive monitor (objc retain/release were LDXR/STXR through dynarmic's global lock + 64-slot scan; libobjc share on a tap 32% -> 12%), Wallet fixed (financed/passd were missing: FinanceKit's XPC Core Data store), Health traced to a file-coordination write claim that filecoordinationd never grants. No ASTC encoding on tap: it is the app snapshot's decode.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -514,5 +514,37 @@
   ],
   "jitcache": ".aot 1.2 GB -> 713 MB and .map 925 -> 514 MB on disk (sparse; byte-identical); jitcache 3.0 -> ~2.2 GB",
   "crash_gate": "g1-g3: 3 consecutive clean cold boots + Settings + Calendar/Photos/Maps + keyboard + Siri + Files (only the usual configd_sim/metalhostd/PhotosFileProvider MULTI)"
+ },
+ "speed20": {
+  "date": "2026-10-31",
+  "summary": "Lock-free exclusive monitor (default; X86CODE_A64_STRICT_MONITOR=1 restores), Wallet fixed, Health root cause located (NSFileCoordinator write claim never granted)",
+  "home_s": [
+   27,
+   27,
+   27
+  ],
+  "settings_cold_warm_s": [
+   16,
+   8
+  ],
+  "apps_cold_warm_s": "Calendar 4/2, Photos 6/2, Maps 9/2 (2 s poll)",
+  "warm_tap_frames_s": "Settings response 0.52-0.54, content 0.85-0.87; Calendar response 0.56, content 0.96 (Speed 19: 0.5-0.67 / 0.88-1.04)",
+  "sb_cpu_per_tap_s": "0.69-0.82 (Speed 19 0.92)",
+  "libobjc_share_on_tap": "32% -> 12%",
+  "pss_mb": [
+   2732,
+   2755,
+   2760
+  ],
+  "pss_apps_mb": [
+   3509,
+   3523,
+   3466
+  ],
+  "pss_note": "+194 MB from financed+passd (Wallet), feature-toggleable",
+  "wallet": "works",
+  "health": "blank: NSFileCoordinator write claim never granted",
+  "crashes": 0,
+  "gates": "g1-g3 clean"
  }
 }
