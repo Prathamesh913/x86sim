@@ -1,7 +1,7 @@
 #!/bin/bash
 # tests/arm64/gate/gate.sh TAG: one zero-crash gate run on the default arm64 device (as the launcher boots it):
 # cold boot to home, Settings cold + warm, General > About, Calendar / Photos / Maps cold + warm, keyboard (Spotlight),
-# Siri, Files, Health, Wallet; crash scan of every process log; PSS idle and after the apps. Results in $O/gate.log.
+# Siri (side button), Files, Health, Wallet; Photos' What's New sheet is dismissed; crash scan of every process log; PSS idle and after the apps. Results in $O/gate.log.
 # SKIPBOOT=1: use the running sim. Exit status: number of failed checks.
 . "$(dirname "$0")/lib.sh"
 T=${1:?tag}; O=${GATE_OUT:-$SCR/gate}/$T; rm -rf "$O"; mkdir -p "$O"; FAIL=0
@@ -23,14 +23,18 @@ for spec in "calendar:com.apple.mobilecal:Today|Inbox|Calendars|October|November
 	"photos:com.apple.mobileslideshow:Library|Collections|No Photos|Recent|Search" \
 	"maps:com.apple.Maps:Search Maps|Apple Maps|Places|Guides|Allow"; do
 	IFS=: read n b re <<< "$spec"
-	f open_check "$n-cold" "$b" "$re" 120; f open_check "$n-warm" "$b" "$re" 60
+	# Photos (Speed 26): the "What's New in Photos" sheet is accepted, recorded and dismissed (photos_whatsnew)
+	[ "$n" = photos ] && re="$re|What.s New"
+	f open_check "$n-cold" "$b" "$re" 120; [ "$n" = photos ] && f photos_whatsnew "$n-cold"
+	f open_check "$n-warm" "$b" "$re" 60; [ "$n" = photos ] && f photos_whatsnew "$n-warm"
 done
 sleep 15; say "PSS after apps: $(pss)"
 # keyboard: Spotlight from the home screen (swipe down), type, look for the text and the keyboard's keys
 home 5; touch_ swipe 603 900 603 1600; sleep 4; touch_ text wifi; f wait_ocr keyboard 'wifi|Wi-Fi' 40
-# Siri: hold the home button
-home 5; touch_ raw "button home down"; sleep 2; touch_ raw "button home up"; sleep 10; shot "$O/siri.png"
-siri=$(ps -eo comm | grep -c -E '^(Campo|SiriViewService|assistantd)$'); say "siri processes: $siri"; [ "$siri" -gt 0 ] || FAIL=$((FAIL + 1))
+# Siri (Speed 26): hold the side button (iPhone 17 has no home button; on a home-button model the long press is the
+# home button's) and count Siri's UI processes (assistantd alone runs anyway, so it is not counted)
+home 5; touch_ raw "button lock down"; sleep 2.5; touch_ raw "button lock up"; sleep 4; shot "$O/siri.png"; sleep 6
+siri=$(ps -eo comm | grep -c -E '^(Siri|Campo|SiriViewService)$'); say "siri UI processes: $siri"; [ "$siri" -gt 0 ] || FAIL=$((FAIL + 1))
 f open_check files com.apple.DocumentsApp 'On My iPhone|Browse|Recents|Shared' 120
 f open_check health com.apple.Health 'Summary|Pinned|Health Data|Sharing' 120
 f open_check wallet com.apple.Passbook 'Wallet|Passes|Apple Pay|Tickets' 120

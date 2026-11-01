@@ -51,3 +51,22 @@ wait_ocr() {
 # open_check LABEL BUNDLE REGEX MAX: from home, open, wait for the regex
 open_check() { home 6; app "$2"; wait_ocr "$1" "$3" "$4"; }
 pss() { "$AOT" sim status 2>/dev/null | grep -o 'procs [0-9]*\|PSS [0-9]* MB' | paste -sd' '; }
+# tap_word WORD: OCR the current frame (TSV) and tap the centre of the first word equal to WORD; 1 if not on screen
+tap_word() {
+	shot "$O/now.png"
+	local xy
+	xy=$(timeout 20 tesseract "$O/now.png" stdout -c tessedit_create_tsv=1 2>/dev/null |
+		awk -F'\t' -v w="$1" 'NF==12 && $12==w {print int($7+$9/2), int($8+$10/2); exit}')
+	[ -n "$xy" ] || return 1
+	touch_ tap $xy
+}
+# photos_whatsnew LABEL: Photos shows "What's New in Photos" on an open after an update or a fresh install (as on a
+# Mac's simulator): record it, dismiss it with Continue and wait for the library (Speed 26)
+photos_whatsnew() {
+	ocr | grep -qi "What.s New" || return 0
+	say "$1: What's New in Photos sheet (expected on a fresh install): Continue"
+	# OCR rarely reads the white-on-blue button: its place on the sheet (bottom centre, iPhone 17 / 1206x2622) instead
+	tap_word Continue || touch_ tap 603 2430
+	sleep 3; touch_ dismiss  # then Photos asks to send notifications
+	wait_ocr "$1-after" 'Library|Collections|No Photos|Recent|Search' 60
+}
