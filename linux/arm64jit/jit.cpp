@@ -247,6 +247,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
     std::optional<uint32_t> MemoryReadCode(u64 a) override {
         if (auto w = swiftconf_read_code(a)) return w;
+        if (auto w = swifttype_read_code(a)) return w;
         if (auto w = swift_timebase_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
@@ -345,12 +346,13 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         // lookups, idle black). X86CODE_A64_LINK=0 disables linking for experiments.
         // Fastmem fault "recompile" Invalidates/Unpatches from the SIGSEGV handler — even with
         // shared_mutex held that still patches live code; redirect the fault via FakeCall only
-        // (recompile_on_*_failure = false). FastDispatch stays (16-byte atomic data). RSB is off by
-        // default: Invalidate clears the shared map/FD but cannot reset every thread's RSB; set
-        // X86CODE_A64_RSB=1 to re-enable for experiments.
+        // (recompile_on_*_failure = false). FastDispatch stays (16-byte atomic data). RSB: see below.
         if (getenv("X86CODE_A64_LINK") && atoi(getenv("X86CODE_A64_LINK")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::BlockLinking;
         }
+        // Speed 25: a pop checks the shared invalidate generation (A64JitState::rsb_gen): after another thread's
+        // Invalidate/ClearCache this thread's entries are dropped and the return goes through FastDispatch. Still off
+        // by default (X86CODE_A64_RSB=1: on; code-shaping: PushRSB and the pop terminal are in the image).
         if (!(getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 1)) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
         }
@@ -534,6 +536,7 @@ void GuestThread::CallSVC(uint32_t swi) {
     const u64 pc0 = jit->GetPC();  // svc+4
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kSwiftConfSvc) { swiftconf_step(*this); return; }
+    if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
         set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));
     } else {

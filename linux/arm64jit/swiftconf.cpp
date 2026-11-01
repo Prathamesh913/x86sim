@@ -23,11 +23,12 @@ using s32 = int32_t;
 using s64 = int64_t;
 
 namespace {
-constexpr u64 kStep = 0x1c16262a8;    // loop: ldrsw x8, [x23]
-constexpr u64 kNextSection = 0x1c162626c;
-constexpr u64 kMatch = 0x1c16262d8;   // add x8, x27, #4 (protocol matched)
-constexpr u64 kDone = 0x1c16265d8;    // every section scanned
-// kNextSection .. kMatch
+// Speed 25: the step's addresses are found in libswiftCore by its code (swift_text_find), so every 27.x build gets it
+// (27.0: kNextSection 0x1c162626c; 27.2: 0x1c15f6ae0). They were 27.0's constants, so 27.1/27.2 ran the whole walk
+// in the guest. kStep = +0x3c (loop: ldrsw x8, [x23]), kMatch = +0x6c (add x8, x27, #4: protocol matched), kDone = the
+// target of the "b.eq" at +0x10 (every section scanned).
+u64 kStep = 0, kNextSection = 0, kMatch = 0, kDone = 0;
+// kNextSection .. kMatch (the words of 27.0 and 27.2; the branches are relative, so they match too)
 constexpr u32 kExpect[] = {
     0xf94047e8, 0x91004108, 0xf9403be9, 0xeb09011f, 0x54001ae0, 0xa9405117, 0xf90047e8, 0xeb1402ff,
     0x540000e1, 0x17fffff7, 0xeb15011f, 0x54000200, 0x910012f7, 0xeb1402ff, 0x54fffe40, 0xb98002e8,
@@ -37,14 +38,19 @@ constexpr u32 kExpect[] = {
 int g_state = -1;  // -1 unchecked, 0 off, 1 on
 
 bool enabled() {
-    if (g_state < 0) {
+    static const bool ok = [] {
         const char *e = getenv("X86CODE_A64_SWIFT_CONF_NATIVE");
-        bool ok = !(e && atoi(e) == 0);
-        for (size_t i = 0; ok && i < sizeof kExpect / 4; i++) ok = GuestThread::rd<u32>(kNextSection + 4 * i) == kExpect[i];
-        g_state = ok;
-        if (!ok && !(e && atoi(e) == 0)) logf("swift conformance step: code mismatch at %#llx; not used", (unsigned long long)kStep);
-    }
-    return g_state == 1;
+        if (e && atoi(e) == 0) return false;
+        kNextSection = swift_text_find(kExpect, nullptr, sizeof kExpect / 4);
+        if (!kNextSection) { logf("swift conformance step: code not found in libswiftCore; not used"); return false; }
+        kStep = kNextSection + 0x3c;
+        kMatch = kNextSection + 0x6c;
+        const u32 beq = swift_text_word(kNextSection + 0x10);  // b.eq kDone
+        kDone = kNextSection + 0x10 + (u64)((s64)((s32)(beq << 8) >> 13) * 4);
+        return true;
+    }();
+    g_state = ok;
+    return ok;
 }
 }  // namespace
 
@@ -128,7 +134,7 @@ const Index *index_for(u64 base, u64 count) {
 }
 
 std::optional<u32> swiftconf_read_code(u64 a) {
-    if (a == kStep && enabled()) return 0xd4000001u | (kSwiftConfSvc << 5);  // svc #kSwiftConfSvc
+    if (enabled() && a == kStep) return 0xd4000001u | (kSwiftConfSvc << 5);  // svc #kSwiftConfSvc
     return std::nullopt;
 }
 

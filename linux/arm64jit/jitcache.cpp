@@ -55,7 +55,7 @@ constexpr u64 kCacheHi = 0x2c0000000ull;
 // the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
 // alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
 // Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
-constexpr u64 kCodegenVersion = 0x00000015ull;  // Speed 20: lock-free exclusive monitor (0x14: Speed 18 chunked image)
+constexpr u64 kCodegenVersion = 0x00000017ull;  // Speed 25: Swift scan steps found per runtime (0x15: Speed 20 lock-free exclusive monitor)
 // kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kCodegenVersion;
@@ -67,6 +67,7 @@ uint8_t g_uuid[16]{};
 bool g_uuid_ok = false;
 std::string g_dir;
 std::string g_path;
+std::string g_cache_file;  // the main dyld cache file (Linux path)
 std::weak_ptr<Dynarmic::A64::Jit::SharedCode> g_shared;
 
 std::string default_dir() {
@@ -168,6 +169,7 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
         linux_path.replace(linux_path.find("//"), 2, "/");
     if (size_t r = linux_path.find("/System/Library/Caches/com.apple.dyld/"); r != std::string::npos)
         g_runtime_root = linux_path.substr(0, r + 1);
+    g_cache_file = linux_path;
     FILE *f = fopen(linux_path.c_str(), "rb");
     if (!f) {
         logf("jitcache: cannot open %s", linux_path.c_str());
@@ -333,6 +335,7 @@ int placement_map_all() {
     for (const auto &p : g_place) {
         if (g_runtime_root.empty() || p.key.rfind("Containers/", 0) == 0) continue;
         const std::string path = g_runtime_root + p.key;
+        const bool is_dyld = p.key == "usr/lib/dyld_sim";
         int fd = open(path.c_str(), O_RDONLY);
         if (fd < 0) continue;
         struct stat st;
@@ -358,7 +361,7 @@ int placement_map_all() {
                     const int ip = *(const int *)(hdr + off + 60);
                     if (!(ip == 0 && fs == 0)) {
                         if (pass == 0) lo = std::min(lo, vm);
-                        else if (fs) mmap((void *)(p.addr + vm - lo), fs, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, slice + fo);
+                        else if (fs) mmap((void *)(p.addr + vm - lo), fs, PROT_READ | (is_dyld ? PROT_WRITE : 0), MAP_PRIVATE | MAP_FIXED, fd, slice + fo);
                     }
                 }
                 if (!cs) break;
@@ -366,6 +369,8 @@ int placement_map_all() {
             }
         }
         close(fd);
+        // dyld_sim runs patched (dyld_sim_patches, as host.cpp applies it at load): translate the same code
+        if (is_dyld && lo != ~0ull) dyld_sim_patches(p.addr - lo);
         n++;
     }
     return n;
@@ -531,5 +536,7 @@ void jitcache_save_if_shared() {
         g_saved_blocks = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;
     }
 }
+
+const std::string &jitcache_cache_file() { return g_cache_file; }
 
 }  // namespace a64

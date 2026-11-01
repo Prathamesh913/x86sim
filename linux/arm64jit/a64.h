@@ -124,6 +124,8 @@ constexpr u32 kExitSvc = 0xffff;
 constexpr u32 kLinuxSvc = 0xfffe;
 // "svc #0xfffd": Swift conformance scan step (swiftconf.cpp), substituted by MemoryReadCode, never in memory.
 constexpr u32 kSwiftConfSvc = 0xfffd;
+// "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
+constexpr u32 kSwiftTypeSvc = 0xfffc;
 extern u64 g_exit_stub;  // "svc #0xffff": LR of every native->guest call
 
 u32 add_thunk(const std::string &name, Handler fn, const void *native = nullptr, int nfixed = 0);
@@ -133,6 +135,11 @@ void boundary_init();
 void dyld_sim_patches(u64 slide);
 std::optional<u32> swiftconf_read_code(u64 a);  // swiftconf.cpp: svc substituted at the Swift conformance step
 void swiftconf_step(GuestThread &t);
+std::optional<u32> swifttype_read_code(u64 a);  // swiftscan.cpp: svc at the type-by-name conformance walk
+void swifttype_step(GuestThread &t);
+const std::string &jitcache_cache_file();  // jitcache.cpp: the main dyld cache file
+u32 swift_text_word(u64 a);  // swiftscan.cpp: a code word of the cache, read from its file
+u64 swift_text_find(const u32 *words, const u32 *mask, size_t n);  // swiftscan.cpp: code pattern in libswiftCore
 struct GuestThread;
 void svc_bench(GuestThread &t);  // X86CODE_A64_SVCBENCH=n / X86CODE_A64_GUESTLIB_TEST=1 (guestlibc.cpp)
 bool is_guest_libc_export(const std::string &n);

@@ -109,7 +109,10 @@ static Mapped map_macho(const std::string &path, bool want_unixthread) {
     // its slot in the cache window (reserved by then), so its translations persist like the cache's.
     u64 size = hi - lo;
     void *base = MAP_FAILED;
-    if (const Placement *pl = want_unixthread ? nullptr : placement_find(path.c_str()); pl && size <= pl->slot && placement_claim(pl, fd)) {
+    // Speed 25: dyld_sim too (its slot was in every runtime's table but it was always mapped "anywhere", so its
+    // ~1.6 s of prepare code per process was translated live in every process, never persisted).
+    const bool is_dyld = path.size() >= 17 && path.compare(path.size() - 17, 17, "/usr/lib/dyld_sim") == 0;
+    if (const Placement *pl = want_unixthread && !is_dyld ? nullptr : placement_find(path.c_str()); pl && size <= pl->slot && placement_claim(pl, fd)) {
         base = mmap((void *)pl->addr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
         if (getenv("X86CODE_A64_STATS")) logf("placement: exe %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
     }
@@ -384,6 +387,14 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86CODE_A64_FAULTLOG")) {
         struct sigaction *old = &g_old_segv;
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
+    }
+    // Speed 25: the guest's execute-only pages (PROT_EXEC without PROT_READ: JavaScriptCore's JIT thunks, e.g. the one
+    // LinkBuffer::linkCode calls) are protection-key pages on a PKU CPU (Linux's execute-only pkey). The guest never
+    // runs them natively, but the translator must read them: News died "fatal native fault" ~11 s after a cold open.
+    // Make the page readable (still not writable) and retry the read. Nothing else here uses protection keys.
+    if (sig == SIGSEGV && si->si_code == 4 /* SEGV_PKUERR */) {
+        const u64 page = (u64)si->si_addr & ~0xfffull;
+        if (mprotect((void *)page, 0x1000, PROT_READ | PROT_EXEC) == 0) return;
     }
     // nesting guard without TLS (a Darling-created thread may have no usable glibc TLS): the tid in the handler
     static std::atomic<long> in_handler_tid{0};
