@@ -1487,3 +1487,55 @@ Details in round-done/speed21.md.
   the 6 runs after it.
 - mtlvk (g1 idle 449 MB PSS): 158 anon (ours: heap, buffers), 246 file (NVIDIA libraries + 125 MB /dev/nvidiactl
   mappings: the driver's), 45 shm (surfaces); +90 MB anon/shm after the three apps. No cut this round.
+
+## Speed 22 (2026-10-31): phone models, iOS 27.1/27.2 straight from Apple, Settings About fixed, where tap time goes
+
+Details in round-done/speed22.md.
+- **Phone models.** `x86sim device models|list|create --model "iPhone 17 Pro Max" [name]` (cli/libexec/arm64/device-a64.py)
+  makes `var/device-a64-<name>` with a `model` (+ `name`) file and a reflink copy of device-a64's data/. Models in
+  cli/lib/devicetypes-a64.json + devicetype-<id>.json, from Xcode 27.2's device types on the Mac (profile.plist +
+  capabilities.plist): iPhone 17 (iPhone18,3, 1206x2622), 17 Pro (18,1, 1206x2622), 17 Pro Max (18,2, 1320x2868),
+  Air (18,4, 1260x2736), 17e (18,5, 1170x2532), iPad Air 11-inch M4 (iPad16,9, 1640x2360 @2x). mksimdevice.py
+  writes the model's identifier, product class, screen, scale, pitch, asset suffix and capabilities; the runtime
+  version comes from the runtime's SystemVersion.plist. SimFramebuffer reads SIMULATOR_MAINSCREEN_WIDTH/HEIGHT at run
+  time (was compiled in). The Pro Max boots to home at 1320x2868 (full-height grid, Dynamic Island) and Settings >
+  General > About says "iPhone 17 Pro Max", model number A3257.
+- **Launcher / simview.** boot-a64 writes the booted device to var/run-a64/device; simview takes input and logs from
+  it and resizes to a new screen size. Simulator page: phones listed by model ("iPhone 17 Pro Max · Pro Max"), an
+  "Add phone" picker (model + optional name), "On: <phone>" under the status. "Running" stays on once home was seen
+  for that SpringBoard (an open dark app failed the frame test: the "Starting while home was up" report). MCP:
+  sim_devices, sim_add_device.
+- **Settings > General > About aborted** every time: MediaPlayer's library UID query threw ML3DatabaseException "no
+  such table: _MLDatabaseProperties". medialibraryd (com.apple.medialibraryd.xpc), which creates the music library
+  schema, was not in the job list, so MediaLibrary.sqlitedb stayed an empty file. Added (on demand); About shows
+  Songs/Videos/Photos 0.
+- **iOS 27.x runtimes, no Mac.** Apple's catalogue (index2.dvtdownloadableindex) has 27.0 24A434, 27.1 24A94425,
+  27.2 24B8117 and 24B91016s (plus betas/RCs), all "mobileAsset", no authentication. `x86sim runtime list|url|fetch`
+  (cli/libexec/arm64/runtime-fetch.py): POST gdmf.apple.com/v2/assets {AssetType com.apple.MobileAsset.iOSSimulatorRuntime,
+  AssetAudience 02d8e57e-dd1c-4090-aa50-b4ed2aef0062 (Xcode simulator), RequestedBuild} (TLS: Apple's root CA) returns
+  the updates.cdn-apple.com URL of an encrypted Apple Archive and its ArchiveDecryptionKey; `ipsw fw aea -b` decrypts;
+  cli/libexec/arm64/aaextract.py streams the Apple Archive (metadata entries around a pbzx stream holding another
+  archive with AssetData/Restore/<n>.dmg); 7z unpacks the APFS image. 27.1 was fetched this way end to end; 27.2
+  24B8117 came via the Mac (xcodebuild -downloadPlatform -exportPath). Both are in runtimes/ and in the launcher's
+  iOS version list. Not booted: they have no AOT image (keyed by cache UUID; a JIT-only first boot plus training and
+  an image build per runtime), and placement-24A434.txt is 27.0's. libarm64jit's address shortcuts check their code
+  words (swiftconf, Swift deadline, objc patch_return) or use exports (msgSend), so they switch off rather than
+  misfire on another cache.
+- **Tap path.** Warm Settings tap (6 taps): SB 0.54-0.70 CPU-s, response 0.43-0.58 s, content 0.73-0.79 s from
+  touch-down (as Speed 21). perf split by time after touch-down + a main-thread guest stack trace (GSAMPLE_TRACE):
+  - 0-100 ms after touch-down the main thread is idle in the run loop: the finger is still down (simtouch lifts after
+    80 ms; icons launch on lift). Not Mach latency.
+  - From lift to first response (~350 ms) the main thread is busy throughout. ~16% of it: CA commit ->
+    `CA::Layer::prepare_contents` -> `CA::Render::copy_image` -> CGContextDrawImage of the app's SplashBoard snapshot
+    (.ktx): ImageIO ATX -> LZFSE -> libate ASTC decode (`at_encoder_decompress_texels`, ~25-30 ms per tap), plus the
+    colour conversion of that draw (vImage DoTRCs / LookupTable / PiecewiseGamma_BuildTable8to16). The rest is
+    ordinary UIKit/CA/Swift work.
+  - ASTC *encode* + lzfse encode run after the home press (the new snapshot), off the tap path.
+  - Not done: a native at_encoder_decompress_texels (a C++ encoder object with vtable dispatch and flip flags: needs
+    an ASTC decoder and the object's layout), and checking whether simfb's colourspace (1) makes CA convert the
+    snapshot on every draw (needs a real simulator's SFBDisplay values).
+- Gates g1-g3 3 consecutive clean (cold boot, Settings 20/10 s, Calendar/Photos/Maps cold+warm, keyboard, Siri,
+  Files, Health 10-11 s, Wallet 5 s); home 57 (cold page cache after unpacking runtimes) / 36 / 37 s; PSS idle
+  2870-3053 MB, with apps 3532-3674 MB (~200 MB above Speed 21, not explained yet: medialibraryd exits when idle).
+- GSAMPLE_TRACE printed `g_thunks[i].name` while threads still add thunks (vector reallocation): SIGSEGV in the
+  sampler thread. It prints the thunk number now.
