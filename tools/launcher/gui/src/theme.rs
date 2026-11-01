@@ -186,6 +186,7 @@ pub fn theme(ctx: &egui::Context) {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Kind {
+    Danger,
     Primary,
     Secondary,
     Ghost,
@@ -210,6 +211,10 @@ impl Btn {
     }
     pub fn secondary(text: impl Into<String>) -> Btn {
         Btn::new(Kind::Secondary, text)
+    }
+    /// Destructive confirm (remove, delete): red fill.
+    pub fn danger(text: impl Into<String>) -> Btn {
+        Btn::new(Kind::Danger, text)
     }
     pub fn ghost(text: impl Into<String>) -> Btn {
         Btn::new(Kind::Ghost, text)
@@ -255,7 +260,8 @@ impl egui::Widget for Btn {
             let down = resp.is_pointer_button_down_on() && enabled;
             let (bg, stroke, fg, icol) = match self.kind {
                 Kind::Primary if enabled => (if down { ACCENT_DOWN } else if hov { ACCENT_HOVER } else { ACCENT_FILL }, Stroke::NONE, Color32::WHITE, Color32::WHITE),
-                Kind::Primary | Kind::Secondary => {
+                Kind::Danger if enabled => (if down { rgb(0xa82f2f) } else if hov { rgb(0xc03636) } else { CRIT }, Stroke::NONE, Color32::WHITE, Color32::WHITE),
+                Kind::Primary | Kind::Secondary | Kind::Danger => {
                     let bg = if !enabled { RAISED.gamma_multiply(0.6) } else if down { PRESSED } else if hov { HOVER } else { RAISED };
                     let st = Stroke::new(1.0_f32, if hov { rgb(0x46474e) } else { BORDER_STRONG });
                     let fg = if enabled { INK } else { INK_3 };
@@ -617,5 +623,36 @@ pub fn phase_look(phase: x86code_core::instance::Phase, runtime_present: bool) -
         Phase::Stopping => ("Stopping", WARN),
         Phase::Off if !runtime_present => ("iOS not installed", WARN),
         Phase::Off => ("Off", INK_3),
+    }
+}
+
+/// The frame of every modal dialog.
+pub fn modal_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER_STRONG))
+        .corner_radius(12)
+        .inner_margin(24)
+        .shadow(egui::Shadow { offset: [0, 12], blur: 40, spread: 0, color: Color32::from_black_alpha(140) })
+}
+
+/// A menu row: icon, label, optional shortcut hint on the right. Returns true when clicked.
+pub fn menu_row(ui: &mut egui::Ui, ic: &str, label: &str, hint: &str, enabled: bool, danger: bool) -> egui::Response {
+    let w = ui.available_width().max(200.0);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), if enabled { Sense::click() } else { Sense::hover() });
+    let p = ui.painter();
+    if enabled && resp.hovered() {
+        p.rect_filled(r, R_SM, RAISED);
+    }
+    let col = if !enabled { INK_3 } else if danger { CRIT_INK } else { INK };
+    p.text(r.left_center() + egui::vec2(10.0, 0.0), egui::Align2::LEFT_CENTER, ic, font(14.0), if enabled && !danger { INK_2 } else { col });
+    p.text(r.left_center() + egui::vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, label, font(T_BODY), col);
+    if !hint.is_empty() {
+        p.text(r.right_center() - egui::vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, hint, font(T_SMALL), INK_3);
+    }
+    if enabled {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        resp
     }
 }

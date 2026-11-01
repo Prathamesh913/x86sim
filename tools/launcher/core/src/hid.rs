@@ -17,6 +17,10 @@ impl Hid {
     }
 
     pub fn send(&mut self, line: &str) {
+        static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DEBUG.get_or_init(|| std::env::var_os("X86CODE_HID_DEBUG").is_some()) {
+            eprintln!("hid {}: {line}", self.path.display());
+        }
         for _ in 0..2 {
             if self.sock.is_none() {
                 match UnixStream::connect(&self.path) {

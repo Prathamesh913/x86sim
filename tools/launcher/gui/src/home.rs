@@ -190,9 +190,41 @@ impl App {
             if let Some(v) = self.viewer(id) {
                 v.show(&mut child, inner.size(), live, placeholder, false, viewer::THUMB);
             }
-            if wresp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            let wresp = wresp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            if wresp.clicked() {
                 open = true;
             }
+            wresp.context_menu(|ui| {
+                ui.set_width(220.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                if menu_row(ui, icon::ARROW_SQUARE_OUT, "Open", "", true, false).clicked() {
+                    open = true;
+                    ui.close();
+                }
+                match phase {
+                    Phase::Off => {
+                        if menu_row(ui, icon::PLAY, "Start", "", true, false).clicked() {
+                            self.start(id);
+                            ui.close();
+                        }
+                    }
+                    Phase::Stopping => {}
+                    _ => {
+                        if menu_row(ui, icon::ARROW_CLOCKWISE, "Restart", "", true, false).clicked() {
+                            self.restart(id);
+                            ui.close();
+                        }
+                        if menu_row(ui, icon::STOP, "Stop", "", true, false).clicked() {
+                            self.stop(id);
+                            ui.close();
+                        }
+                    }
+                }
+                ui.add_space(2.0);
+                ui.separator();
+                ui.add_space(2.0);
+                self.phone_menu_items(ui, &inst, phase);
+            });
             // text + actions
             egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 14 }).show(ui, |ui| {
                 ui.set_width(w - 28.0);
@@ -262,7 +294,7 @@ impl App {
         }
         let modal = egui::Modal::new("add-phone".into())
             .backdrop_color(egui::Color32::from_black_alpha(150))
-            .frame(egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER_STRONG)).corner_radius(12).inner_margin(24).shadow(egui::Shadow { offset: [0, 12], blur: 40, spread: 0, color: egui::Color32::from_black_alpha(140) }))
+            .frame(modal_frame())
             .show(ctx, |ui| {
                 ui.set_width(400.0);
                 ui.spacing_mut().item_spacing.y = 4.0;

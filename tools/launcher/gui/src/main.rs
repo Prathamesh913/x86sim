@@ -48,7 +48,14 @@ pub struct AddDialog {
     pub working: bool,
 }
 
+/// A phone dialog: rename, or confirm removing it.
+pub enum Dialog {
+    Rename { id: String, text: String },
+    Delete { id: String, paths: Vec<std::path::PathBuf> },
+}
+
 pub struct App {
+    pub dialog: Option<Dialog>,
     pub shared: Arc<Mutex<Shared>>,
     pub insts: Vec<instance::Instance>,
     pub status: HashMap<String, instance::Status>,
@@ -123,6 +130,7 @@ impl App {
         }
         let add_on_start = std::env::var("X86CODE_LAUNCHER_VIEW").is_ok_and(|v| v == "add");
         let mut app = App {
+            dialog: None,
             shared,
             insts: instance::list(),
             status: HashMap::new(),
@@ -347,6 +355,7 @@ impl eframe::App for App {
             }
         }
         self.add_dialog(ctx);
+        self.phone_dialog(ctx);
         if !self.message.is_empty() && self.message_at.elapsed() < Duration::from_secs(6) {
             egui::Area::new("toast".into()).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(106.0, -24.0)).order(egui::Order::Foreground).show(ctx, |ui| {
                 egui::Frame::new()

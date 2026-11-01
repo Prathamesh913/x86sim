@@ -434,3 +434,76 @@ pub fn log_sources(inst: &Instance, st: Option<&Status>) -> Vec<crate::logs::Src
         Src::File("Memory", state_dir.join("jetsam.log")),
     ]
 }
+
+// ---- rename / delete ----
+
+/// Gives a phone a new display name (<device>/name).
+pub fn rename(inst: &Instance, name: &str) -> Result<()> {
+    let n = name.trim();
+    anyhow::ensure!(!n.is_empty(), "the name is empty");
+    anyhow::ensure!(n.chars().count() <= 60, "the name is too long");
+    std::fs::write(inst.dir.join("name"), format!("{n}\n"))?;
+    Ok(())
+}
+
+fn darlingserver_uses(prefix: &Path) -> bool {
+    let want = prefix.to_string_lossy();
+    std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
+        let p = e.path();
+        read(&format!("{}/comm", p.display())).trim() == "darlingserver" && read(&format!("{}/cmdline", p.display())).split('\0').nth(1) == Some(want.as_ref())
+    })
+}
+
+/// What `delete` removes (for the confirmation and the MCP/CLI): the device dir and, when they are this phone's own,
+/// its Darling prefix, state dir, frame ring and boot log.
+pub fn delete_plan(inst: &Instance) -> Vec<PathBuf> {
+    let mut v = vec![inst.dir.clone()];
+    let sfx = inst.id.strip_prefix("device-a64").unwrap_or("");
+    if inst.is_default || sfx.is_empty() {
+        return v;
+    }
+    let own_prefix = scratch().join(format!("a64prefix{}", if sfx.starts_with('-') { sfx.to_string() } else { format!("-{sfx}") }));
+    if inst.prefix == own_prefix && inst.prefix.exists() {
+        v.push(inst.prefix.clone());
+    }
+    let own_state = repo_root().join("var").join(format!("run-a64{sfx}"));
+    if inst.state_dir == own_state && inst.state_dir.exists() {
+        v.push(inst.state_dir.clone());
+    }
+    let ring = ring_for(&inst.id);
+    if ring.exists() {
+        v.push(ring.clone());
+    }
+    let link = PathBuf::from("/dev/shm").join(ring.file_name().unwrap_or_default());
+    if link.symlink_metadata().is_ok() {
+        v.push(link);
+    }
+    if boot_log(inst).exists() {
+        v.push(boot_log(inst));
+    }
+    v
+}
+
+/// Removes a phone that is off. The default phone (its dirs are the scripts' defaults) is never removed, nor a dir a
+/// running container uses.
+pub fn delete(inst: &Instance, st: Option<&Status>) -> Result<()> {
+    anyhow::ensure!(!inst.is_default, "the main phone can't be removed");
+    anyhow::ensure!(st.is_none_or(|s| s.phase == Phase::Off && s.launchd_pid.is_none()), "stop {} first", inst.name);
+    anyhow::ensure!(inst.dir.starts_with(repo_root().join("var")) && inst.id.starts_with("device-a64") && inst.id != "device-a64", "not a phone dir: {}", inst.dir.display());
+    let plan = delete_plan(inst);
+    for p in &plan {
+        anyhow::ensure!(!(p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("a64prefix")) && darlingserver_uses(p)), "{} is in use", p.display());
+    }
+    // the state dir's `device` file must name this phone (another boot may have borrowed it)
+    for p in &plan {
+        if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("run-a64")) {
+            let dev = read(&format!("{}/device", p.display()));
+            anyhow::ensure!(dev.trim().is_empty() || dev.trim() == inst.dir.to_string_lossy(), "{} belongs to {}", p.display(), dev.trim());
+        }
+    }
+    for p in &plan {
+        let r = if p.symlink_metadata().is_ok_and(|m| m.is_dir()) { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+        r.with_context(|| format!("removing {}", p.display()))?;
+    }
+    Ok(())
+}

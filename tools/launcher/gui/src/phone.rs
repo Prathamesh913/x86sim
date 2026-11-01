@@ -75,6 +75,7 @@ impl App {
                 badge(ui, label, col);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = S2;
+                    self.phone_menu(ui, &inst, phase);
                     match phase {
                         // not installed: the Download action lives in the screen area's empty state
                         Phase::Off if !inst.runtime_present => {}
@@ -150,6 +151,126 @@ impl App {
                 self.screen_toolbar(ui, id, live);
             });
         });
+    }
+
+    /// The "⋯" menu of a phone: rename, remove.
+    pub fn phone_menu(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, phase: Phase) {
+        let btn = egui::Button::new(egui::RichText::new(icon::DOTS_THREE).size(16.0).color(INK_2)).min_size(egui::vec2(H_MD, H_MD)).frame_when_inactive(false);
+        let (resp, _) = egui::containers::menu::MenuButton::from_button(btn).ui(ui, |ui| {
+            ui.set_width(220.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            self.phone_menu_items(ui, inst, phase);
+        });
+        resp.on_hover_text("More");
+    }
+
+    pub fn phone_menu_items(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, phase: Phase) {
+        if menu_row(ui, icon::PENCIL_SIMPLE, "Rename…", "", true, false).clicked() {
+            self.dialog = Some(crate::Dialog::Rename { id: inst.id.clone(), text: inst.name.clone() });
+            ui.close();
+        }
+        let off = phase == Phase::Off;
+        let can = off && !inst.is_default;
+        let r = menu_row(ui, icon::TRASH, "Remove phone…", "", can, true);
+        let r = if inst.is_default { r.on_disabled_hover_text("The main phone stays") } else if !off { r.on_disabled_hover_text("Stop it first") } else { r };
+        if r.clicked() {
+            self.dialog = Some(crate::Dialog::Delete { id: inst.id.clone(), paths: instance::delete_plan(inst) });
+            ui.close();
+        }
+    }
+
+    /// Rename / remove dialogs.
+    pub fn phone_dialog(&mut self, ctx: &egui::Context) {
+        let Some(d) = self.dialog.take() else { return };
+        let mut keep = true;
+        match d {
+            crate::Dialog::Rename { id, mut text } => {
+                let Some(inst) = self.inst(&id).cloned() else { return };
+                let mut save = false;
+                let m = egui::Modal::new("rename-phone".into()).backdrop_color(egui::Color32::from_black_alpha(150)).frame(modal_frame()).show(ctx, |ui| {
+                    ui.set_width(360.0);
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.label(egui::RichText::new("Rename phone").size(T_TITLE + 1.0).family(semibold()).color(INK));
+                    ui.add_space(S3);
+                    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width()).margin(egui::Margin::symmetric(8, 6)));
+                    if !r.has_focus() && !r.lost_focus() {
+                        r.request_focus();
+                    }
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        save = true;
+                    }
+                    ui.add_space(S5);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(!text.trim().is_empty(), Btn::primary("Rename").min_w(88.0)).clicked() {
+                            save = true;
+                        }
+                        if ui.add(Btn::secondary("Cancel").min_w(80.0)).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if m.should_close() {
+                    keep = false;
+                }
+                if save && !text.trim().is_empty() {
+                    keep = false;
+                    match instance::rename(&inst, &text) {
+                        Ok(()) => {
+                            self.refresh_instances();
+                            self.say(format!("Renamed to {}", text.trim()));
+                        }
+                        Err(e) => self.say(format!("Couldn't rename: {e:#}")),
+                    }
+                }
+                if keep {
+                    self.dialog = Some(crate::Dialog::Rename { id, text });
+                }
+            }
+            crate::Dialog::Delete { id, paths } => {
+                let Some(inst) = self.inst(&id).cloned() else { return };
+                let mut go = false;
+                let m = egui::Modal::new("delete-phone".into()).backdrop_color(egui::Color32::from_black_alpha(150)).frame(modal_frame()).show(ctx, |ui| {
+                    ui.set_width(420.0);
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.label(egui::RichText::new(format!("Remove {}?", inst.name)).size(T_TITLE + 1.0).family(semibold()).color(INK));
+                    ui.label(sub("Its apps, data and settings are deleted. This can't be undone."));
+                    ui.add_space(S2);
+                    let size: u64 = paths.iter().map(|p| if p.is_dir() { x86code_core::host::dir_size(p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }).sum();
+                    ui.label(muted(format!("Frees about {:.1} GB.", size as f64 / 1e9))).on_hover_text(paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"));
+                    ui.add_space(S5);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(Btn::danger("Remove").min_w(88.0)).clicked() {
+                            go = true;
+                        }
+                        if ui.add(Btn::secondary("Cancel").min_w(80.0)).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if m.should_close() {
+                    keep = false;
+                }
+                if go {
+                    keep = false;
+                    let st = self.status.get(&id).cloned();
+                    match instance::delete(&inst, st.as_ref()) {
+                        Ok(()) => {
+                            self.viewers.remove(&id);
+                            if self.view == View::Phone(id.clone()) {
+                                self.view = View::Home;
+                            }
+                            self.refresh_instances();
+                            self.shared.lock().unwrap().insts.retain(|i| i.id != id);
+                            self.say(format!("Removed {}", inst.name));
+                        }
+                        Err(e) => self.say(format!("Couldn't remove it: {e:#}")),
+                    }
+                }
+                if keep {
+                    self.dialog = Some(crate::Dialog::Delete { id, paths });
+                }
+            }
+        }
     }
 
     /// Home / Lock, typing state and gesture help, centred under the screen.

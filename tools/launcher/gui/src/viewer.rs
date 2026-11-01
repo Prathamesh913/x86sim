@@ -46,6 +46,10 @@ pub struct Viewer {
     pub id: String,
     pinch: bool,
     pan2: bool,
+    /// mouse wheel as a one-finger drag: the finger's position and the last wheel event
+    wheel: Option<((f32, f32), std::time::Instant)>,
+    /// Shift as the phone knows it
+    shift_held: bool,
 }
 
 fn convert(f: &x86code_core::ring::Frame, step: usize) -> Img {
@@ -115,7 +119,7 @@ impl Viewer {
                 }
             })
             .expect("ring thread");
-        Viewer { shared, tex: None, tex_seq: 0, hid: hid::Hid::new(&inst.sock), touching: false, last_norm: (0.0, 0.0), focused: false, screen: inst.screen, id: inst.id.clone(), pinch: false, pan2: false }
+        Viewer { shared, tex: None, tex_seq: 0, hid: hid::Hid::new(&inst.sock), touching: false, last_norm: (0.0, 0.0), focused: false, screen: inst.screen, id: inst.id.clone(), pinch: false, pan2: false, wheel: None, shift_held: false }
     }
 
     /// Follow the phone's current ring (sim.env after its last boot); a change drops the old ring's picture.
@@ -256,12 +260,50 @@ impl Viewer {
             self.pinch = false;
             self.pan2 = false;
         }
+        // mouse wheel / touchpad scroll over the screen: a finger dragging the content (lifted after a short pause)
+        if live && !self.touching {
+            let (delta, hover) = ctx.input(|i| (i.raw_scroll_delta, i.pointer.hover_pos()));
+            let over = hover.is_some_and(|p| screen.contains(p));
+            if delta != egui::Vec2::ZERO && over {
+                let start = hover.map(norm).unwrap_or((0.5, 0.5));
+                let ((mut x, mut y), _) = self.wheel.unwrap_or_else(|| {
+                    // never start on an edge (that would be a system gesture)
+                    let s = (start.0.clamp(0.1, 0.9), start.1.clamp(0.15, 0.85));
+                    self.hid.touch("down", s.0, s.1, None);
+                    (s, std::time::Instant::now())
+                });
+                x += delta.x / screen.width();
+                y += delta.y / screen.height();
+                if !(0.05..=0.95).contains(&x) || !(0.08..=0.92).contains(&y) {
+                    // ran out of screen: lift and grab again where the scroll began
+                    self.hid.touch("up", x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), None);
+                    let s = (start.0.clamp(0.1, 0.9), start.1.clamp(0.15, 0.85));
+                    self.hid.touch("down", s.0, s.1, None);
+                    (x, y) = s;
+                } else {
+                    self.hid.touch("move", x, y, None);
+                }
+                self.wheel = Some(((x, y), std::time::Instant::now()));
+                ctx.request_repaint_after(Duration::from_millis(150));
+            }
+        }
+        if let Some(((x, y), at)) = self.wheel {
+            if at.elapsed() >= Duration::from_millis(140) {
+                self.hid.touch("up", x, y, None);
+                self.wheel = None;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(150) - at.elapsed());
+            }
+        }
         if self.focused && live {
             if resp.hovered() {
                 ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
             }
-            let mut sends: Vec<(bool, u32, bool)> = vec![]; // (down, usage, shifted)
+            // (down, usage, needs shift, with Command, host Shift at that event)
+            let mut sends: Vec<(bool, u32, bool, bool, bool)> = vec![];
             let mut buttons: Vec<(&'static str, bool)> = vec![];
+            let mut paste = String::new();
+            let shift_now = ctx.input(|i| i.modifiers.shift);
             ctx.input_mut(|i| {
                 i.events.retain(|e| match e {
                     egui::Event::Key { key, pressed, repeat, modifiers, .. } => {
@@ -276,28 +318,79 @@ impl Viewer {
                             egui::Key::H if modifiers.ctrl => buttons.push(("home", *pressed)),
                             k => {
                                 if let Some((u, sh)) = usage(k) {
-                                    sends.push((*pressed, u, sh || modifiers.shift));
+                                    sends.push((*pressed, u, sh, modifiers.ctrl || modifiers.mac_cmd, modifiers.shift));
                                 }
                             }
                         }
                         false
                     }
-                    egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut => false,
+                    // Ctrl+V: the host clipboard is typed into the phone; Ctrl+C / Ctrl+X act inside the phone
+                    egui::Event::Paste(t) => {
+                        paste.push_str(t);
+                        false
+                    }
+                    egui::Event::Copy => {
+                        sends.push((true, 0x06, false, true, false));
+                        sends.push((false, 0x06, false, true, false));
+                        false
+                    }
+                    egui::Event::Cut => {
+                        sends.push((true, 0x1b, false, true, false));
+                        sends.push((false, 0x1b, false, true, false));
+                        false
+                    }
+                    egui::Event::Text(_) => false,
                     _ => true,
                 });
             });
             for (b, down) in buttons {
                 self.hid.button(b, down);
             }
-            for (down, u, sh) in sends {
-                if sh && down {
-                    self.hid.key(true, 225);
+            // Shift mirrors the host's Shift key: set from each key press, then from the frame's final state (a key's
+            // release can come without the modifier: sending Shift with each key left it held on the phone)
+            for (down, u, sh, cmd, ev_shift) in sends {
+                if down && ev_shift != self.shift_held {
+                    self.hid.key(ev_shift, 225);
+                    self.shift_held = ev_shift;
                 }
-                self.hid.key(down, u);
-                if sh && !down {
-                    self.hid.key(false, 225);
+                let extra_shift = sh && !self.shift_held;
+                if down {
+                    if cmd {
+                        self.hid.key(true, 0xe3);
+                    }
+                    if extra_shift {
+                        self.hid.key(true, 225);
+                    }
+                    self.hid.key(true, u);
+                    if extra_shift {
+                        self.hid.key(false, 225);
+                    }
+                } else {
+                    self.hid.key(false, u);
+                    if cmd {
+                        self.hid.key(false, 0xe3);
+                    }
                 }
             }
+            if shift_now != self.shift_held {
+                self.hid.key(shift_now, 225);
+                self.shift_held = shift_now;
+            }
+            for c in paste.chars().take(2000) {
+                if let Some((u, sh)) = char_usage(c) {
+                    if sh {
+                        self.hid.key(true, 225);
+                    }
+                    self.hid.key(true, u);
+                    self.hid.key(false, u);
+                    if sh {
+                        self.hid.key(false, 225);
+                    }
+                }
+            }
+        } else if self.shift_held {
+            self.hid.key(false, 225);
+            self.shift_held = false;
         }
     }
 
@@ -368,6 +461,52 @@ fn usage(k: egui::Key) -> Option<(u32, bool)> {
         K::End => (0x4d, false),
         K::PageUp => (0x4b, false),
         K::PageDown => (0x4e, false),
+        _ => return None,
+    })
+}
+
+/// A typed character -> (HID usage, needs shift), US layout
+fn char_usage(c: char) -> Option<(u32, bool)> {
+    Some(match c {
+        'a'..='z' => (4 + (c as u32 - 'a' as u32), false),
+        'A'..='Z' => (4 + (c as u32 - 'A' as u32), true),
+        '1'..='9' => (0x1e + (c as u32 - '1' as u32), false),
+        '0' => (0x27, false),
+        '\n' => (0x28, false),
+        '\t' => (0x2b, false),
+        ' ' => (0x2c, false),
+        '-' => (0x2d, false),
+        '_' => (0x2d, true),
+        '=' => (0x2e, false),
+        '+' => (0x2e, true),
+        '[' => (0x2f, false),
+        '{' => (0x2f, true),
+        ']' => (0x30, false),
+        '}' => (0x30, true),
+        '\\' => (0x31, false),
+        '|' => (0x31, true),
+        ';' => (0x33, false),
+        ':' => (0x33, true),
+        '\'' => (0x34, false),
+        '"' => (0x34, true),
+        '`' => (0x35, false),
+        '~' => (0x35, true),
+        ',' => (0x36, false),
+        '<' => (0x36, true),
+        '.' => (0x37, false),
+        '>' => (0x37, true),
+        '/' => (0x38, false),
+        '?' => (0x38, true),
+        '!' => (0x1e, true),
+        '@' => (0x1f, true),
+        '#' => (0x20, true),
+        '$' => (0x21, true),
+        '%' => (0x22, true),
+        '^' => (0x23, true),
+        '&' => (0x24, true),
+        '*' => (0x25, true),
+        '(' => (0x26, true),
+        ')' => (0x27, true),
         _ => return None,
     })
 }
