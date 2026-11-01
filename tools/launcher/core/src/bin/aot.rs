@@ -49,11 +49,15 @@ fn fmt_s(s: f64) -> String {
 
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let jc = take(&mut args, "--jc").map(PathBuf::from).unwrap_or_else(aot::Paths::default_jc);
+    // a phone brings its iOS version, and with it the cache dir (27.0: the default one, others jc-<build>)
+    let dev = take(&mut args, "--device").map(PathBuf::from);
+    let rt = dev.as_deref().map(sim::device_runtime);
+    let jc = take(&mut args, "--jc").map(PathBuf::from).or_else(|| rt.as_deref().map(sim::jc_for)).unwrap_or_else(aot::Paths::default_jc);
     let p = aot::Paths::new(&jc);
     let mut cfg = p.load_config();
-    if let Some(d) = take(&mut args, "--device") {
-        cfg.device = Some(PathBuf::from(d));
+    if let (Some(d), Some(r)) = (dev, rt) {
+        cfg.device = Some(d);
+        cfg.runtime_root = r;
     }
     let json = has(&mut args, "--json");
     let cmd = if args.is_empty() { "status".to_string() } else { args.remove(0) };

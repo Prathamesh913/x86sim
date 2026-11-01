@@ -70,7 +70,7 @@ impl App {
         let paths = aot::Paths::new(&jc);
         let cfg = paths.load_config();
         let max_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
-        let app = App {
+        let mut app = App {
             jc,
             paths,
             cfg,
@@ -102,6 +102,8 @@ impl App {
             sh.lock().unwrap().sim = Some(s);
             std::thread::sleep(Duration::from_secs(2));
         });
+        // the iOS version and cache dir follow the selected phone from the start, not only after a pick
+        app.select_device(app.device);
         app.refresh_status();
         app
     }

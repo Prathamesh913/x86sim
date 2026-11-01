@@ -29,8 +29,8 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {"device": dev}}},
         {"name": "sim_start", "description": "Boot the simulator.", "inputSchema": {"type": "object", "properties": {"device": dev}}},
         {"name": "sim_stop", "description": "Stop the simulator.", "inputSchema": {"type": "object", "properties": {"device": dev}}},
-        {"name": "aot_status", "description": "Pre-translated image status: chunks up to date / stale (with reasons) / missing.",
-         "inputSchema": {"type": "object", "properties": {}}}
+        {"name": "aot_status", "description": "Pre-translated image status of a phone: chunks up to date / stale (with reasons) / missing.",
+         "inputSchema": {"type": "object", "properties": {"device": dev}}}
     ])
 }
 
@@ -73,6 +73,12 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
             json!({"stopped": true})
         }
         "aot_status" => {
+            // the phone's iOS version decides the image and its cache dir
+            let rt = sim::device_runtime(&device);
+            let p = aot::Paths::new(&sim::jc_for(&rt));
+            let mut cfg = p.load_config();
+            cfg.runtime_root = rt;
+            cfg.device = Some(device.clone());
             let st = aot::plan(&p, &cfg)?.status(&p);
             let attention: Vec<_> = st.chunks.iter().filter(|c| c.state != "up-to-date").take(50).collect();
             json!({"image": st.image, "image_current": st.image_current, "total": st.total, "up_to_date": st.up_to_date,

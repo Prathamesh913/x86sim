@@ -241,7 +241,12 @@ pub struct Plan {
 pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     let cache = Cache::open(&cfg.runtime_root).context("opening the dyld cache")?;
     let uuid = cache.uuid_hex();
-    let hot = hot::load(&cfg.training, &uuid, &p.aot.join("hot.bin"))?;
+    // the cache dir's own per-process JIT caches are training profiles too (the sim records them on every boot)
+    let mut training = cfg.training.clone();
+    if !training.contains(&p.jc) {
+        training.push(p.jc.clone());
+    }
+    let hot = hot::load(&training, &uuid, &p.aot.join("hot.bin"))?;
     let mut sources = discover::cache_sources(&cache);
     let mut placed_paths = HashMap::new();
     let placements = discover::read_placement(&p.placement());
