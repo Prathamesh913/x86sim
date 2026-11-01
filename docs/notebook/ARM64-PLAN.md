@@ -1662,3 +1662,22 @@ Fixed in tools/launcher (commits 5083f7a..1aa2bea):
 Not launcher (seen during the test): Spotlight runs at ~100% CPU and grows to 2.4-3.7 GB on both 27.2 phones; Settings
 search pegs Preferences (~93% CPU) and stops taking input for a while; limited.sh reported the guests outside the
 phone's memory scope (IN=0 OUT=107).
+
+## Speed 25 (2026-11-01): app-open speed on iOS 27.2 (details: rounds/speed25.md)
+
+- **Measurement**: tests/arm64/gate/openm.sh (tap the icon, frame ring timestamps from the simhid touch-down; cold =
+  app process killed first). Baseline cold content: Settings 5.53, Messages 4.30, Health 9.93, Wallet 6.61, Maps 5.16 s.
+- **Where it went**: the Swift runtime's _searchConformancesByMangledTypeName (type-by-name fallback) walked all ~346K
+  conformance records per lookup under the JIT: 2/3 of a cold Settings open's guest samples. Every lookup seen was a
+  full miss. Now native + indexed by type name (swiftscan.cpp). Speed 7's conformance step had 27.0's constants and
+  never ran on 27.1/27.2; both steps are found in libswiftCore by code pattern, read from the cache files.
+- **dyld_sim placed** at its table slot (it was always mapped anywhere: ~1.6 s of prepare translated live per process).
+- **Training**: tests/arm64/train.sh needs X86CODE_A64_AOT_AUTOSAVE=1 (image-loading processes save no profile
+  otherwise). 27.2 image 1.88M -> 3.06M blocks (1029 MB).
+- **RSB on** (generation-checked pops; dynarmic A64JitState::rsb_gen / invalidate_gen_ptr); PushRSB sites are now
+  persisted unlinked and as links (a stale pointer into int3 filler killed launchd_sim with SIGTRAP). codegen 0x19.
+- After: Settings 4.2-4.6, Messages 2.6, Health 5.0-6.0, Wallet 3.4-3.6, Maps 2.9 s; warm response 0.44 -> 0.37 s.
+- Fixed: News/Safari closing (JSC execute-only pages = PKU pages on Linux; the fault handler makes them readable),
+  Messages conversation spin (StatusKitAgent job), launchd #IfFeatureFlagEnabled resolved with the runtime's flags.
+- Open on 27.2: keyboard focus (SpringBoard "[KeyboardFocus] invalid pid for scene"), Siri, Spotlight runaway CPU/RSS,
+  Settings search-typing spin (QA report).

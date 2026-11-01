@@ -1,8 +1,18 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 24: Maps/Health now suspend in the background (simulator RunningBoard exemption removed), memory with apps 3.4 -> 2.6 GB; each phone has its own iOS version; 27.2 Maps gets past the black screen.",
+ "now": "Speed 25: cold app opens on iOS 27.2 cut 30-45% (Settings 5.5 -> 4.2-4.6 s, Messages 4.3 -> 2.6 s, Health 9.9 -> 5.0-6.0 s, Wallet 6.6 -> 3.4-3.6 s, Maps 5.2 -> 2.9 s; warm tap response 0.44 -> 0.37 s): Swift type lookups native and indexed, dyld_sim pre-translated, retrained image, return stack buffer on. News and Safari no longer close. Open on 27.2: keyboard focus and Siri.",
  "metrics": [
+  [
+   "Cold app open, iOS 27.2 (frame-timed tap -> content)",
+   "Settings 4.2-4.6 s, Messages 2.6 s, Health 5.0-6.0 s, Wallet 3.4-3.6 s, Maps 2.9 s",
+   "Speed 25; were 5.5 / 4.3 / 9.9 / 6.6 / 5.2 s (tests/arm64/gate/openm.sh)"
+  ],
+  [
+   "Warm app open, iOS 27.2",
+   "response 0.37 s, content 0.66-0.87 s",
+   "Speed 25; was 0.44-0.48 / 0.73-0.83 s"
+  ],
   [
    "Memory, one sim (PSS)",
    "2.15 GB (37 procs)",
@@ -180,7 +190,9 @@
    "Speed 10: Settings on a second instance cloned with A64_CLONE_FROM"
   ]
  ],
- "notes": [],
+ "notes": [
+  "Speed 25 (2026-11-01): see docs/notebook/rounds/speed25.md"
+ ],
  "speed6": {
   "date": "2026-10-30",
   "home_s": 35,
