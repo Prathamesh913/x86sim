@@ -69,6 +69,7 @@ fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&st)?);
                 return Ok(());
             }
+            println!("translator codegen {:#x} (from {:?})", st.codegen, st.codegen_source);
             println!("image {} ({})", st.image, if st.image_current { "current" } else if st.image_present { "present, not current" } else { "missing" });
             println!(
                 "scope {} budget {} MB; {} chunks: {} up to date, {} stale, {} missing ({} libraries over budget stay lazy); training: {} profiles, {} hot blocks",

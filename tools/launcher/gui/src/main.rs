@@ -175,7 +175,9 @@ impl App {
             self.viewers.insert(id.to_string(), viewer::Viewer::new(&inst, self.ctx.clone()));
         }
         let bt = self.status.get(id).and_then(|s| s.boot_time);
+        let ring = self.inst(id)?.ring.clone();
         let v = self.viewers.get_mut(id)?;
+        v.set_ring(&ring);
         v.set_boot_time(bt);
         Some(v)
     }
@@ -233,10 +235,8 @@ impl App {
     fn sync(&mut self) {
         let g = self.shared.lock().unwrap();
         if g.polled {
-            // the poller's view of the phones is the truth; keep card order stable
-            if g.insts.len() != self.insts.len() || g.insts.iter().zip(&self.insts).any(|(a, b)| a.id != b.id || a.runtime_present != b.runtime_present) {
-                self.insts = g.insts.clone();
-            }
+            // the poller's view of the phones is the truth (a boot rewrites sim.env: ring, model, name)
+            self.insts = g.insts.clone();
             self.status = g.status.clone();
         }
     }

@@ -1,55 +1,91 @@
-//! Live log tail over a phone's log dirs and state files: first sight shows the last 2 KB of a file, then only what
-//! is appended (a truncated file starts over). Lines are kept in a bounded buffer, newest last.
+//! Live log tail over a phone's logs, grouped into a few sources (each line keeps the process it came from):
+//! System (one log per launchd job), Translator (one log per translated process, many per boot), Boot (the boot's
+//! state files), Graphics (mtlvk) and Memory (jetsam). First sight shows the last 2 KB of a file, then only what is
+//! appended (a truncated file starts over). Files last written before this boot are a past session's and are skipped.
+//! Lines are kept in a bounded buffer, newest last.
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug)]
 pub struct Line {
+    /// the source group ("System", "Translator", …)
+    pub group: &'static str,
+    /// the process or file the line came from
     pub source: String,
     pub text: String,
 }
 
-pub struct Tail {
-    pub dirs: Vec<PathBuf>,
-    pub files: Vec<PathBuf>,
-    offs: HashMap<PathBuf, u64>,
-    pub lines: VecDeque<Line>,
-    pub sources: Vec<String>,
-    pub cap: usize,
-    pub generation: u64,
+/// A dir of per-process logs, or one file, and the group its lines belong to.
+#[derive(Clone, Debug)]
+pub enum Src {
+    Dir(&'static str, PathBuf),
+    File(&'static str, PathBuf),
 }
 
-fn tag(p: &PathBuf) -> String {
+pub const GROUPS: [&str; 5] = ["System", "Translator", "Boot", "Graphics", "Memory"];
+
+pub struct Tail {
+    pub srcs: Vec<Src>,
+    offs: HashMap<PathBuf, u64>,
+    pub lines: VecDeque<Line>,
+    pub cap: usize,
+    pub generation: u64,
+    /// unix seconds: files last modified before this are skipped (a past boot's)
+    pub since: Option<f64>,
+}
+
+/// "com.apple.SpringBoard.log" -> "SpringBoard", "AegirPoster.1338.log" -> "AegirPoster", "lsim.out" -> "lsim"
+fn tag(p: &std::path::Path) -> String {
     let n = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let n = n.strip_suffix(".log").unwrap_or(&n).to_string();
-    n.strip_prefix("com.apple.").unwrap_or(&n).to_string()
+    let n = n.strip_suffix(".log").or_else(|| n.strip_suffix(".out")).or_else(|| n.strip_suffix(".txt")).unwrap_or(&n).to_string();
+    let n = n.strip_prefix("com.apple.").or_else(|| n.strip_prefix("com.x86code.")).unwrap_or(&n).to_string();
+    // a trailing pid
+    match n.rsplit_once('.') {
+        Some((a, b)) if !a.is_empty() && b.chars().all(|c| c.is_ascii_digit()) => a.to_string(),
+        _ => n,
+    }
 }
 
 impl Tail {
-    pub fn new(dirs: Vec<PathBuf>, files: Vec<PathBuf>) -> Tail {
-        Tail { dirs, files, offs: HashMap::new(), lines: VecDeque::new(), sources: vec![], cap: 6000, generation: 0 }
+    pub fn new(srcs: Vec<Src>) -> Tail {
+        Tail { srcs, offs: HashMap::new(), lines: VecDeque::new(), cap: 6000, generation: 0, since: None }
     }
 
     /// Reads what is new; returns the number of lines added.
     pub fn poll(&mut self) -> usize {
-        let mut paths: Vec<PathBuf> = self.files.clone();
-        for d in &self.dirs {
-            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
-                let p = e.path();
-                if p.extension().is_some_and(|x| x == "log" || x == "out" || x == "txt") {
-                    paths.push(p);
+        let mut paths: Vec<(&'static str, PathBuf)> = vec![];
+        for s in &self.srcs {
+            match s {
+                Src::File(g, p) => paths.push((g, p.clone())),
+                Src::Dir(g, d) => {
+                    for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                        let p = e.path();
+                        if p.extension().is_some_and(|x| x == "log" || x == "out" || x == "txt") {
+                            paths.push((g, p));
+                        }
+                    }
                 }
             }
         }
+        let since = self.since.map(|s| UNIX_EPOCH + Duration::from_secs_f64((s - 5.0).max(0.0)));
         let mut added = 0;
-        for p in paths {
+        for (group, p) in paths {
             let Ok(md) = std::fs::metadata(&p) else { continue };
+            let known = self.offs.get(&p).copied();
+            if known.is_none() {
+                if let (Some(s), Ok(m)) = (since, md.modified()) {
+                    if m < s {
+                        continue; // a past boot's file (checked again next time: it may be written to)
+                    }
+                }
+            }
             let size = md.len();
-            let mut o = match self.offs.get(&p) {
+            let mut o = match known {
                 None => size.saturating_sub(2048),
-                Some(o) if size < *o => 0,
-                Some(o) => *o,
+                Some(o) if size < o => 0,
+                Some(o) => o,
             };
             if size > o {
                 if let Ok(mut f) = std::fs::File::open(&p) {
@@ -57,22 +93,25 @@ impl Tail {
                     let mut buf = vec![0u8; ((size - o) as usize).min(1 << 16)];
                     if let Ok(n) = f.read(&mut buf) {
                         buf.truncate(n);
-                        o += n as u64;
+                        // only whole lines; a partial last line is read next time
+                        let end = match buf.iter().rposition(|&c| c == b'\n') {
+                            Some(i) => i + 1,
+                            None if n >= 1 << 16 => n, // one huge line
+                            None => 0,
+                        };
+                        let first_sight = known.is_none() && o > 0;
+                        o += end as u64;
                         let t = tag(&p);
-                        if !self.sources.contains(&t) {
-                            self.sources.push(t.clone());
-                            self.sources.sort();
-                        }
-                        let s = String::from_utf8_lossy(&buf);
+                        let s = String::from_utf8_lossy(&buf[..end]);
                         let mut it = s.lines().peekable();
-                        if self.offs.get(&p).is_none() {
+                        if first_sight {
                             it.next(); // a partial first line of the tail
                         }
                         for l in it {
                             if l.trim().is_empty() {
                                 continue;
                             }
-                            self.lines.push_back(Line { source: t.clone(), text: l.to_string() });
+                            self.lines.push_back(Line { group, source: t.clone(), text: l.to_string() });
                             added += 1;
                         }
                     }
@@ -88,4 +127,14 @@ impl Tail {
         }
         added
     }
+
+    /// Groups that have lines, in GROUPS order.
+    pub fn groups(&self) -> Vec<&'static str> {
+        GROUPS.iter().copied().filter(|g| self.lines.iter().any(|l| l.group == *g)).collect()
+    }
+}
+
+/// now as unix seconds
+pub fn now_s() -> f64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }

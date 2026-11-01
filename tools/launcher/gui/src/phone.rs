@@ -342,9 +342,12 @@ impl App {
     }
 
     fn logs_section(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, st: Option<&instance::Status>) {
-        if self.logs.as_ref().map(|l| l.0.as_str()) != Some(&inst.id) {
-            let (dirs, files) = instance::log_sources(inst, st);
-            self.logs = Some((inst.id.clone(), logs::Tail::new(dirs, files)));
+        // one tail per phone and boot (a restart can change the dirs; older files are the last boot's)
+        let boot = st.and_then(|s| s.boot_time);
+        if self.logs.as_ref().map(|l| l.0.as_str()) != Some(&inst.id) || self.logs.as_ref().is_some_and(|l| boot.is_some() && l.1.since != boot) {
+            let mut t = logs::Tail::new(instance::log_sources(inst, st));
+            t.since = boot;
+            self.logs = Some((inst.id.clone(), t));
             self.last_log_poll = Instant::now() - Duration::from_secs(5);
         }
         if !self.log_paused && self.last_log_poll.elapsed() > Duration::from_millis(1000) {
@@ -356,15 +359,30 @@ impl App {
         }
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let rest = ui.available_width() - 132.0 - 2.0 * H_MD - 3.0 * 6.0 - 4.0;
-            search(ui, &mut self.log_filter, "Filter", rest.max(80.0));
-            let sources = self.logs.as_ref().map(|l| l.1.sources.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("logsrc").icon(caret).width(132.0).selected_text(egui::RichText::new(if self.log_source.is_empty() { "All sources".to_string() } else { truncate(&self.log_source, 15) }).size(T_SMALL)).show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.log_source, String::new(), "All sources");
-                for s in sources {
-                    ui.selectable_value(&mut self.log_source, s.clone(), s);
-                }
-            });
+            let rest = ui.available_width() - 116.0 - 2.0 * H_MD - 3.0 * 6.0 - 4.0;
+            search(ui, &mut self.log_filter, "Filter text or process", rest.max(80.0));
+            let groups = self.logs.as_ref().map(|l| l.1.groups()).unwrap_or_default();
+            egui::ComboBox::from_id_salt("logsrc")
+                .icon(caret)
+                .width(116.0)
+                .selected_text(egui::RichText::new(if self.log_source.is_empty() { "All logs".to_string() } else { self.log_source.clone() }).size(T_SMALL))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.log_source, String::new(), "All logs");
+                    for g in logs::GROUPS {
+                        let has = groups.contains(&g);
+                        ui.add_enabled_ui(has || self.log_source == g, |ui| {
+                            ui.selectable_value(&mut self.log_source, g.to_string(), g).on_hover_text(match g {
+                                "System" => "One log per iOS service and app",
+                                "Translator" => "The ARM translator, one log per process",
+                                "Boot" => "Starting the phone",
+                                "Graphics" => "The GPU helper",
+                                _ => "Memory clean-up",
+                            });
+                        });
+                    }
+                })
+                .response
+                .on_hover_text("Which logs to show");
             let (ic, tip) = if self.log_paused { (icon::PLAY, "Follow") } else { (icon::PAUSE, "Pause") };
             if ui.add(Btn::tool(ic)).on_hover_text(tip).clicked() {
                 self.log_paused = !self.log_paused;
@@ -380,7 +398,7 @@ impl App {
         let src = self.log_source.clone();
         let paused = self.log_paused;
         if let Some((_, t)) = &self.logs {
-            let rows: Vec<&logs::Line> = t.lines.iter().filter(|l| (src.is_empty() || l.source == src) && (f.is_empty() || l.text.to_lowercase().contains(&f) || l.source.to_lowercase().contains(&f))).collect();
+            let rows: Vec<&logs::Line> = t.lines.iter().filter(|l| (src.is_empty() || l.group == src) && (f.is_empty() || l.text.to_lowercase().contains(&f) || l.source.to_lowercase().contains(&f))).collect();
             egui::Frame::new().fill(WELL).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(R_MD).inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 0.0;

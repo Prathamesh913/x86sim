@@ -225,6 +225,9 @@ pub struct Status {
     pub dropped: usize,
     pub training_files: usize,
     pub hot_blocks: usize,
+    /// the installed translator's codegen version (and where it was read): keys and the image name follow it
+    pub codegen: u64,
+    pub codegen_source: key::CodegenSource,
     pub chunks: Vec<ChunkStatus>,
 }
 
@@ -372,6 +375,8 @@ impl Plan {
             dropped: 0,
             training_files: self.hot.files,
             hot_blocks: self.hot.blocks.len(),
+            codegen: key::codegen_info().0,
+            codegen_source: key::codegen_info().1,
             chunks: vec![],
         };
         for c in &self.chunks {
@@ -432,8 +437,8 @@ fn chunk_state(p: &Paths, m: &Manifest, c: &PlanChunk) -> (String, Vec<String>) 
     if r.addr != c.src.addr {
         why.push("load address moved (placement / cache layout)".into());
     }
-    if r.codegen != key::CODEGEN_VERSION {
-        why.push(format!("codegen version bump ({:#x} -> {:#x})", r.codegen, key::CODEGEN_VERSION));
+    if r.codegen != key::codegen() {
+        why.push(format!("translator update (codegen {:#x} -> {:#x})", r.codegen, key::codegen()));
     }
     if why.is_empty() {
         why.push("key changed".into());
@@ -704,8 +709,14 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                 match ev {
                     "start" => {
                         if let Some(cg) = v["codegen"].as_u64() {
-                            if cg != key::CODEGEN_VERSION && !codegen_checked {
-                                bail!("libarm64jit's codegen version {cg:#x} != x86code-aot's {:#x}: update core/src/key.rs", key::CODEGEN_VERSION);
+                            if cg != key::codegen() && !codegen_checked {
+                                for (ch, _, _) in children.iter_mut() {
+                                    unsafe {
+                                        libc::kill(-(ch.id() as i32), libc::SIGTERM);
+                                    }
+                                    let _ = ch.wait();
+                                }
+                                bail!("the translator reports codegen {cg:#x}, but {} reads {:#x}: was it rebuilt during the run? Start again", key::translator().display(), key::codegen());
                             }
                             codegen_checked = true;
                         }
@@ -748,7 +759,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                                     key: c.key.clone(),
                                     ident: c.src.ident.clone(),
                                     addr: c.src.addr,
-                                    codegen: key::CODEGEN_VERSION,
+                                    codegen: key::codegen(),
                                     slot_off: off,
                                     slot_size: size,
                                     used,

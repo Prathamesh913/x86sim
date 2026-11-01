@@ -589,13 +589,6 @@ pub fn search(ui: &mut egui::Ui, text: &mut String, hint: &str, w: f32) -> egui:
     r
 }
 
-pub fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>())
-    }
-}
 
 pub fn fmt_s(s: f64) -> String {
     if s >= 3600.0 {

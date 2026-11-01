@@ -416,13 +416,21 @@ pub fn stop(inst: &Instance, st: Option<&Status>) -> Result<()> {
     Ok(())
 }
 
-/// Log sources of a phone: its job logs, the per-process JIT logs of its prefix, the boot's state files.
-pub fn log_sources(inst: &Instance, st: Option<&Status>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+/// Log sources of a phone: its job logs, the per-process translator logs of its prefix, the boot's state files.
+pub fn log_sources(inst: &Instance, st: Option<&Status>) -> Vec<crate::logs::Src> {
+    use crate::logs::Src;
     let (state_dir, prefix) = match st {
         Some(s) => (s.state_dir.clone(), s.prefix.clone()),
         None => (inst.state_dir.clone(), inst.prefix.clone()),
     };
-    let dirs = vec![inst.log_dir.clone(), prefix.join("private/var/tmp/x86code-a64")];
-    let files = vec![state_dir.join("lsim.out"), state_dir.join("launchd.log"), state_dir.join("mtlvk.log"), state_dir.join("jetsam.log"), state_dir.join("aot-status.txt"), boot_log(inst)];
-    (dirs, files)
+    vec![
+        Src::Dir("System", inst.log_dir.clone()),
+        Src::Dir("Translator", prefix.join("private/var/tmp/x86code-a64")),
+        Src::File("Boot", boot_log(inst)),
+        Src::File("Boot", state_dir.join("lsim.out")),
+        Src::File("Boot", state_dir.join("launchd.log")),
+        Src::File("Boot", state_dir.join("aot-status.txt")),
+        Src::File("Graphics", state_dir.join("mtlvk.log")),
+        Src::File("Memory", state_dir.join("jetsam.log")),
+    ]
 }

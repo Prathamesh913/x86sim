@@ -30,6 +30,8 @@ pub struct Shared {
     pub dirty: AtomicBool,
     pub seq: AtomicU64,
     pub fps: Mutex<Vec<std::time::Instant>>,
+    /// the frame ring this phone publishes to: a boot rewrites sim.env, so the path can change while the viewer lives
+    pub ring: Mutex<std::path::PathBuf>,
 }
 
 pub struct Viewer {
@@ -63,14 +65,21 @@ impl Viewer {
     pub fn new(inst: &Instance, ctx: egui::Context) -> Viewer {
         let shared = Arc::new(Shared::default());
         shared.target_w.store(inst.screen.0, Ordering::Relaxed);
+        *shared.ring.lock().unwrap() = inst.ring.clone();
         let sh = shared.clone();
-        let ring_path = inst.ring.clone();
         std::thread::Builder::new()
             .name(format!("ring {}", inst.id))
             .spawn(move || {
+                let mut ring_path = sh.ring.lock().unwrap().clone();
                 let mut ring = Ring::new(&ring_path);
                 let mut last = (0u64, 0usize);
                 loop {
+                    let want = sh.ring.lock().unwrap().clone();
+                    if want != ring_path {
+                        ring = Ring::new(&want);
+                        ring_path = want;
+                        last = (0, 0);
+                    }
                     let mode = sh.mode.load(Ordering::Relaxed);
                     if mode == OFF {
                         std::thread::sleep(Duration::from_millis(250));
@@ -107,6 +116,17 @@ impl Viewer {
             })
             .expect("ring thread");
         Viewer { shared, tex: None, tex_seq: 0, hid: hid::Hid::new(&inst.sock), touching: false, last_norm: (0.0, 0.0), focused: false, screen: inst.screen, id: inst.id.clone(), pinch: false, pan2: false }
+    }
+
+    /// Follow the phone's current ring (sim.env after its last boot); a change drops the old ring's picture.
+    pub fn set_ring(&mut self, p: &std::path::Path) {
+        let mut r = self.shared.ring.lock().unwrap();
+        if r.as_path() != p {
+            *r = p.to_path_buf();
+            drop(r);
+            *self.shared.frame.lock().unwrap() = None;
+            self.clear();
+        }
     }
 
     pub fn set_boot_time(&self, t: Option<f64>) {
