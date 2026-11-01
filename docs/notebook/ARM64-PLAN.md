@@ -1707,3 +1707,26 @@ phone's memory scope (IN=0 OUT=107).
 - **Gate** (tests/arm64/gate): Photos' What's New sheet dismissed; Siri by side button counting Siri's UI processes;
   stale ring frame rejected; stall = no screen and no guest CPU change. z1-z3: all checks pass except the Spotlight
   crash (z1, z2 also hit gate flaws since fixed). Zero-crash gate NOT met.
+
+## Speed 27 (2026-11-01): Spotlight, boot time, network, Maps on iOS 27.2 (details: rounds/speed27.md)
+
+- **Spotlight typing fixed**: the nil TOKEN was CoreSpotlight's localized strings, read from the host path
+  /System/Library/Frameworks/CoreSpotlight.framework, a dangling link into the lost iOS 26.5 runtime; boot-a64 links
+  the booted runtime's copy into the prefix each boot. The query-parser asset now downloads (106 MB, as on a Mac), Core
+  ML compiles it (Darling F_PREALLOCATE + other fcntls), assistant_cdmd job (embedding service).
+- **Boot to home 73-82 s -> ~16-42 s**: lsd rebuilt LaunchServices every boot (44.7 s) because the rebuilt store never
+  saved: NSFileManager replaceItemAtURL resolves the parent by ID (fsgetpath); Darling's getattrlist now remembers the
+  parent's path for the parent ID it hands out.
+- **Network first-connection ENETDOWN fixed**: a TCP_INFO read racing connect() looked "disconnected" (re-read once),
+  and close() left deferred-delete knotes alive (libkqueue: close drops knotes; EV_ADD replaces a knote of another file).
+- **Maps**: tiles, search, place card, Directions card (nanoregistryd job: NanoRegistry sync-query deadlock froze Maps'
+  main thread; host GeoServicesData via cli/libexec/arm64/fetch-macos-host.sh). Open: the route itself aborts
+  (AttributeGraph "attribute failed to set an initial value"; not deadline, not AOT, not multi-core).
+- **arm64 CPU identity**: hw.cputype/cpusubtype/machine/cpufamily/optional.* as an M1 for arm64 processes.
+- **JIT**: FEAT_FRINTTS (FRINT32Z/32X/64Z/64X) in the fallback; Swift type index keeps indirect records; training
+  saves profiles on abort (AOT_AUTOSAVE only). Image retrained 3.06M -> 3.39M blocks (Messages, News, Safari, Maps
+  route, switcher).
+- **Gate**: logs first (process + JIT-log crash before any screen read); Messages, News, Safari page, Maps tiles,
+  Spotlight typing, swipe-up home, app switcher, Health first-run sheet. Zero-crash gate NOT met: JSC JIT-code faults in
+  WebContent on en.wikipedia.org (new, open); Siri UI still absent (no audio input device: simaudio arm64 built, HAL
+  not reached yet).

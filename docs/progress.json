@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 26: iOS 27.2 keyboard works (host keys type in Settings search and Spotlight; the dictation spin is gone: assistantd is Apple's plist again), the arm64 phone has a network (DNS, host network state, connectx/socket_delegate, /.nofollow paths) and Safari renders pages (canonical runtime root for WebKit's helpers, CNTVCT/FJCVTZS), Files Recents works (searchd), Siri starts its process on the side button and downloads its assets. Open: Spotlight crashes when typing until the query-parser asset downloads; Siri shows no UI yet; intermittent ENETDOWN in Network.framework.",
+ "now": "Speed 27: iOS 27.2 Spotlight typing works (CoreSpotlight host-path strings; query-parser asset downloads), boot to home ~16-42 s (was 73-82: lsd's database saves again), first-connection ENETDOWN fixed (libkqueue/sostate), Maps draws tiles, searches places and opens place and Directions cards (nanoregistryd, GeoServicesData). Open: Maps route aborts (AttributeGraph precondition), WebContent JSC JIT faults on en.wikipedia.org, Siri UI (no audio input device).",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -695,5 +695,35 @@
    "GETBLOCK_FD probe (goal 6) not started"
   ],
   "gate": "z1-z3 on 27.2: every check passes except the Spotlight crash; zero-crash gate not met"
+ },
+ "speed27": {
+  "date": "2026-11-01",
+  "details": "docs/notebook/rounds/speed27.md",
+  "fixed": [
+   "Spotlight typing (CoreSpotlight framework link, query-parser asset, F_PREALLOCATE & fcntls, assistant_cdmd)",
+   "boot to home 73-82 s -> ~16-42 s (fsgetpath parent IDs: lsd saves its database)",
+   "first-connection ENETDOWN (TCP_INFO/connect race, close() knotes)",
+   "Maps tiles/search/place card/Directions card (nanoregistryd, host GeoServicesData)",
+   "arm64 CPU identity (hw.*), FEAT_FRINTTS",
+   "gate logs-first + Messages/News/Safari/Maps tiles/Spotlight typing/swipe-up/switcher/Health first run"
+  ],
+  "open": [
+   "Maps route aborts (AttributeGraph 'attribute failed to set an initial value')",
+   "WebContent JSC JIT-code NULL faults on en.wikipedia.org (AOT image runs)",
+   "Siri UI: no audio input device (simaudio arm64 built, HAL not reached), accountsd etc. not jobs",
+   "GETBLOCK_FD probe not done"
+  ],
+  "gate": "s27g1: 2 failed (Health first run [handled since], WebContent frint32z [implemented since]); s27h1: 1 failed (WebContent JSC faults). Zero-crash gate not met.",
+  "measures": {
+   "boot_to_home_s": "16-42",
+   "cold_content_s": {
+    "Settings": 5.55,
+    "Messages": 3.47,
+    "Health": 9.74,
+    "Wallet": 4.44,
+    "Maps": 7.3
+   },
+   "warm_content_s": "0.73-0.91"
+  }
  }
 }
