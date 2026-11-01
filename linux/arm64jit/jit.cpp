@@ -155,8 +155,11 @@ void gsample_start(GuestThread *t) {
                 char line[1024];
                 int o = snprintf(line, sizeof line, "T %llu", (unsigned long long)tr.tv_sec * 1000000000ull + tr.tv_nsec);
                 for (u64 a : st) {
-                    if (a >> 60 == 0xF) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " [%s]", g_thunks[a & 0xffffffff].name.c_str());
+                    // Speed 22: the thunk's number, not g_thunks[i].name: thunks are still added while this thread reads
+                    // (vector reallocation: the sampler SIGSEGV'd SpringBoard). Names: the thunk table in the log.
+                    if (a >> 60 == 0xF) o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " [#%u]", (unsigned)(a & 0xffffffff));
                     else o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " %#lx", (unsigned long)a);
+                    if (o >= (int)sizeof line) break;
                 }
                 if (out) { fputs(line, out); fputc('\n', out); }
             }
