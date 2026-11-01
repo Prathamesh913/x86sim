@@ -1455,3 +1455,24 @@ swung 2x between runs, so CPU-s per tap and sample shares are the primary measur
   275, memfd surfaces 121, JIT code 95, .idx 46. Top processes: mtlvk 475, SpringBoard 431, Preferences 224, Spotlight
   190, backboardd 158, PosterBoard 131, MercuryPoster 122, passd 113, financed 81.
 - Gates g1-g3 (cold boot + Settings + Calendar/Photos/Maps + keyboard + Siri + Files): 3 consecutive clean.
+
+## Speed 21 (2026-10-31): dispatch_main's main queue drained again (Health, Files), repo hygiene
+
+Details in round-done/speed21.md.
+- **Repos:** the xnu fork's uncommitted SYS_thread_selfcounts (186) and the `darling/` -> `emulation/include`
+  symlink were part of the installed build: the a64prefix libsystem_kernel.dylib is byte-identical to the build
+  output and has `_sys_thread_selfcounts`, and 301 emulation sources include `<darling/emulation/...>` through the
+  symlink. Committed to x86code/darling-xnu `x86code` (a859aa2), pointers bumped.
+- **filecoordinationd never answered** (Health blank, Files "On My iPhone" stuck loading). filecoordinationd puts its
+  NSXPCListener and NSFileAccessArbiter on the main queue and calls `dispatch_main()`. libarm64jit's pthread_exit
+  handler parked the main thread without running the thread's TSD destructors, and libdispatch's queue-key destructor
+  (`_dispatch_queue_cleanup2`) is what hands `_dispatch_main_q` to the root queue after dispatch_main. So the main
+  queue was never drained again in any daemon using dispatch_main (filecoordinationd, cfprefsd, notifyd, syslogd,
+  diagnosticd, fontservicesd, iconservicesagent, appprotectiond, launchd_sim itself). The handler now runs cleanup
+  records + guest TSD destructors before parking (`X86CODE_A64_MAIN_EXIT_NOTSD=1` restores the old park).
+  - The destructor ends in `_dispatch_sig_thread` -> `_dispatch_clear_stack`, which bzeroes down to the stack bottom
+    from `pthread_get_stackaddr_np/stacksize_np`. Those were thunked to Darling's native pthread (the native stack, not
+    the guest one): launchd_sim SIGSEGV. They now answer from the GuestThread stack for the calling thread.
+  - Result: filecoordinationd logs "Received claim ... granted in server"; Health opens to Summary (Pinned, "Show All
+    Health Data", Summary/Sharing/Browse tabs); Files browses On My iPhone ("On My iPhone is Empty") and New Folder
+    creates a folder ("1 item").

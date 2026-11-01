@@ -377,13 +377,13 @@ static void h_abort_with(GuestThread &t, u32 i) {
 
 // pthread_exit on the main thread (dispatch_main does it): Darling's terminates nothing there and traps ("thread
 // didn't terminate", SIGILL). The main thread parks instead; the process ends when another thread calls exit().
+// Before parking it runs what a real thread exit runs (cleanup records, guest TSD destructors): libdispatch's queue
+// key destructor (_dispatch_queue_cleanup2) is what hands _dispatch_main_q over to the root queue after
+// dispatch_main. Without it the main queue was never drained again, so daemons serving on it (filecoordinationd's
+// NSXPCListener + NSFileAccessArbiter) never answered (Speed 21: Health / Files blocked on grantAccessClaim).
 static void h_pthread_exit(GuestThread &t, u32 i) {
     static auto *is_main = (int (*)())dsym("pthread_main_np");
-    if (is_main && is_main()) {
-        logf("pthread_exit on the main thread (linux tid %ld, pid %d): parking it", (long)syscall(SYS_gettid), (int)getpid());
-        static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
-        for (;;) dsleep(100000);
-    }
+    const bool main_thread = is_main && is_main();
     // pthread_cleanup_push records are guest code (the macro links them into pthread_self()->__cleanup_stack, at +8
     // in both layouts): run them here, newest first, before Darling sees the thread end.
     {
@@ -396,10 +396,36 @@ static void h_pthread_exit(GuestThread &t, u32 i) {
         }
         t.set_x(0, exit_value);
     }
+    if (main_thread && !getenv("X86CODE_A64_MAIN_EXIT_NOTSD")) {
+        logf("pthread_exit on the main thread (linux tid %ld, pid %d): TSD destructors, then parking it",
+             (long)syscall(SYS_gettid), (int)getpid());
+        // libdispatch's _dispatch_queue_cleanup2 ends in _dispatch_sig_thread (sigsuspend forever on this thread)
+        t.run_guest_tsd_destructors();
+    }
+    if (main_thread) {
+        if (getenv("X86CODE_A64_MAIN_EXIT_NOTSD")) logf("pthread_exit on the main thread (pid %d): parking it", (int)getpid());
+        static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
+        for (;;) dsleep(100000);
+    }
     if (t_exit_jmp) { t_exit_value = t.x(0); __builtin_longjmp(*t_exit_jmp, 1); }
     logf("pthread_exit on a thread not started by us (tid %ld): Darling's pthread_exit", (long)syscall(SYS_gettid));
     guest_backtrace(t);
     h_generic(t, i);
+}
+
+// pthread_get_stackaddr_np / pthread_get_stacksize_np on the calling thread: the guest runs on its GuestThread's
+// stack, not on the native one Darling's pthread describes. libdispatch's _dispatch_clear_stack (end of
+// _dispatch_queue_cleanup2 after dispatch_main) bzeroed from sp to the native stack's bottom and faulted. Other
+// threads: native answer.
+static bool on_own_stack(GuestThread &t) {
+    static auto *self = (u64 (*)())dsym("pthread_self");
+    return t.x(0) == self() && t.stack_base && t.sp() - t.stack_base < t.stack_size;
+}
+static void h_stackaddr(GuestThread &t, u32 i) {
+    if (on_own_stack(t)) t.set_x(0, t.stack_base + t.stack_size); else h_generic(t, i);
+}
+static void h_stacksize(GuestThread &t, u32 i) {
+    if (on_own_stack(t)) t.set_x(0, t.stack_size); else h_generic(t, i);
 }
 
 // pthread_kill/__pthread_kill/kill with SIGABRT (libc's abort): log the guest backtrace first
@@ -581,6 +607,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_pthread_create", h_pthread_create}, {"_pthread_create_suspended_np", h_pthread_create},
         {"_pthread_create_from_mach_thread", h_pthread_create}, {"_pthread_create_with_workgroup_np", h_pthread_create_with_workgroup},
         {"_pthread_once", h_callbacks<1>}, {"_pthread_atfork", h_callbacks<0, 1, 2>},
+        {"_pthread_get_stackaddr_np", h_stackaddr}, {"_pthread_get_stacksize_np", h_stacksize},
         {"_pthread_key_create", h_key_create}, {"_pthread_key_init_np", h_key_init_np}, {"_pthread_key_delete", h_key_delete},
         {"__os_once", h_callbacks<2>}, {"__os_alloc_once", h_callbacks<2>},
         {"__pthread_workqueue_init", h_callbacks<0>}, {"__pthread_workqueue_init_with_kevent", h_callbacks<0, 1>},
