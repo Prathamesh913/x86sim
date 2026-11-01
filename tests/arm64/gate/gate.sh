@@ -14,7 +14,7 @@ if [ "${SKIPBOOT:-0}" != 1 ]; then
 	for i in $(seq 1 60); do sleep 2; sb=$(ps -eo pid,comm | awk '$2=="SpringBoard"{print $1}' | grep -vw -e "${OLDSB:-x}" | head -1); [ -n "$sb" ] && break; done
 fi
 mark_logs
-f wait_ocr home 'Calendar|Photos|Wallet|Health' 300
+FRESH=1 f wait_ocr home 'Calendar|Photos|Wallet|Health' 300
 sleep 8
 f open_check settings_cold com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General' 180
 f open_check settings_warm com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General' 60

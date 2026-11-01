@@ -34,7 +34,14 @@ wait_ocr() {
 	while :; do
 		sleep 2
 		o=$(ocr); el=$(python3 -c "print(f'{$(date +%s.%N)-$t0:.0f}')")
-		if echo "$o" | grep -Eqi "$2"; then cp "$O/now.png" "$O/$1.png"; say "HIT $1 t+${el}s [${o:0:110}]"; return 0; fi
+		# FRESH=1: the status-bar clock must show the current (or last) minute, so a frame left in the ring from the
+		# previous boot doesn't count
+		local fresh=1
+		if [ "${FRESH:-0}" = 1 ]; then
+			fresh=0
+			for m in 0 1; do echo "$o" | grep -q "$(date -d "-$m min" +%-I:%M)" && fresh=1; done
+		fi
+		if [ $fresh = 1 ] && echo "$o" | grep -Eqi "$2"; then cp "$O/now.png" "$O/$1.png"; say "HIT $1 t+${el}s [${o:0:110}]"; return 0; fi
 		local sig; sig="$o $(md5sum < "$O/now.png")"
 		[ "$sig" = "$last" ] && flat=$((flat + 2)) || flat=0; last=$sig
 		[ $flat -ge 30 ] && { cp "$O/now.png" "$O/$1-stall.png"; say "STALL $1 t+${el}s [${o:0:110}]"; return 3; }
