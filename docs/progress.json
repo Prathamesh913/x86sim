@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 20: lock-free exclusive monitor (objc retain/release were LDXR/STXR through dynarmic's global lock + 64-slot scan; libobjc share on a tap 32% -> 12%), Wallet fixed (financed/passd were missing: FinanceKit's XPC Core Data store), Health traced to a file-coordination write claim that filecoordinationd never grants. No ASTC encoding on tap: it is the app snapshot's decode.",
+ "now": "Speed 21: Health and Files' On My iPhone work: daemons that serve on the main queue after dispatch_main (filecoordinationd) never drained it because the main thread parked without its TSD destructors. os_log DT mode (debug text logs) off by default: SpringBoard CPU per warm tap 0.84 -> 0.61 CPU-s, tap response 0.57 -> 0.45 s.",
  "metrics": [
   [
    "Memory, one sim (PSS)",
@@ -68,7 +68,7 @@
   {
    "name": "2. Boot to the home screen",
    "status": "done",
-   "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+   "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
   },
   {
    "name": "3. Fast and lean",
@@ -117,7 +117,7 @@
   ],
   [
    "32-speed1c-gpu-home.png",
-   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID — wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
+   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
   ],
   [
    "31-speed1b-gpu-home.png",
@@ -125,19 +125,19 @@
   ],
   [
    "15-stage3-compact-maps-home.png",
-   "Stage 3: compact patch+fastmem maps — SB 1.4→1.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
+   "Stage 3: compact patch+fastmem maps \u2014 SB 1.4\u21921.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
   ],
   [
    "14-stage3-pagemap-home.png",
-   "Stage 3: page-map cold boot home — host_heap 137→79 MB; 448 MB anon VMA remains"
+   "Stage 3: page-map cold boot home \u2014 host_heap 137\u219279 MB; 448 MB anon VMA remains"
   ],
   [
    "13-stage3-idle-cpu-fix-home.png",
-   "Stage 3: idle CPU fix — home with icons, whole-sim ~1.3% core, PSS≈3.7 GB"
+   "Stage 3: idle CPU fix \u2014 home with icons, whole-sim ~1.3% core, PSS\u22483.7 GB"
   ],
   [
    "12-stage3-slim-park-home.png",
-   "Stage 3: slim-park home — PSS≈3.9 GB, WR parked 12 MB, reaper gone, bright≈0.21"
+   "Stage 3: slim-park home \u2014 PSS\u22483.9 GB, WR parked 12 MB, reaper gone, bright\u22480.21"
   ],
   [
    "03-home-screen.png",
@@ -546,5 +546,35 @@
   "health": "blank: NSFileCoordinator write claim never granted",
   "crashes": 0,
   "gates": "g1-g3 clean"
+ },
+ "speed21": {
+  "date": "2026-10-31",
+  "summary": "Health and Files On My iPhone fixed (dispatch_main's main queue is drained again: main-thread pthread_exit runs guest TSD destructors), os_log DT mode off by default (SpringBoard CPU per tap -27%), xnu repo hygiene",
+  "home_s": [
+   32,
+   32,
+   31
+  ],
+  "settings_cold_warm_s": [
+   17,
+   9
+  ],
+  "apps_cold_warm_s": "Calendar 4/2, Photos 4/2, Maps 9-11/2 (2 s poll)",
+  "warm_tap_frames_s": "Settings response 0.43-0.48, content 0.78-0.79 (start of round: 0.56-0.60 / 0.88-0.95)",
+  "sb_cpu_per_tap_s": "0.59-0.62 (start of round 0.83-0.89)",
+  "health": "works (Summary)",
+  "files": "On My iPhone browses; New Folder creates a folder",
+  "wallet": "works",
+  "crashes": 0,
+  "gates": "g4-g6 and g7-g9 clean (3 consecutive each); g3 one Photos NSAssert race",
+  "pss_mb": [
+   2678,
+   2717
+  ],
+  "pss_apps_mb": [
+   3475,
+   3355,
+   3417
+  ]
  }
 }

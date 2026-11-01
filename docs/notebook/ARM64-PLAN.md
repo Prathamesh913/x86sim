@@ -1476,3 +1476,14 @@ Details in round-done/speed21.md.
   - Result: filecoordinationd logs "Received claim ... granted in server"; Health opens to Summary (Pinned, "Show All
     Health Data", Summary/Sharing/Browse tabs); Files browses On My iPhone ("On My iPhone is Empty") and New Folder
     creates a folder ("1 item").
+- **os_log DT mode off by default** (boot-a64: `X86CODE_NODT=${X86CODE_NODT-all}`). DT mode formatted every os_log call
+  to text on the job's stderr log and streamed it to diagnosticd; real iOS never formats on the send path. Warm
+  Settings tap, 6 taps each, frame-timed (simrecord open from the simhid touch-down): SpringBoard CPU 0.83-0.89 ->
+  0.59-0.62 CPU-s, response 0.56-0.60 -> 0.43-0.48 s, content 0.88-0.95 -> 0.78-0.79 s; ~50 MB less PSS at boot.
+  `X86CODE_NODT=` (empty) brings the per-job text logs back.
+- Gates: g4-g6 (TSD fix) and g7-g9 (+ DT off) 3 consecutive clean each: cold boot, Settings, Calendar/Photos/Maps
+  cold+warm, keyboard, Siri, Files, Health, Wallet. g3 had one Photos NSAssert in PXCuratedLibraryUIViewController
+  viewDidLoad (known "no photo library yet" path, Photos opened in the same second assetsd cold-started); not seen in
+  the 6 runs after it.
+- mtlvk (g1 idle 449 MB PSS): 158 anon (ours: heap, buffers), 246 file (NVIDIA libraries + 125 MB /dev/nvidiactl
+  mappings: the driver's), 45 shm (surfaces); +90 MB anon/shm after the three apps. No cut this round.

@@ -165,7 +165,11 @@ if [ -n "${A64_CLONE_FROM:-}" ] && [ ! -d "$D/data" ] && [ -d "$A64_CLONE_FROM/d
 	mkdir -p "$D/data/var/log" "$D/data/var/run" "$D/data/tmp"
 	echo "  cloned data/ from $A64_CLONE_FROM"
 fi
-X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
+# Speed 21: os_log DT mode (formatted text of every log call on the job's stderr log, and a stream to diagnosticd) is
+# off by default: it was ~25% of SpringBoard's CPU per tap (0.84 -> 0.61 CPU-s; tap response 0.57 -> 0.45 s). Real iOS
+# never formats on the send path. X86CODE_NODT= (empty) brings the per-job os_log text back, X86CODE_NODT=all,-<label>
+# for one job; x86code-stderr-progs and X86CODE_OSLOG still work per process.
+X86CODE_NODT=${X86CODE_NODT-all} X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
 # Speed 8: the container gets a private /dev/shm (X86CODE_PRIVATE_SHM, darlingserver): its remount no longer stacks a
 # tmpfs over the host's /dev/shm, and two devices' shm objects stay apart. The frame ring is written to
 # /run/user/<uid> (sim.env SIMFB_RING); $SIMFB_RING_LINUX (default /dev/shm/x86code-a64-simfb.ring) links to it.
