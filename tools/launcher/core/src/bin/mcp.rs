@@ -5,42 +5,75 @@
 //! Register it with an MCP client, e.g. `claude mcp add x86code -- /path/to/x86code-mcp`.
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
-use x86code_core::{aot, features, sim};
+use x86code_core::{aot, features, instance, sim};
 
 fn tools() -> Value {
-    let dev = json!({"type": "string", "description": "device dir (default: the configured device, var/device-a64)"});
+    let phone = json!({"type": "string", "description": "the phone: its name (as in the hub, e.g. \"QA\"), folder (device-a64-qa) or path. Default: the only running phone, else the configured one"});
     json!([
-        {"name": "features_list", "description": "List the device's optional features: id, title, on/off, default, measured memory cost (MB) and whether it is paid every boot or only when used. Changes apply at the next boot.",
-         "inputSchema": {"type": "object", "properties": {"device": dev}}},
+        {"name": "phones_list", "description": "Every phone, as the hub shows it: name, model, iOS version and whether it is installed, state (off / starting / running / stopping), home screen reached, memory (MB), CPU %, processes, uptime.",
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "sim_status", "description": "Same as phones_list (kept for older clients).",
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "features_list", "description": "List a phone's optional features: id, title, on/off, default, measured memory cost (MB) and whether it is paid every boot or only when used. Changes apply at the next boot.",
+         "inputSchema": {"type": "object", "properties": {"phone": phone}}},
         {"name": "feature_get", "description": "Whether one feature is on.",
-         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "device": dev}, "required": ["id"]}},
-        {"name": "feature_set", "description": "Turn a feature on or off (wallpaper, spotlight, keyboard, siri, maps, photos, files, widgets). Applies at the next boot: call sim_restart.",
-         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}, "device": dev}, "required": ["id", "enabled"]}},
+         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "phone": phone}, "required": ["id"]}},
+        {"name": "feature_set", "description": "Turn a feature on or off (wallpaper, spotlight, keyboard, siri, maps, photos, files, wallet, health, widgets). Applies at the next boot: call sim_restart.",
+         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}, "phone": phone}, "required": ["id", "enabled"]}},
         {"name": "features_preset", "description": "Apply a preset: full (the default set), lean, minimal. Applies at the next boot.",
-         "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["full", "lean", "minimal"]}, "device": dev}, "required": ["name"]}},
-        {"name": "sim_status", "description": "Simulator status: booted, home screen reached, process count, CPU %, PSS and anon PSS (MB), simview.",
+         "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["full", "lean", "minimal"]}, "phone": phone}, "required": ["name"]}},
+        {"name": "sim_devices", "description": "Phones (folder, label with phone model, iOS), the phone models a new phone can be and the installed iOS versions.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "sim_devices", "description": "Devices (folder, label with phone model) and the phone models a new device can be.",
-         "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "sim_add_device", "description": "Make a new device of a phone model (see sim_devices models), optional name and iOS version (ios, e.g. \"27.2\"; see sim_devices runtimes; default 27.0). Boot it with sim_start device=<path>.",
+        {"name": "sim_add_device", "description": "Make a new phone of a model (see sim_devices models), optional name and iOS version (ios, e.g. \"27.2\"; see sim_devices runtimes). Start it with sim_start phone=<name>. Its first start can take a few minutes.",
          "inputSchema": {"type": "object", "properties": {"model": {"type": "string"}, "name": {"type": "string"}, "ios": {"type": "string"}}, "required": ["model"]}},
-        {"name": "sim_restart", "description": "Restart the simulator (stop, then boot with the device's current features and the AOT image). Returns at once; poll sim_status for home.",
-         "inputSchema": {"type": "object", "properties": {"device": dev}}},
-        {"name": "sim_start", "description": "Boot the simulator.", "inputSchema": {"type": "object", "properties": {"device": dev}}},
-        {"name": "sim_stop", "description": "Stop the simulator.", "inputSchema": {"type": "object", "properties": {"device": dev}}},
-        {"name": "aot_status", "description": "Pre-translated image status of a phone: chunks up to date / stale (with reasons) / missing.",
-         "inputSchema": {"type": "object", "properties": {"device": dev}}}
+        {"name": "sim_start", "description": "Start a phone (its own container, so other phones keep running). Returns at once; poll phones_list for state running.", "inputSchema": {"type": "object", "properties": {"phone": phone}}},
+        {"name": "sim_stop", "description": "Stop a phone (only that phone).", "inputSchema": {"type": "object", "properties": {"phone": phone}}},
+        {"name": "sim_restart", "description": "Restart a phone (stop, then start with its current features and the pre-translated code). Returns at once; poll phones_list.",
+         "inputSchema": {"type": "object", "properties": {"phone": phone}}},
+        {"name": "aot_status", "description": "Pre-translated code of a phone's iOS version: parts up to date / stale (with reasons) / missing, and the translator's codegen version.",
+         "inputSchema": {"type": "object", "properties": {"phone": phone}}}
     ])
 }
 
+/// The phone a call is about: phone / device argument, else the only running phone, else the configured one.
+fn phone_of(a: &Value, cfg: &aot::Config) -> anyhow::Result<instance::Instance> {
+    let key = a["phone"].as_str().or(a["device"].as_str());
+    if let Some(k) = key {
+        return instance::find(k).ok_or_else(|| {
+            anyhow::anyhow!("no phone {k:?} (phones: {})", instance::list().iter().map(|i| i.name.clone()).collect::<Vec<_>>().join(", "))
+        });
+    }
+    let running: Vec<_> = instance::summaries(0).into_iter().filter(|s| s.state != "off").collect();
+    if running.len() == 1 {
+        return instance::find(&running[0].id).ok_or_else(|| anyhow::anyhow!("phone vanished"));
+    }
+    let d = cfg.device.clone().ok_or_else(|| anyhow::anyhow!("say which phone (phone: name)"))?;
+    Ok(instance::load(&d))
+}
+
 fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
-    let jc = aot::Paths::default_jc();
-    let p = aot::Paths::new(&jc);
-    let cfg = p.load_config();
-    let device = a["device"].as_str().map(PathBuf::from).or(cfg.device.clone()).ok_or_else(|| anyhow::anyhow!("no device"))?;
+    let cfg = aot::Paths::new(&aot::Paths::default_jc()).load_config();
+    if matches!(name, "phones_list" | "sim_status") {
+        return Ok(json!({"phones": instance::summaries(1000)}));
+    }
+    if name == "sim_devices" {
+        return Ok(json!({"devices": instance::list().into_iter().map(|i| json!({"name": i.name, "id": i.id, "label": format!("{} · {}", i.model, i.name), "path": i.dir, "ios": i.ios, "installed": i.runtime_present})).collect::<Vec<_>>(),
+                         "models": sim::models().into_iter().map(|m| m.0).collect::<Vec<_>>(),
+                         "runtimes": sim::runtimes().into_iter().map(|r| r.0).collect::<Vec<_>>()}));
+    }
+    if name == "sim_add_device" {
+        let want = a["ios"].as_str().unwrap_or("27.2");
+        let rt = sim::runtimes()
+            .into_iter()
+            .find(|r| r.0.starts_with(&format!("iOS {want} ")) || r.0.contains(want))
+            .map(|r| r.1)
+            .ok_or_else(|| anyhow::anyhow!("no iOS {want} installed (see sim_devices runtimes)"))?;
+        return Ok(json!({"device": sim::create_device(a["model"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""), &rt)?}));
+    }
+    let inst = phone_of(a, &cfg)?;
+    let device = inst.dir.clone();
     Ok(match name {
-        "features_list" => json!({"device": device, "preset": features::preset_of(&features::load(&device)), "features": features::list(&device)}),
+        "features_list" => json!({"phone": inst.name, "preset": features::preset_of(&features::load(&device)), "features": features::list(&device)}),
         "feature_get" => {
             let id = a["id"].as_str().unwrap_or("");
             json!({"id": id, "enabled": features::load(&device).enabled(id)})
@@ -49,28 +82,18 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
             let id = a["id"].as_str().unwrap_or("");
             let on = a["enabled"].as_bool().ok_or_else(|| anyhow::anyhow!("enabled: boolean required"))?;
             features::set(&device, id, on)?;
-            json!({"id": id, "enabled": on, "note": "applies at the next boot (sim_restart)"})
+            json!({"phone": inst.name, "id": id, "enabled": on, "note": "applies at the next boot (sim_restart)"})
         }
         "features_preset" => {
             let n = a["name"].as_str().unwrap_or("");
             features::apply_preset(&device, n)?;
-            json!({"preset": n, "features": features::list(&device), "note": "applies at the next boot (sim_restart)"})
+            json!({"phone": inst.name, "preset": n, "features": features::list(&device), "note": "applies at the next boot (sim_restart)"})
         }
-        "sim_status" => serde_json::to_value(sim::status(1000))?,
-        "sim_devices" => json!({"devices": sim::devices().into_iter().map(|d| json!({"label": d.0, "path": d.1, "ios": sim::runtime_short(&sim::device_runtime(&d.1))})).collect::<Vec<_>>(),
-                                "models": sim::models().into_iter().map(|m| m.0).collect::<Vec<_>>(),
-                                "runtimes": sim::runtimes().into_iter().map(|r| r.0).collect::<Vec<_>>()}),
-        "sim_add_device" => {
-            let want = a["ios"].as_str().unwrap_or("27.0");
-            let rt = sim::runtimes().into_iter().find(|r| r.0.starts_with(&format!("iOS {want} ")) || r.0.contains(want))
-                .map(|r| r.1).ok_or_else(|| anyhow::anyhow!("no iOS {want} runtime (see sim_devices runtimes)"))?;
-            json!({"device": sim::create_device(a["model"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""), &rt)?})
-        }
-        "sim_restart" => json!({"restarting": true, "pid": sim::restart(&device)?}),
-        "sim_start" => json!({"booting": true, "pid": sim::start(&device)?}),
+        "sim_restart" => json!({"phone": inst.name, "restarting": true, "pid": sim::restart(&device)?}),
+        "sim_start" => json!({"phone": inst.name, "starting": true, "pid": sim::start(&device)?}),
         "sim_stop" => {
             sim::stop(&device)?;
-            json!({"stopped": true})
+            json!({"phone": inst.name, "stopped": true})
         }
         "aot_status" => {
             // the phone's iOS version decides the image and its cache dir
@@ -81,8 +104,8 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
             cfg.device = Some(device.clone());
             let st = aot::plan(&p, &cfg)?.status(&p);
             let attention: Vec<_> = st.chunks.iter().filter(|c| c.state != "up-to-date").take(50).collect();
-            json!({"image": st.image, "image_current": st.image_current, "total": st.total, "up_to_date": st.up_to_date,
-                   "stale": st.stale, "missing": st.missing, "need_rebuild": attention})
+            json!({"phone": inst.name, "ios": inst.ios, "image": st.image, "image_current": st.image_current, "total": st.total, "up_to_date": st.up_to_date,
+                   "stale": st.stale, "missing": st.missing, "codegen": format!("{:#x}", st.codegen), "codegen_source": st.codegen_source, "need_rebuild": attention})
         }
         _ => anyhow::bail!("unknown tool {name}"),
     })

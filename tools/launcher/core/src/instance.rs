@@ -57,12 +57,26 @@ pub fn ring_for(id: &str) -> PathBuf {
     PathBuf::from(format!("/run/user/{}/x86code-{tag}-simfb.ring", uid()))
 }
 
+/// A name for a phone made without one: "" -> "Main phone", "-probe" -> "Probe", "b" -> "Phone B"
+fn default_name(sfx: &str) -> String {
+    let t = sfx.trim_start_matches('-').replace(['-', '_'], " ");
+    let t = t.trim();
+    if t.is_empty() {
+        return "Main phone".into();
+    }
+    if t.len() <= 2 {
+        return format!("Phone {}", t.to_uppercase());
+    }
+    let mut c = t.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
 pub fn load(dir: &Path) -> Instance {
     let id = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let sfx = id.strip_prefix("device-a64").unwrap_or("");
     let is_default = sfx.is_empty();
     let env = env_of(dir);
-    let name = std::fs::read_to_string(dir.join("name")).map(|s| s.trim().to_string()).unwrap_or_else(|_| if is_default { "Main phone".into() } else { id.clone() });
+    let name = std::fs::read_to_string(dir.join("name")).map(|s| s.trim().to_string()).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| default_name(sfx));
     let model_id = env.get("SIMULATOR_MODEL_IDENTIFIER").cloned().unwrap_or_default();
     let model = crate::sim::models().into_iter().find(|m| m.1 == model_id).map(|m| m.0).unwrap_or_else(|| if model_id.is_empty() { "iPhone".into() } else { model_id.clone() });
     let runtime_dir = std::fs::read_to_string(dir.join("runtime")).map(|s| s.trim().to_string()).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "ios-27.0-24A434-arm64".into());
@@ -104,6 +118,69 @@ pub fn list() -> Vec<Instance> {
     let mut v: Vec<Instance> = crate::sim::devices().into_iter().map(|d| load(&d.1)).collect();
     v.sort_by(|a, b| b.is_default.cmp(&a.is_default).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     v
+}
+
+/// A phone by folder (device-a64-qa), name ("QA", any case) or path.
+pub fn find(key: &str) -> Option<Instance> {
+    let k = key.trim();
+    let all = list();
+    let p = Path::new(k);
+    if p.is_absolute() || k.contains('/') {
+        let want = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        return all.into_iter().find(|i| std::fs::canonicalize(&i.dir).unwrap_or_else(|_| i.dir.clone()) == want);
+    }
+    all.iter()
+        .find(|i| i.id == k)
+        .or_else(|| all.iter().find(|i| i.name.eq_ignore_ascii_case(k)))
+        .or_else(|| all.iter().find(|i| i.id.strip_prefix("device-a64-").is_some_and(|s| s.eq_ignore_ascii_case(k))))
+        .cloned()
+}
+
+/// One line per phone for tools: what the hub shows on a card.
+#[derive(Debug, Clone, Serialize)]
+pub struct Summary {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub ios: String,
+    pub installed: bool,
+    /// "off" | "starting" | "running" | "stopping"
+    pub state: String,
+    pub home: bool,
+    pub memory_mb: f64,
+    pub cpu_pct: f64,
+    pub processes: usize,
+    pub uptime_s: Option<f64>,
+    pub path: PathBuf,
+}
+
+/// Every phone's state; samples CPU over `sample_ms` (0: memory and state only).
+pub fn summaries(sample_ms: u64) -> Vec<Summary> {
+    let insts = list();
+    let mut m = Monitor::default();
+    let mut st = m.poll(&insts);
+    if sample_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(sample_ms));
+        st = m.poll(&insts);
+    }
+    insts
+        .iter()
+        .zip(st)
+        .map(|(i, s)| Summary {
+            id: i.id.clone(),
+            name: i.name.clone(),
+            model: i.model.clone(),
+            ios: i.ios.clone(),
+            installed: i.runtime_present,
+            state: format!("{:?}", s.phase).to_lowercase(),
+            home: s.home,
+            memory_mb: (s.pss_mb * 10.0).round() / 10.0,
+            cpu_pct: s.cpu_pct.round(),
+            processes: s.procs.len(),
+            uptime_s: s.uptime_s.map(|u| u.round()),
+            path: i.dir.clone(),
+        })
+        .collect()
 }
 
 /// Per-phone launcher settings (<device>/launcher.json): how it boots.
@@ -175,6 +252,18 @@ pub struct Status {
     pub prefix: PathBuf,
     pub mtlvk: bool,
     pub launchd_pid: Option<u32>,
+    /// this phone has never reached its home screen (no <device>/.home-reached): a fresh device's first boot can stall
+    /// on LaunchServices (ARM64-PLAN, Speed 10/24); the second boot works
+    pub fresh: bool,
+}
+
+pub fn home_marker(dir: &Path) -> PathBuf {
+    dir.join(".home-reached")
+}
+
+/// A fresh phone's first boot that sits idle without reaching home: restart it once.
+pub fn first_boot_stalled(st: &Status) -> bool {
+    st.fresh && st.phase == Phase::Starting && st.launchd_pid.is_some() && st.uptime_s.is_some_and(|u| u > 150.0) && st.cpu_pct < 30.0
 }
 
 fn read(p: &str) -> String {
@@ -311,6 +400,10 @@ impl Monitor {
                     let ok = crate::ring::Ring::new(&inst.ring).home_frame(boot_time.unwrap_or(0.0) - 2.0);
                     if ok {
                         self.home_seen.insert(inst.id.clone(), l);
+                        let m = home_marker(&inst.dir);
+                        if !m.exists() {
+                            let _ = std::fs::write(m, "");
+                        }
                     }
                     ok
                 }
@@ -330,7 +423,7 @@ impl Monitor {
                 self.stopping.remove(&inst.id);
                 Phase::Off
             };
-            out.push(Status { id: inst.id.clone(), phase, home, procs: plist, cpu_pct: cpu, pss_mb: pss, uptime_s, boot_time, state_dir, prefix, mtlvk, launchd_pid: launchd });
+            out.push(Status { id: inst.id.clone(), phase, home, procs: plist, cpu_pct: cpu, pss_mb: pss, uptime_s, boot_time, state_dir, prefix, mtlvk, launchd_pid: launchd, fresh: !home_marker(&inst.dir).exists() });
         }
         self.last.retain(|p, _| seen_pids.contains(p));
         out

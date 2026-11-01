@@ -6,12 +6,12 @@
 //!   x86code-aot [--jc DIR] measure [--workers N]         every chunk of the scope, unlimited, sizes only
 //!   x86code-aot [--jc DIR] config [KEY VALUE]            scope (hot|loaded|all), budget_mb, follow_features, training
 //!   x86code-aot features list|get ID|set ID on|off|preset full|lean|minimal [--device DIR]
-//!   x86code-aot sim status|start|stop|restart|show [--device DIR]
+//!   x86code-aot sim status|start|stop|restart|show [--device DIR|NAME]   status: every phone
 use anyhow::{bail, Result};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use x86code_core::{aot, features, sim};
+use x86code_core::{aot, features, instance, sim};
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -50,7 +50,8 @@ fn fmt_s(s: f64) -> String {
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // a phone brings its iOS version, and with it the cache dir (27.0: the default one, others jc-<build>)
-    let dev = take(&mut args, "--device").map(PathBuf::from);
+    // --device: a path, a folder (device-a64-qa) or a phone's name ("QA")
+    let dev = take(&mut args, "--device").map(|d| if std::path::Path::new(&d).exists() { PathBuf::from(&d) } else { instance::find(&d).map(|i| i.dir).unwrap_or_else(|| PathBuf::from(&d)) });
     let rt = dev.as_deref().map(sim::device_runtime);
     let jc = take(&mut args, "--jc").map(PathBuf::from).or_else(|| rt.as_deref().map(sim::jc_for)).unwrap_or_else(aot::Paths::default_jc);
     let p = aot::Paths::new(&jc);
@@ -201,14 +202,14 @@ fn run() -> Result<()> {
             let sub = if args.is_empty() { "status".to_string() } else { args.remove(0) };
             match sub.as_str() {
                 "status" => {
-                    let s = sim::status(1000);
+                    let all = instance::summaries(1000);
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&s)?);
+                        println!("{}", serde_json::to_string_pretty(&all)?);
                     } else {
-                        println!(
-                            "booted {} home {} procs {} CPU {:.0}% PSS {:.0} MB (anon {:.0}) simview {}",
-                            s.booted, s.home, s.procs, s.cpu_pct, s.pss_mb, s.pss_anon_mb, s.simview
-                        );
+                        for s in all {
+                            let live = if s.state == "off" { String::new() } else { format!("  {:.0} MB  {:.0}% CPU  {} procs{}", s.memory_mb, s.cpu_pct, s.processes, if s.home { "  home" } else { "" }) };
+                            println!("{:20} {:18} {:10} {:9}{}{}", s.name, s.model, s.ios, s.state, if s.installed { "" } else { "  (iOS not installed)" }, live);
+                        }
                     }
                 }
                 "start" => println!("booting (pid {})", sim::start(&dev)?),

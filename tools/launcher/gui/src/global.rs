@@ -30,6 +30,8 @@ pub struct Aot {
     pub filter: String,
     pub only_attention: bool,
     pub message: String,
+    /// "Redo all" asked for confirmation
+    pub confirm_redo: bool,
 }
 
 impl Aot {
@@ -53,6 +55,7 @@ impl Aot {
             filter: String::new(),
             only_attention: true,
             message: String::new(),
+            confirm_redo: false,
         };
         if a.runtime_root.is_some() {
             a.refresh();
@@ -100,18 +103,37 @@ impl Aot {
         });
     }
 
+    /// A run of ours, or one started elsewhere (x86code-aot, the MCP server) that is still alive.
     pub fn building(&self) -> bool {
-        self.child.is_some()
+        self.child.is_some() || self.external_run().is_some()
+    }
+
+    /// The pid of a live run this window didn't start (from progress.json).
+    pub fn external_run(&self) -> Option<u32> {
+        let p = self.progress.as_ref()?;
+        (self.child.is_none() && matches!(p.state.as_str(), "planning" | "building" | "assembling") && aot_alive(p.pid) && pid_is_aot(p.pid)).then_some(p.pid)
     }
 
     pub fn tick(&mut self) {
         if let Some(c) = &mut self.child {
-            if let Ok(Some(_)) = c.try_wait() {
+            if let Ok(Some(code)) = c.try_wait() {
                 self.child = None;
+                if !code.success() {
+                    // the builder's own words (x86code-aot: …), not just "failed"
+                    let log = std::fs::read_to_string(aot::scratch().join("launcher-aot.log")).unwrap_or_default();
+                    let last = log.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                    let last = last.strip_prefix("x86code-aot: ").unwrap_or(last);
+                    self.message = if last.is_empty() { format!("The run stopped ({code})") } else { last.to_string() };
+                }
+                self.last_poll = Instant::now() - Duration::from_secs(1);
+                self.progress = std::fs::read(self.paths.progress()).ok().and_then(|b| serde_json::from_slice(&b).ok());
                 self.refresh();
             }
         }
-        if self.last_poll.elapsed() > Duration::from_millis(500) && (self.child.is_some() || self.progress.is_none()) {
+        // progress.json: twice a second while a run is live (ours or another's), else every few seconds (a run
+        // started from the command line or the MCP server shows up)
+        let every = if self.building() { Duration::from_millis(500) } else { Duration::from_secs(4) };
+        if self.last_poll.elapsed() > every {
             self.last_poll = Instant::now();
             self.progress = std::fs::read(self.paths.progress()).ok().and_then(|b| serde_json::from_slice(&b).ok());
         }
@@ -149,10 +171,12 @@ impl Aot {
         }
     }
 
+    /// Stops the run (ours or another's): x86code-aot ends its builders and records what finished (resumable).
     fn cancel(&mut self) {
-        if let Some(c) = &self.child {
+        let pid = self.child.as_ref().map(|c| c.id()).or_else(|| self.external_run());
+        if let Some(pid) = pid {
             unsafe {
-                libc_kill(c.id() as i32, 15);
+                libc_kill(pid as i32, 15);
             }
         }
     }
@@ -161,6 +185,23 @@ impl Aot {
 extern "C" {
     #[link_name = "kill"]
     fn libc_kill(pid: i32, sig: i32) -> i32;
+}
+
+/// "just now", "5 min ago", "3 h ago", "2 days ago"
+fn ago(unix: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let d = now.saturating_sub(unix);
+    match d {
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{} min ago", d / 60),
+        3600..=86399 => format!("{} h ago", d / 3600),
+        _ => format!("{} days ago", d / 86400),
+    }
+}
+
+/// The pid is an x86code-aot (a reused pid is not a run)
+fn pid_is_aot(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim().starts_with("x86code-aot"))
 }
 
 fn aot_alive(pid: u32) -> bool {
@@ -326,8 +367,14 @@ impl App {
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 let (head, col, line) = match (&st_ok, &status) {
-                    (Some(s), _) if building => ("Pre-translating", ACCENT, format!("{} of {} ready", s.up_to_date, s.total)),
+                    (_, _) if building => (
+                        "Pre-translating",
+                        ACCENT,
+                        self.aot.progress.as_ref().filter(|p| p.chunks_total > 0).map(|p| format!("{} of {} parts done", p.chunks_done, p.chunks_total)).unwrap_or_else(|| "Getting ready…".into()),
+                    ),
+                    (Some(s), _) if s.total == 0 => ("Nothing to translate yet", INK_3, "Start a phone on this iOS version first: it learns what's used.".to_string()),
                     (Some(s), _) if s.image_current && need == 0 => ("Ready", GOOD, format!("All {} parts are ready", s.total)),
+                    (Some(s), _) if need == 0 => ("Almost ready", WARN, "Every part is translated; it needs putting together".to_string()),
                     (Some(s), _) if s.image_present => ("Needs an update", WARN, format!("{need} of {} parts to redo", s.total)),
                     (Some(s), _) => ("Not started", INK_3, format!("{} parts to translate", s.total)),
                     (None, Some(Err(_))) => ("Couldn't check", CRIT, String::new()),
@@ -352,36 +399,81 @@ impl App {
                         self.aot.refresh();
                     }
                     if building {
-                        if ui.add(Btn::secondary("Cancel").icon(icon::X)).clicked() {
+                        let tip = if self.aot.external_run().is_some() { "Stop the run started outside this window" } else { "Stop; Continue picks up the rest" };
+                        if ui.add(Btn::secondary("Cancel").icon(icon::X)).on_hover_text(tip).clicked() {
                             self.aot.cancel();
                         }
                     } else {
-                        if ui.add(Btn::secondary("Redo all")).on_hover_text("Start over from scratch").clicked() {
-                            self.aot.start_build(true);
+                        let empty = st_ok.as_ref().is_some_and(|s| s.total == 0);
+                        if ui.add_enabled(!empty, Btn::secondary("Redo all")).on_hover_text("Translate every part again, from scratch").clicked() {
+                            self.aot.confirm_redo = true;
                         }
                         let resumable = self.aot.progress.as_ref().is_some_and(|p| p.state == "cancelled" || p.state == "error");
-                        let (label, ic) = if resumable && need > 0 {
-                            ("Continue", icon::PLAY)
+                        let current = st_ok.as_ref().is_some_and(|s| s.image_current);
+                        let (label, ic, tip) = if empty {
+                            ("Start", icon::LIGHTNING, "Nothing to translate yet")
+                        } else if resumable && need > 0 {
+                            ("Continue", icon::PLAY, "Pick up where the last run stopped")
                         } else if need > 0 && st_ok.as_ref().is_some_and(|s| s.up_to_date > 0) {
-                            ("Update", icon::ARROW_CLOCKWISE)
+                            ("Update", icon::ARROW_CLOCKWISE, "Translate only what changed")
+                        } else if need == 0 && st_ok.is_some() && !current && !empty {
+                            ("Finish", icon::CHECK, "Put the translated parts together")
                         } else if need == 0 && st_ok.is_some() {
-                            ("Up to date", icon::CHECK)
+                            ("Up to date", icon::CHECK, "Nothing to do")
                         } else {
-                            ("Start", icon::LIGHTNING)
+                            ("Start", icon::LIGHTNING, "Translate now")
                         };
-                        if ui.add_enabled(need > 0 || st_ok.as_ref().is_some_and(|s| !s.image_current), Btn::primary(label).icon(ic)).clicked() {
+                        let can = !empty && (need > 0 || st_ok.as_ref().is_some_and(|s| !s.image_current));
+                        if ui.add_enabled(can, Btn::primary(label).icon(ic)).on_hover_text(tip).clicked() {
                             self.aot.start_build(false);
                         }
                     }
                 });
             });
+            if self.aot.confirm_redo && !building {
+                ui.add_space(S3);
+                egui::Frame::new().fill(RAISED).corner_radius(R_MD).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon::WARNING_CIRCLE).size(15.0).color(WARN));
+                        ui.label(body(format!("Translate all {} parts again? This takes a while and uses {} cores.", st_ok.as_ref().map(|s| s.total).unwrap_or(0), self.aot.cores)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(Btn::primary("Redo all").small()).clicked() {
+                                self.aot.confirm_redo = false;
+                                self.aot.start_build(true);
+                            }
+                            if ui.add(Btn::secondary("Cancel").small()).clicked() {
+                                self.aot.confirm_redo = false;
+                            }
+                        });
+                    });
+                });
+            }
             if !self.aot.message.is_empty() {
                 ui.add_space(S2);
                 ui.label(egui::RichText::new(&self.aot.message).size(T_SMALL).color(CRIT_INK));
             }
             if let Some(p) = &self.aot.progress {
-                let live = building || p.state == "building" && aot_alive(p.pid);
-                if live || matches!(p.state.as_str(), "done" | "cancelled" | "error") {
+                let live = building;
+                let nothing = p.state == "done" && p.chunks_total == 0;
+                if !live && p.state == "done" {
+                    // the last run, in one line (a run that found every part current says so)
+                    ui.add_space(S3);
+                    hline(ui);
+                    ui.add_space(S2);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon::CHECK_CIRCLE).size(15.0).color(GOOD));
+                        let t = if nothing {
+                            "Last run: nothing to do, every part was already up to date".to_string()
+                        } else {
+                            format!("Last run translated {} part{} in {}", p.chunks_done, if p.chunks_done == 1 { "" } else { "s" }, fmt_s(p.elapsed_s))
+                        };
+                        ui.label(sub(t)).on_hover_text(&p.message);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(muted(ago(p.updated)));
+                        });
+                    });
+                } else if live || matches!(p.state.as_str(), "done" | "cancelled" | "error") {
                     ui.add_space(S4);
                     let frac = if p.chunks_total > 0 { p.chunks_done as f32 / p.chunks_total as f32 } else { 0.0 };
                     let col = match p.state.as_str() {
@@ -392,19 +484,35 @@ impl App {
                     };
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("{:.0}%", frac * 100.0)).size(T_TITLE).family(semibold()).color(INK));
-                        ui.label(muted(format!("{} of {} parts", p.chunks_done, p.chunks_total)));
+                        let what = match p.state.as_str() {
+                            "planning" => "Looking at what changed…".to_string(),
+                            "assembling" => "Putting it together…".to_string(),
+                            _ => format!("{} of {} parts", p.chunks_done, p.chunks_total),
+                        };
+                        ui.label(muted(what));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if live {
-                                ui.label(muted(format!("{} left", p.eta_s.map(fmt_s).unwrap_or("–".into()))));
+                                ui.label(muted(match p.eta_s {
+                                    Some(e) => format!("about {} left", fmt_s(e)),
+                                    None => format!("{} so far", fmt_s(p.elapsed_s)),
+                                }));
                             } else {
-                                let t = match p.state.as_str() { "done" => "Last run finished", "cancelled" => "Last run stopped", _ => "Last run failed" };
+                                let t = match p.state.as_str() {
+                                    "done" => format!("Finished {}", ago(p.updated)),
+                                    "cancelled" => format!("Stopped {}", ago(p.updated)),
+                                    _ => format!("Failed {}", ago(p.updated)),
+                                };
                                 ui.label(muted(t)).on_hover_text(&p.message);
                             }
                         });
                     });
                     ui.add(egui::ProgressBar::new(frac).desired_height(6.0).fill(col).corner_radius(3).animate(false));
                     if live && !p.current.is_empty() {
-                        ui.add(egui::Label::new(muted(format!("Working on {}", p.current.join(", ")))).truncate());
+                        let names: Vec<&str> = p.current.iter().map(|c| c.rsplit('/').next().unwrap_or(c)).collect();
+                        ui.add(egui::Label::new(muted(format!("Working on {}", names.join(", ")))).truncate()).on_hover_text(p.current.join("\n"));
+                    }
+                    if !live && p.state == "error" && !p.message.is_empty() {
+                        ui.add(egui::Label::new(egui::RichText::new(&p.message).size(T_SMALL).color(CRIT_INK)).wrap());
                     }
                 }
             }
@@ -415,11 +523,12 @@ impl App {
             Some(Err(e)) => {
                 card(ui, |ui| ui.label(egui::RichText::new(e).size(T_SMALL).color(CRIT_INK)));
             }
+            Some(Ok(s)) if s.total == 0 => {}
             Some(Ok(s)) => {
                 stat_row(ui, CARD, &[
                     ("Ready", format!("{}", s.up_to_date), &format!("of {}", s.total)),
                     ("To update", need.to_string(), ""),
-                    ("Size", format!("{:.0} MB", s.chunks.iter().map(|c| c.slot_mb).sum::<f64>()), ""),
+                    ("Size", fmt_mb(s.chunks.iter().map(|c| c.slot_mb).sum::<f64>().max(0.0)), ""),
                 ]);
                 if s.dropped > 0 {
                     ui.add_space(S1);
@@ -458,6 +567,9 @@ impl App {
 
         // ---- parts
         let Some(Ok(s)) = &status else { return };
+        if s.total == 0 {
+            return;
+        }
         section(ui, "Parts", |ui| {
             ui.label(sub("Only what needs work"));
             toggle(ui, &mut self.aot.only_attention);

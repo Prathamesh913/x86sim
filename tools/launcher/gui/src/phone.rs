@@ -174,7 +174,15 @@ impl App {
         let r = menu_row(ui, icon::TRASH, "Remove phone…", "", can, true);
         let r = if inst.is_default { r.on_disabled_hover_text("The main phone stays") } else if !off { r.on_disabled_hover_text("Stop it first") } else { r };
         if r.clicked() {
-            self.dialog = Some(crate::Dialog::Delete { id: inst.id.clone(), paths: instance::delete_plan(inst) });
+            let paths = instance::delete_plan(inst);
+            let size = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let (s2, p2, ctx) = (size.clone(), paths.clone(), ui.ctx().clone());
+            std::thread::spawn(move || {
+                let n: u64 = p2.iter().map(|p| if p.is_dir() { x86code_core::host::dir_size(p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }).sum();
+                *s2.lock().unwrap() = Some(n);
+                ctx.request_repaint();
+            });
+            self.dialog = Some(crate::Dialog::Delete { id: inst.id.clone(), paths, size });
             ui.close();
         }
     }
@@ -226,7 +234,7 @@ impl App {
                     self.dialog = Some(crate::Dialog::Rename { id, text });
                 }
             }
-            crate::Dialog::Delete { id, paths } => {
+            crate::Dialog::Delete { id, paths, size } => {
                 let Some(inst) = self.inst(&id).cloned() else { return };
                 let mut go = false;
                 let m = egui::Modal::new("delete-phone".into()).backdrop_color(egui::Color32::from_black_alpha(150)).frame(modal_frame()).show(ctx, |ui| {
@@ -235,8 +243,12 @@ impl App {
                     ui.label(egui::RichText::new(format!("Remove {}?", inst.name)).size(T_TITLE + 1.0).family(semibold()).color(INK));
                     ui.label(sub("Its apps, data and settings are deleted. This can't be undone."));
                     ui.add_space(S2);
-                    let size: u64 = paths.iter().map(|p| if p.is_dir() { x86code_core::host::dir_size(p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }).sum();
-                    ui.label(muted(format!("Frees about {:.1} GB.", size as f64 / 1e9))).on_hover_text(paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"));
+                    let frees = match *size.lock().unwrap() {
+                        None => "Measuring what it frees…".to_string(),
+                        Some(b) if b < 1 << 20 => "Frees less than 1 MB.".to_string(),
+                        Some(b) => format!("Frees {}.", fmt_mb(b as f64 / 1048576.0)),
+                    };
+                    ui.label(muted(frees)).on_hover_text(paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"));
                     ui.add_space(S5);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add(Btn::danger("Remove").min_w(88.0)).clicked() {
@@ -267,7 +279,7 @@ impl App {
                     }
                 }
                 if keep {
-                    self.dialog = Some(crate::Dialog::Delete { id, paths });
+                    self.dialog = Some(crate::Dialog::Delete { id, paths, size });
                 }
             }
         }
@@ -412,7 +424,18 @@ impl App {
         let mut saving = 0u64;
         for f in features::list(&dev) {
             let mut on = f.enabled;
-            let what = f.desc.split_once(" Off:").map(|(a, _)| a.trim().to_string()).unwrap_or(f.desc.clone());
+            // "What it is. Off: what you lose." -> what it is while on; what you lose while off
+            let (what, lose) = match f.desc.find("Off:") {
+                Some(i) => (f.desc[..i].trim().to_string(), f.desc[i + 4..].trim().to_string()),
+                None => (f.desc.clone(), String::new()),
+            };
+            let what = if !on && !lose.is_empty() {
+                format!("Off: {lose}")
+            } else if what.is_empty() {
+                format!("When off, {}{}", lose.get(..1).unwrap_or("").to_lowercase(), lose.get(1..).unwrap_or(""))
+            } else {
+                what
+            };
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width() - 104.0);

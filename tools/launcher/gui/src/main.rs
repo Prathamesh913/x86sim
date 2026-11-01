@@ -51,10 +51,13 @@ pub struct AddDialog {
 /// A phone dialog: rename, or confirm removing it.
 pub enum Dialog {
     Rename { id: String, text: String },
-    Delete { id: String, paths: Vec<std::path::PathBuf> },
+    /// size: what it frees (measured in the background)
+    Delete { id: String, paths: Vec<std::path::PathBuf>, size: Arc<Mutex<Option<u64>>> },
 }
 
 pub struct App {
+    /// fresh phones already restarted once after a stalled first boot
+    pub first_boot_retried: HashSet<String>,
     pub dialog: Option<Dialog>,
     pub shared: Arc<Mutex<Shared>>,
     pub insts: Vec<instance::Instance>,
@@ -131,6 +134,7 @@ impl App {
         let add_on_start = std::env::var("X86CODE_LAUNCHER_VIEW").is_ok_and(|v| v == "add");
         let mut app = App {
             dialog: None,
+            first_boot_retried: HashSet::new(),
             shared,
             insts: instance::list(),
             status: HashMap::new(),
@@ -269,6 +273,17 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_secs(10));
         }
         self.aot.tick();
+        if self.aot.building() {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        // a new phone's first boot can stall on iOS's app database (known; the second boot works): restart it once
+        let stalled: Vec<String> = self.status.values().filter(|s| instance::first_boot_stalled(s) && !self.first_boot_retried.contains(&s.id)).map(|s| s.id.clone()).collect();
+        for id in stalled {
+            self.first_boot_retried.insert(id.clone());
+            let name = self.inst(&id).map(|i| i.name.clone()).unwrap_or_default();
+            self.restart(&id);
+            self.say(format!("{name}'s first start stalled while iOS set up its apps. Restarting it once (this is expected for a new phone)."));
+        }
         // thumbnails and the open phone's screen only: everything else sleeps
         let open_id = if let View::Phone(id) = &self.view { Some(id.clone()) } else { None };
         for (id, v) in self.viewers.iter_mut() {

@@ -179,7 +179,7 @@ impl Viewer {
         let size = egui::vec2(sw * scale, sh * scale);
         self.shared.target_w.store(size.x.ceil() as u32 * 1, Ordering::Relaxed);
         let outer = size + egui::vec2(2.0 * bezel, 2.0 * bezel);
-        let (rect, resp) = ui.allocate_exact_size(outer, if interactive { egui::Sense::click_and_drag() } else { egui::Sense::click() });
+        let (rect, resp) = ui.allocate_exact_size(outer, if interactive { egui::Sense::click_and_drag() } else { egui::Sense::hover() });
         let screen = rect.shrink(bezel);
         let p = ui.painter();
         let radius = (size.x * 0.11).max(4.0);
