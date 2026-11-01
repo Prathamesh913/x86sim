@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 25: cold app opens on iOS 27.2 cut 30-45% (Settings 5.5 -> 4.2-4.6 s, Messages 4.3 -> 2.6 s, Health 9.9 -> 5.0-6.0 s, Wallet 6.6 -> 3.4-3.6 s, Maps 5.2 -> 2.9 s; warm tap response 0.44 -> 0.37 s): Swift type lookups native and indexed, dyld_sim pre-translated, retrained image, return stack buffer on. News and Safari no longer close. Open on 27.2: keyboard focus and Siri.",
+ "now": "Speed 26: iOS 27.2 keyboard works (host keys type in Settings search and Spotlight; the dictation spin is gone: assistantd is Apple's plist again), the arm64 phone has a network (DNS, host network state, connectx/socket_delegate, /.nofollow paths) and Safari renders pages (canonical runtime root for WebKit's helpers, CNTVCT/FJCVTZS), Files Recents works (searchd), Siri starts its process on the side button and downloads its assets. Open: Spotlight crashes when typing until the query-parser asset downloads; Siri shows no UI yet; intermittent ENETDOWN in Network.framework.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -677,5 +677,23 @@
   },
   "ios272": "dyld_sim prepare shortcut + UI sensor patch apply; Maps draws its background, then waits on geod config (throttle) - open",
   "gates": "g1 clean; g2/g3 invalid: scratch directory deleted mid-run (not by our code found so far)"
+ },
+ "speed26": {
+  "date": "2026-11-01",
+  "details": "docs/notebook/rounds/speed26.md",
+  "fixed": [
+   "keyboard + Preferences dictation spin (full assistantd)",
+   "network on arm64 (mdns, netconfig arm64, connectx/disconnectx/socket_delegate, /.nofollow)",
+   "Safari pages (canonical runtime root, CNTVCT_EL0, FJCVTZS)",
+   "Files Recents (searchd, renameatx_np flags)",
+   "gate: Photos What's New, Siri side button, stale frame, CPU-aware stall"
+  ],
+  "open": [
+   "Spotlight SIGABRT on typing (nil TOKEN without the com.apple.search.queryparser UAF asset)",
+   "Siri: process + presentation start, no visible UI",
+   "intermittent ENETDOWN on first Network.framework flows",
+   "GETBLOCK_FD probe (goal 6) not started"
+  ],
+  "gate": "z1-z3 on 27.2: every check passes except the Spotlight crash; zero-crash gate not met"
  }
 }

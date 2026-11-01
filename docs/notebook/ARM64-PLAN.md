@@ -1681,3 +1681,29 @@ phone's memory scope (IN=0 OUT=107).
   Messages conversation spin (StatusKitAgent job), launchd #IfFeatureFlagEnabled resolved with the runtime's flags.
 - Open on 27.2: keyboard focus (SpringBoard "[KeyboardFocus] invalid pid for scene"), Siri, Spotlight runaway CPU/RSS,
   Settings search-typing spin (QA report).
+
+## Speed 26 (2026-11-01): keyboard, network, Siri, Files on iOS 27.2 (details: rounds/speed26.md)
+
+- **Keyboard**: not a focus problem ("invalid pid for scene" is logged before the app's spawn completes; SpringBoard then
+  sets the real deferring target). The dictation-availability loop of Speed 12/13 again: 27.2 also asks
+  com.apple.assistant.settings, which Speed 13's dictation-only assistantd didn't serve; the keyboard dock re-checked
+  without end (Preferences ~75% CPU from the first keyboard) and host keys never typed. assistantd is Apple's plist again.
+  Settings search and Spotlight take "wifi" from the host keyboard; Preferences idle.
+- **Network on arm64** (had none): own mDNSResponder server per boot, arm64 netconfig (host network state), Darling
+  `connectx`/`disconnectx`/`socket_delegate` (iOS 27's Network.framework), `/.nofollow/` paths in vchroot (Foundation's
+  no-symlink prefix: nsurlsessiond's downloads never reached their owners). Safari loads pages. Open: intermittent
+  ENETDOWN inside Network.framework on first flows.
+- **Canonical runtime root** in sim.env: dyld_sim strips only the realpath root, so with the symlinked runtimes/<rt>/
+  RuntimeRoot `_dyld_shared_cache_contains_path` failed and CFBundle found no executable for cache-only frameworks:
+  WebKit's WebContent/Networking/GPU exited at once (Safari never rendered a page). First boot after: LS rebuild.
+- **JIT**: CNTVCT_EL0 / CNTPCTSS / CNTVCTSS (dynarmic + fallback; codegen unchanged, image kept), FJCVTZS in the fallback.
+- **Siri**: side button (iPhone 17); mobileassetd/assetsubscriptiond (Siri's UAF assets, as a Mac's device downloads
+  them; ASR 39 MB installed), corespeechd and the Siri services on demand. The Siri process and presentation start; no
+  visible UI yet (audio provider, accounts, server connection).
+- **Files** fixed: searchd + corespotlightservice jobs; Darling renameatx_np accepts RENAME_SECLUDE/NOFOLLOW_ANY/
+  RESOLVE_BENEATH (searchd's index state got ENOTSUP). Recents: "No Recents".
+- **Spotlight**: typing crashes it (Apple's _CSSuggestionToken inserts a nil TOKEN when the query-parser UAF asset is
+  missing). Root cause found, waits on that asset's download.
+- **Gate** (tests/arm64/gate): Photos' What's New sheet dismissed; Siri by side button counting Siri's UI processes;
+  stale ring frame rejected; stall = no screen and no guest CPU change. z1-z3: all checks pass except the Spotlight
+  crash (z1, z2 also hit gate flaws since fixed). Zero-crash gate NOT met.
