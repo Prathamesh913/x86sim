@@ -640,6 +640,9 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
             .arg(repo.join("tests/arm64/icstress.sim"))
             .current_dir(&repo)
             .env("A64_DPREFIX", &cfg.test_prefix)
+            // Speed 23: the builder maps this runtime's cache (run.sh defaults to 27.0: another runtime's image
+            // was 27.0 code under the other cache's UUID, and its processes jumped to garbage)
+            .env("A64_RUNTIME", &cfg.runtime_root)
             .env("TIMEOUT", "86400")
             .env("X86CODE_A64_AOT_BUILD", "1")
             .env("X86CODE_A64_AOT_JOB", &jp)

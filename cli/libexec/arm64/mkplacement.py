@@ -6,6 +6,8 @@
 #
 #   mkplacement.py OUT [LIST]   the files the running sim's processes have mapped, plus the paths in LIST (one per
 #                               line; e.g. a previous table's keys), packed in path order
+# Speed 23: PLACEMENT_RUNTIME=<RuntimeRoot> (another iOS 27.x runtime): only that runtime's files, and LIST's keys are
+# taken relative to it (several sims on different runtimes can run at once).
 # Any change of the table changes the JIT cache key (rebuild the AOT image afterwards).
 import os, struct, sys
 
@@ -75,8 +77,13 @@ def main():
     out = sys.argv[1]
     files = live_files()
     root = None
+    want = os.environ.get("PLACEMENT_RUNTIME")
+    if want:
+        want = os.path.realpath(want) + "/"
+        files = {p for p in files if os.path.realpath(p).startswith(want) or "/RuntimeRoot/" not in p}
+        root = want
     for p in files:
-        if "/RuntimeRoot/" in p:
+        if "/RuntimeRoot/" in p and not want:
             root = p[:p.find("/RuntimeRoot/") + len("/RuntimeRoot/")]
     if len(sys.argv) > 2:
         for l in open(sys.argv[2]):
