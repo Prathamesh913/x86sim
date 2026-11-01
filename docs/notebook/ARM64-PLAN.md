@@ -1569,3 +1569,40 @@ Details in round-done/speed23.md.
   response 0.45 s, content 0.77-0.95 s.
 - Gates g1-g3 3 consecutive clean (home 36-37 s, Settings 20-21/10-11 s, About "iPhone 17 / A3258 / 27.0",
   Calendar/Photos/Maps 4/2, 4/2, 6-9/2, keyboard, Siri, Files, Health 11 s, Wallet 5 s), 0 CRASH/STALL.
+
+## Speed 24 (2026-11-01): background apps suspend, iOS 27.2 Maps past black, iOS version per phone
+
+- **"App open regression" was the measurement.** The gates time Settings via openurl + a 1 s fb2png/tesseract poll
+  (Speed 18 13/7 s, 20 16/8, 21 17-18/9, 22 20/10, 23 20-21/10-11). The frame-timed warm tap (tapm.sh, as Speed 21/22)
+  is unchanged: response 0.44-0.48 s, content 0.64-0.80 s (5 taps). No regression.
+- **Maps / Health never suspended: the simulator build of RunningBoard.** -[RBProcess _lock_suspend] (objc_direct)
+  logs "Ignoring suspend because this process is simulated and has background audio capabilities" and returns for any
+  app with UIBackgroundModes audio (Maps: audio/location, Health: audio). Confirmed on the Mac's 27.0 simulator
+  (RB info log). A device suspends them. simshim (runningboardd only): -supportsBackgroundAudio answers NO when called
+  from that one site, found per runtime by its log string (the "bl objc_msgSend; cbz w0" before it; +0x5ca6c in 27.0);
+  the audio domain checks see the real value. Maps now gets pid_suspend after home and jetsam.py reclaims it.
+  Gate g1: PSS idle 2280 MB (Speed 23 2763-2799), with apps 2611 MB (Speed 23 3377-3416).
+- **Diagnostics added:** X86CODE_STATEDUMP=<guest dir> (X86SIM_JOBENV) keeps a job's os_state handlers and dumps
+  them while <dir>/req exists (RunningBoard: every assertion and process state); use a dir in the device data, not the
+  prefix overlay (the guest caches a missing file). os_log info/debug can't be enabled in DT mode (env, plist and an
+  os_log_type_enabled interposer all failed). The Mac simulator's `log show --info` is the reference.
+- **iOS 27.2 (and 27.1) fixes:**
+  - libarm64jit's dyld_sim matchesPath shortcut found by its code (27.2's is at 0x1f378, not 0x1f2f4): dyld_sim
+    prepare was 20-45 s per process on 27.2 without it. The BKS UI sensor patch is BackBoardServices __TEXT + 0xb22c
+    in all three (the image moves). libobjc is byte-identical in 27.0/27.1/27.2.
+  - Maps black on 27.2: geod's NSURLSession invalidation calls IOServiceClose on the system-power connection, which
+    simshim fakes with a port whose receive right the process holds: the MIG call never got a reply, geod's session
+    queue blocked, and Maps' main thread waited for geod (-[GEOUtilityService _getPathSynchronous:]). Fake ports are
+    now dead names (and IOServiceClose/IOObjectRelease on them succeed). Maps now draws its map background.
+  - Still open on 27.2: Maps then blocks in GEOConfigGetDictionary (sync XPCSession to geod); geod logs "com.apple.Maps
+    has made more than 50 over 2.0 seconds" (its request throttle) for config writes. Next: why the throttle trips
+    (a clock that doesn't advance in its window?) and whether a throttled sync request gets no reply.
+- **iOS version per phone:** `device-a64.py create --model M --ios 27.2 [name]` writes <device>/runtime;
+  `device-a64.py runtimes` lists them; boot-a64.sh boots a device on its runtime with $SCRATCH/jc-<build> (27.0:
+  jitcache) and placement-<build>.txt. Launcher: the phone list shows "iPhone 17 · name · iOS 27.2", the version row
+  is the phone's, Add phone has an iOS picker; start/restart pass only the device. MCP sim_add_device takes ios.
+- **Scratch loss (00:41-00:49, 2026-11-01):** during gate g2 every directory in ~/scratch/x86code except site/ was
+  deleted (jitcache and jc-* AOT caches, the prefixes, tessdata, s22-s24, round-done reports); loose files stayed.
+  Not found in our code (boot-a64, run scripts, launcher, libarm64jit, fpsim2host's log shows no unlink calls). No
+  /home snapshots. Gate g1 was clean (home 44 s, Settings 31/16 s on the OCR poll, About, Calendar 6/2, Photos 6/2,
+  Maps 13/2, keyboard, Siri, Files, Health 10 s, Wallet 6 s, 0 CRASH); g2/g3 invalid.
