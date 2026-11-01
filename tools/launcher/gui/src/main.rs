@@ -29,6 +29,7 @@ pub struct Shared {
     pub status: HashMap<String, instance::Status>,
     pub monitor: instance::Monitor,
     pub polled: bool,
+    pub fetches: Vec<host::Fetch>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -79,7 +80,10 @@ pub struct App {
     pub aot: global::Aot,
     pub runtimes: Vec<host::Runtime>,
     pub catalogue: Arc<Mutex<Option<Vec<host::Catalogue>>>>,
-    pub fetching: HashMap<String, u32>,
+    /// downloads in progress by build (the poller's view, plus ones just started)
+    pub fetching: HashMap<String, host::Fetch>,
+    pub fetch_started: HashMap<String, Instant>,
+    pub hub_show_betas: bool,
     pub sizes: Arc<Mutex<HashMap<std::path::PathBuf, u64>>>,
     pub measuring: bool,
     pub disk: host::Disk,
@@ -102,6 +106,7 @@ impl App {
                 g.status = st.into_iter().map(|s| (s.id.clone(), s)).collect();
                 g.insts = insts;
                 g.polled = true;
+                g.fetches = host::fetches();
             }
             ctx.request_repaint();
             std::thread::sleep(Duration::from_secs(2));
@@ -156,6 +161,8 @@ impl App {
             runtimes,
             catalogue,
             fetching: HashMap::new(),
+            fetch_started: HashMap::new(),
+            hub_show_betas: false,
             sizes: Arc::new(Mutex::new(HashMap::new())),
             measuring: false,
             disk: host::disk(&x86code_core::aot::scratch()),
@@ -250,6 +257,18 @@ impl App {
             // the poller's view of the phones is the truth (a boot rewrites sim.env: ring, model, name)
             self.insts = g.insts.clone();
             self.status = g.status.clone();
+            // downloads: what runs, plus ones started in the last seconds that the poller hasn't seen yet
+            let mut f: HashMap<String, host::Fetch> = g.fetches.iter().map(|f| (f.build.clone(), f.clone())).collect();
+            self.fetch_started.retain(|_, t| t.elapsed() < Duration::from_secs(15));
+            for (b, _) in self.fetch_started.iter() {
+                f.entry(b.clone()).or_insert_with(|| host::Fetch { build: b.clone(), phase: "starting".into(), ..Default::default() });
+            }
+            let finished = self.fetching.keys().any(|b| !f.contains_key(b));
+            self.fetching = f;
+            if finished {
+                self.runtimes = host::runtimes();
+                self.insts = instance::list();
+            }
         }
     }
 
@@ -266,7 +285,6 @@ impl eframe::App for App {
         if self.last_slow.elapsed() > Duration::from_secs(10) {
             self.last_slow = Instant::now();
             self.disk = host::disk(&x86code_core::aot::scratch());
-            self.fetching.retain(|_, pid| std::path::Path::new(&format!("/proc/{pid}")).exists());
             if self.view == View::Ios {
                 self.runtimes = host::runtimes();
             }

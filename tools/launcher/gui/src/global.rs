@@ -212,23 +212,29 @@ impl App {
     // ---------------- iOS versions ----------------
     pub fn ios_page(&mut self, ui: &mut egui::Ui) {
         let mut check = false;
+        let checking = self.catalogue.lock().unwrap().is_none();
         page_header(ui, "iOS versions", "Each phone runs one iOS version. Download more here.", |ui| {
-            check = ui.add(Btn::secondary("Check for updates").icon(icon::ARROW_CLOCKWISE)).clicked();
+            check = ui.add_enabled(!checking, Btn::secondary(if checking { "Checking…" } else { "Check for updates" }).icon(icon::ARROW_CLOCKWISE)).on_hover_text("Ask Apple for its current list").clicked();
         });
         if check {
             let c = self.catalogue.clone();
             *c.lock().unwrap() = None;
+            let ctx = ui.ctx().clone();
             std::thread::spawn(move || {
                 let v = host::catalogue(true);
                 *c.lock().unwrap() = Some(v);
+                ctx.request_repaint();
             });
         }
         let cat = self.catalogue.lock().unwrap().clone();
         let runtimes = self.runtimes.clone();
         let insts = self.insts.clone();
-        let phones_on = move |dir: &str| insts.iter().filter(|i| i.runtime_dir == dir).count();
+        let phones_on = |dir: &str| insts.iter().filter(|i| i.runtime_dir == dir).count();
+        let phones_need = |build: &str| insts.iter().filter(|i| i.build == build && !i.runtime_present).count();
         section(ui, "On this computer", |_| {});
         let mut fetch: Option<(String, String)> = None;
+        let mut cancel: Option<host::Fetch> = None;
+        let mut discard: Option<host::Runtime> = None;
         let mut aot_rt = None;
         list_card(ui, |ui| {
             if runtimes.is_empty() {
@@ -238,36 +244,65 @@ impl App {
                 if k > 0 {
                     hline(ui);
                 }
-                let fetching = self.fetching.contains_key(&r.build);
+                let fetching = self.fetching.get(&r.build).cloned();
+                let partial = host::partial_download(r);
                 let n = phones_on(&r.dir);
                 let size = self.sizes.lock().unwrap().get(&r.jc).copied();
                 let mut line = format!("Build {} · {} phone{}", r.build, n, if n == 1 { "" } else { "s" });
                 if let Some(b) = size {
                     line += &format!(" · {:.1} GB translated code", b as f64 / 1e9);
                 }
-                let (st, col) = if fetching { ("Downloading", WARN) } else if r.present { ("Installed", GOOD) } else { ("Files missing", WARN) };
+                let (st, col) = if fetching.is_some() {
+                    ("Downloading", ACCENT)
+                } else if r.present {
+                    ("Installed", GOOD)
+                } else if partial.is_some() {
+                    ("Stopped", WARN)
+                } else {
+                    ("Files missing", WARN)
+                };
                 list_row(ui, icon::STACK, &format!("iOS {}", r.version), &line, |ui| {
                     if r.present {
-                        if ui.add(Btn::secondary("Pre-translate").icon(icon::LIGHTNING)).clicked() {
+                        if ui.add(Btn::secondary("Pre-translate").icon(icon::LIGHTNING)).on_hover_text("Get this version's apps ready ahead of time").clicked() {
                             aot_rt = Some(r.root.clone());
                         }
-                    } else if !fetching && ui.add(Btn::primary("Download").icon(icon::DOWNLOAD_SIMPLE)).clicked() {
-                        fetch = Some((r.build.clone(), format!("iOS {}", r.version)));
+                    } else if fetching.is_none() {
+                        let label = if partial.is_some() { "Resume" } else { "Download" };
+                        if ui.add(Btn::primary(label).icon(icon::DOWNLOAD_SIMPLE)).clicked() {
+                            fetch = Some((r.build.clone(), format!("iOS {}", r.version)));
+                        }
+                        if partial.is_some() && ui.add(Btn::ghost("Discard")).on_hover_text("Delete what was downloaded").clicked() {
+                            discard = Some(r.clone());
+                        }
                     }
                     ui.add_space(S2);
                     badge(ui, st, col);
                 });
-                if fetching {
-                    fetch_tail(ui, &r.build);
-                } else if !r.present {
-                    egui::Frame::new().inner_margin(egui::Margin { left: 60, right: 16, top: 0, bottom: 12 }).show(ui, |ui| {
-                        ui.label(muted("Its files are missing. Download it again to start phones on this version."));
+                if let Some(f) = &fetching {
+                    if fetch_progress(ui, f) {
+                        cancel = Some(f.clone());
+                    }
+                } else if let Some(b) = partial {
+                    let total = cat.as_ref().and_then(|c| c.iter().find(|c| c.build == r.build)).map(|c| c.gb);
+                    note(ui, &match total {
+                        Some(gb) => format!("Download stopped at {:.1} of {gb:.1} GB. Resume picks up where it stopped.", b as f64 / 1e9),
+                        None => format!("Download stopped at {:.1} GB. Resume picks up where it stopped.", b as f64 / 1e9),
                     });
+                } else if !r.present {
+                    note(ui, "Its files are missing. Download it again to start phones on this version.");
                 }
             }
         });
         ui.add_space(S5);
-        section(ui, "Available from Apple", |_| {});
+        let betas = self.hub_show_betas;
+        let mut show_betas = betas;
+        section(ui, "Available from Apple", |ui| {
+            ui.label(sub("Show betas"));
+            toggle(ui, &mut show_betas);
+        });
+        if show_betas != betas {
+            self.hub_show_betas = show_betas;
+        }
         list_card(ui, |ui| match &cat {
             None => {
                 egui::Frame::new().inner_margin(16).show(ui, |ui| {
@@ -277,13 +312,26 @@ impl App {
                     });
                 });
             }
+            Some(v) if v.is_empty() => {
+                egui::Frame::new().inner_margin(16).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon::WIFI_SLASH).size(16.0).color(INK_3));
+                        ui.label(sub("Couldn't reach Apple. Check the connection, then Check for updates."));
+                    });
+                });
+            }
             Some(v) => {
-                let v: Vec<&host::Catalogue> = v.iter().filter(|c| !runtimes.iter().any(|r| r.build == c.build)).collect();
+                let is_beta = |c: &host::Catalogue| c.name.contains("beta") || c.name.contains("Release Candidate");
+                let mut v: Vec<&host::Catalogue> = v.iter().filter(|c| !runtimes.iter().any(|r| r.build == c.build)).collect();
+                // newest first; releases before betas of the same version
+                v.sort_by(|a, b| ver_key(&b.version).cmp(&ver_key(&a.version)).then(is_beta(a).cmp(&is_beta(b))).then(b.build.cmp(&a.build)));
+                let hidden = v.iter().filter(|c| is_beta(c) && phones_need(&c.build) == 0).count();
+                let v: Vec<&host::Catalogue> = v.into_iter().filter(|c| show_betas || !is_beta(c) || phones_need(&c.build) > 0).collect();
                 if v.is_empty() {
                     egui::Frame::new().inner_margin(16).show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(icon::CHECK_CIRCLE).size(16.0).color(GOOD));
-                            ui.label(sub("You have everything Apple offers."));
+                            ui.label(sub("You have every release Apple offers."));
                         });
                     });
                 }
@@ -291,25 +339,54 @@ impl App {
                     if k > 0 {
                         hline(ui);
                     }
-                    let fetching = self.fetching.contains_key(&c.build);
-                    let short = c.name.trim_end_matches(" Simulator Runtime").trim().to_string();
+                    let fetching = self.fetching.get(&c.build).cloned();
+                    let short = c.name.trim_end_matches(" Simulator Runtime").trim().replace("Release Candidate", "RC");
                     let t = if !short.is_empty() { short } else if c.version.is_empty() { c.build.clone() } else { format!("iOS {}", c.version) };
-                    let detail = format!("Build {} · {:.1} GB download", c.build, c.gb);
+                    let need = phones_need(&c.build);
+                    let mut detail = format!("Build {} · {:.1} GB download", c.build, c.gb);
+                    if need > 0 {
+                        detail += &format!(" · {need} phone{} need{} it", if need == 1 { "" } else { "s" }, if need == 1 { "s" } else { "" });
+                    }
                     list_row(ui, icon::CLOUD_ARROW_DOWN, &t, &detail, |ui| {
-                        if fetching {
-                            badge(ui, "Downloading", WARN);
-                        } else if ui.add(Btn::secondary("Download").icon(icon::DOWNLOAD_SIMPLE)).clicked() {
-                            fetch = Some((c.build.clone(), t.clone()));
+                        if fetching.is_none() {
+                            let b = if need > 0 { Btn::primary("Download") } else { Btn::secondary("Download") };
+                            if ui.add(b.icon(icon::DOWNLOAD_SIMPLE)).clicked() {
+                                fetch = Some((c.build.clone(), t.clone()));
+                            }
+                        } else {
+                            badge(ui, "Downloading", ACCENT);
                         }
                     });
-                    if fetching {
-                        fetch_tail(ui, &c.build);
+                    if let Some(f) = &fetching {
+                        if fetch_progress(ui, f) {
+                            cancel = Some(f.clone());
+                        }
                     }
+                }
+                if !show_betas && hidden > 0 {
+                    hline(ui);
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 10)).show(ui, |ui| {
+                        ui.label(muted(format!("{hidden} betas and release candidates hidden")));
+                    });
                 }
             }
         });
         if let Some((b, l)) = fetch {
             self.download(&b, &l);
+        }
+        if let Some(f) = cancel {
+            host::cancel_fetch(&f);
+            self.fetching.remove(&f.build);
+            self.fetch_started.remove(&f.build);
+            self.say("Download stopped. Resume picks up where it stopped.");
+            self.runtimes = host::runtimes();
+        }
+        if let Some(r) = discard {
+            match host::discard_download(&r) {
+                Ok(()) => self.say(format!("Removed the stopped iOS {} download", r.version)),
+                Err(e) => self.say(format!("Couldn't remove it: {e:#}")),
+            }
+            self.runtimes = host::runtimes();
         }
         if let Some(rt) = aot_rt {
             self.aot.select(rt, None);
@@ -752,11 +829,53 @@ fn list_row(ui: &mut egui::Ui, ic: &str, title_text: &str, detail: &str, trailin
     });
 }
 
-/// The last line of a running download's log, under its row.
-fn fetch_tail(ui: &mut egui::Ui, build: &str) {
-    let tail = std::fs::read_to_string(host::fetch_log(build)).ok().and_then(|s| s.lines().filter(|l| !l.trim().is_empty()).last().map(|l| l.to_string())).unwrap_or_default();
+/// A muted note under a list row, aligned with its title.
+fn note(ui: &mut egui::Ui, text: &str) {
     egui::Frame::new().inner_margin(egui::Margin { left: 60, right: 16, top: 0, bottom: 12 }).show(ui, |ui| {
-        ui.add(egui::Label::new(mono(tail)).truncate());
+        ui.add(egui::Label::new(muted(text)).wrap());
     });
-    ui.ctx().request_repaint_after(Duration::from_secs(2));
+}
+
+/// "27.2" -> (27, 2, 0) for sorting
+fn ver_key(v: &str) -> (u32, u32, u32) {
+    let mut it = v.split('.').map(|x| x.parse().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// A download's progress under its row: bar, amount, speed, time left, Cancel. Returns true when Cancel is clicked.
+fn fetch_progress(ui: &mut egui::Ui, f: &host::Fetch) -> bool {
+    let mut cancel = false;
+    egui::Frame::new().inner_margin(egui::Margin { left: 60, right: 16, top: 0, bottom: 12 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 6.0;
+        let gb = |b: u64| b as f64 / 1e9;
+        let (line, frac) = match f.phase.as_str() {
+            "downloading" if f.total_bytes > 0 => {
+                let mut l = format!("{:.1} of {:.1} GB", gb(f.done_bytes), gb(f.total_bytes));
+                if f.speed > 0 {
+                    l += &format!(" · {:.0} MB/s", f.speed as f64 / 1e6);
+                }
+                if let Some(e) = f.eta_s {
+                    l += &format!(" · about {} left", fmt_s(e as f64));
+                }
+                (l, Some(f.pct.unwrap_or(0.0) / 100.0))
+            }
+            "downloading" => ("Downloading…".to_string(), None),
+            "decrypting" => ("Downloaded. Decrypting…".to_string(), None),
+            "unpacking" => ("Unpacking. Almost done…".to_string(), None),
+            _ => ("Asking Apple for the download…".to_string(), None),
+        };
+        ui.horizontal(|ui| {
+            ui.label(sub(line));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                cancel = ui.add(Btn::secondary("Cancel").icon(icon::X).small()).on_hover_text("Stop the download; what's downloaded is kept").clicked();
+            });
+        });
+        match frac {
+            Some(x) => ui.add(egui::ProgressBar::new(x).desired_height(4.0).fill(ACCENT).corner_radius(2).animate(false)),
+            None => ui.add(egui::ProgressBar::new(0.0).desired_height(4.0).fill(ACCENT).corner_radius(2).animate(true)),
+        };
+    });
+    ui.ctx().request_repaint_after(Duration::from_secs(1));
+    cancel
 }

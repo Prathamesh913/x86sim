@@ -18,8 +18,9 @@ impl App {
             return;
         }
         match x86code_core::host::fetch(build) {
-            Ok(pid) => {
-                self.fetching.insert(build.to_string(), pid);
+            Ok(_) => {
+                self.fetch_started.insert(build.to_string(), std::time::Instant::now());
+                self.fetching.insert(build.to_string(), x86code_core::host::Fetch { build: build.to_string(), phase: "starting".into(), ..Default::default() });
                 self.say(format!("Downloading {label}. This takes a while (several GB)."));
             }
             Err(e) => self.say(format!("Couldn't start the download: {e:#}")),
@@ -101,7 +102,8 @@ impl App {
                 if gi > 0 {
                     hline(ui);
                 }
-                let fetching = self.fetching.contains_key(build);
+                let dl = self.fetching.get(build).cloned();
+                let fetching = dl.is_some();
                 let gb = cat.iter().find(|c| &c.build == build).map(|c| c.gb);
                 egui::Frame::new().inner_margin(egui::Margin { left: 16, right: 16, top: 14, bottom: 10 }).show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -114,8 +116,8 @@ impl App {
                             ui.spacing_mut().item_spacing.y = 1.0;
                             ui.label(strong(format!("{ios} isn't installed")));
                             let need = format!("{} phone{} need{} it", ids.len(), if ids.len() == 1 { "" } else { "s" }, if ids.len() == 1 { "s" } else { "" });
-                            let line = if fetching {
-                                "Downloading…".to_string()
+                            let line = if let Some(f) = &dl {
+                                fetch_line(f)
                             } else if let Some(gb) = gb {
                                 format!("{need} · {gb:.1} GB download")
                             } else {
@@ -362,4 +364,14 @@ impl App {
 
 fn rgb_well() -> egui::Color32 {
     egui::Color32::from_rgb(0x15, 0x16, 0x18)
+}
+
+/// "Downloading · 23%" / "Unpacking…": one line for a download in progress
+pub fn fetch_line(f: &x86code_core::host::Fetch) -> String {
+    match (f.phase.as_str(), f.pct) {
+        ("downloading", Some(p)) => format!("Downloading · {p:.0}%"),
+        ("decrypting", _) => "Downloaded · decrypting…".into(),
+        ("unpacking", _) => "Unpacking…".into(),
+        _ => "Downloading…".into(),
+    }
 }

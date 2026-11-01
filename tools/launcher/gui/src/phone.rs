@@ -120,9 +120,10 @@ impl App {
                 let mut dl = false;
                 empty_state(ui, icon::CLOUD_ARROW_DOWN, &format!("{} isn't installed", inst.ios), "Download it to start this phone. Its apps and data are kept.", |ui| {
                     if busy {
+                        let line = self.fetching.get(&inst.build).map(crate::home::fetch_line).unwrap_or_default();
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label(sub("Downloading…"));
+                            ui.label(sub(line));
                         });
                         ui.ctx().request_repaint_after(Duration::from_secs(2));
                     } else {

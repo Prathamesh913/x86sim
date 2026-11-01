@@ -161,3 +161,144 @@ pub fn load_hub() -> HubSettings {
 pub fn save_hub(s: &HubSettings) -> Result<()> {
     crate::aot::write_json(&hub_path(), s)
 }
+
+// ---- downloads ----
+
+/// A running download (x86sim runtime fetch BUILD): found by its command line, so one started before the hub opened
+/// (or from a terminal) shows too.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Fetch {
+    pub build: String,
+    /// the process group leader (setsid by `fetch`), or the runtime-fetch.py process
+    pub pid: u32,
+    /// "starting" | "downloading" | "decrypting" | "unpacking"
+    pub phase: String,
+    pub pct: Option<f32>,
+    pub done_bytes: u64,
+    pub total_bytes: u64,
+    /// bytes per second (curl's current speed)
+    pub speed: u64,
+    pub eta_s: Option<u64>,
+}
+
+fn proc_read(pid: u32, f: &str) -> String {
+    std::fs::read_to_string(format!("/proc/{pid}/{f}")).unwrap_or_default()
+}
+
+/// "7900M" -> bytes
+fn curl_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (n, mul) = match s.chars().last()? {
+        'k' => (&s[..s.len() - 1], 1u64 << 10),
+        'M' => (&s[..s.len() - 1], 1 << 20),
+        'G' => (&s[..s.len() - 1], 1 << 30),
+        'T' => (&s[..s.len() - 1], 1 << 40),
+        _ => (s, 1),
+    };
+    n.parse::<f64>().ok().map(|v| (v * mul as f64) as u64)
+}
+
+/// "1:49:00" / "--:--:--" -> seconds
+fn curl_time(s: &str) -> Option<u64> {
+    let p: Vec<u64> = s.split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    Some(p.iter().fold(0, |a, v| a * 60 + v))
+}
+
+/// Downloads in progress (runtime-fetch.py fetch BUILD processes), with progress from curl's meter in the log.
+pub fn fetches() -> Vec<Fetch> {
+    let mut out: Vec<Fetch> = vec![];
+    let mut groups: std::collections::HashMap<u32, Vec<String>> = std::collections::HashMap::new(); // pgid -> comms
+    let mut found: Vec<(u32, u32, String)> = vec![]; // pid, pgid, build
+    for e in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else { continue };
+        let stat = proc_read(pid, "stat");
+        let Some(rest) = stat.rsplit(')').next() else { continue };
+        let pgid: u32 = rest.split_whitespace().nth(2).and_then(|x| x.parse().ok()).unwrap_or(0);
+        let comm = proc_read(pid, "comm").trim().to_string();
+        groups.entry(pgid).or_default().push(comm.clone());
+        if comm.starts_with("python") {
+            let args: Vec<String> = proc_read(pid, "cmdline").split('\0').map(String::from).collect();
+            if let Some(i) = args.iter().position(|a| a.ends_with("arm64/runtime-fetch.py")) {
+                if args.get(i + 1).map(String::as_str) == Some("fetch") {
+                    if let Some(b) = args.get(i + 2) {
+                        found.push((pid, pgid, b.clone()));
+                    }
+                }
+            }
+        }
+    }
+    for (pid, pgid, build) in found {
+        let comms = groups.get(&pgid).cloned().unwrap_or_default();
+        let has = |c: &str| comms.iter().any(|x| x == c);
+        let phase = if has("curl") {
+            "downloading"
+        } else if has("ipsw") {
+            "decrypting"
+        } else if has("7z") || comms.iter().filter(|c| c.starts_with("python")).count() > 1 {
+            "unpacking"
+        } else {
+            "starting"
+        };
+        let mut f = Fetch { build: build.clone(), pid: if pgid > 1 { pgid } else { pid }, phase: phase.into(), ..Default::default() };
+        if phase == "downloading" {
+            // curl's meter: the last \r-separated record of the log
+            let log = std::fs::read(fetch_log(&build)).unwrap_or_default();
+            let tail = String::from_utf8_lossy(&log[log.len().saturating_sub(4096)..]).into_owned();
+            // a resumed download's meter counts only the rest
+            let resumed: u64 = String::from_utf8_lossy(&log[..log.len().min(16384)])
+                .split("Resuming transfer from byte position ")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            if let Some(rec) = tail.rsplit(['\r', '\n']).find(|r| r.split_whitespace().next().is_some_and(|w| w.parse::<u32>().is_ok())) {
+                let w: Vec<&str> = rec.split_whitespace().collect();
+                if w.len() >= 12 {
+                    f.total_bytes = curl_size(w[1]).unwrap_or(0) + resumed;
+                    f.done_bytes = curl_size(w[3]).unwrap_or(0) + resumed;
+                    f.pct = (f.total_bytes > 0).then(|| f.done_bytes as f32 / f.total_bytes as f32 * 100.0);
+                    f.speed = curl_size(w[11]).unwrap_or(0);
+                    f.eta_s = curl_time(w[10]);
+                }
+            }
+        }
+        out.push(f);
+    }
+    out
+}
+
+/// Stops a download (its whole process group). What was downloaded stays: Download again resumes it.
+pub fn cancel_fetch(f: &Fetch) {
+    unsafe {
+        if libc::getpgid(f.pid as i32) == f.pid as i32 {
+            libc::kill(-(f.pid as i32), libc::SIGTERM);
+        } else {
+            libc::kill(f.pid as i32, libc::SIGTERM);
+        }
+    }
+}
+
+/// A download that stopped part way (no RuntimeRoot yet): runtimes/<dir>/download/runtime.aar and its size
+pub fn partial_download(r: &Runtime) -> Option<u64> {
+    if r.present {
+        return None;
+    }
+    let dir = repo_root().join("runtimes").join(&r.dir);
+    if dir.join("RuntimeRoot").symlink_metadata().is_ok() {
+        return None;
+    }
+    std::fs::metadata(dir.join("download/runtime.aar")).ok().map(|m| m.len())
+}
+
+/// Removes a stopped download: only a runtimes/ dir that never got a RuntimeRoot (the files the download made).
+pub fn discard_download(r: &Runtime) -> Result<()> {
+    let dir = repo_root().join("runtimes").join(&r.dir);
+    anyhow::ensure!(!r.present && dir.join("RuntimeRoot").symlink_metadata().is_err(), "{} is installed, not a stopped download", r.dir);
+    anyhow::ensure!(!fetches().iter().any(|f| f.build == r.build), "it is still downloading");
+    for e in std::fs::read_dir(&dir)?.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        anyhow::ensure!(matches!(n.as_str(), "download" | "decrypted" | "bundle" | "extracted"), "{} has other files ({n}); left alone", dir.display());
+    }
+    std::fs::remove_dir_all(&dir)?;
+    Ok(())
+}

@@ -91,9 +91,6 @@ pub fn sub(t: impl Into<String>) -> RichText {
 pub fn muted(t: impl Into<String>) -> RichText {
     RichText::new(t).size(T_SMALL).color(INK_3)
 }
-pub fn mono(t: impl Into<String>) -> RichText {
-    RichText::new(t).monospace().size(11.5).color(INK_2)
-}
 pub fn overline(t: &str) -> RichText {
     RichText::new(t.to_uppercase()).size(10.5).family(semibold()).color(INK_3).extra_letter_spacing(0.6)
 }
