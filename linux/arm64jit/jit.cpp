@@ -351,9 +351,9 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
             c.optimizations &= ~Dynarmic::OptimizationFlag::BlockLinking;
         }
         // Speed 25: a pop checks the shared invalidate generation (A64JitState::rsb_gen): after another thread's
-        // Invalidate/ClearCache this thread's entries are dropped and the return goes through FastDispatch. Still off
-        // by default (X86CODE_A64_RSB=1: on; code-shaping: PushRSB and the pop terminal are in the image).
-        if (!(getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 1)) {
+        // Invalidate/ClearCache this thread's entries are dropped and the return goes through FastDispatch. On by default
+        // (X86CODE_A64_RSB=0: off, experiments only; code-shaping: PushRSB and the pop terminal are in the image).
+        if (getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
         }
         // X86CODE_A64_SAFE=1: also drop FastDispatch (narrows shared races further for experiments).
