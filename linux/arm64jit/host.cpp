@@ -511,6 +511,11 @@ static void on_abrt(int, siginfo_t *si, void *uc) {
     } else {
         logf("no GuestThread on aborting tid (native-only or TLS cleared)");
     }
+    // Speed 27: training passes only (X86CODE_A64_AOT_AUTOSAVE=1): keep what this process translated, as a normal
+    // exit does. A process that aborts right after new code ran (Maps' route card: SwiftUI missed its update deadline
+    // while translating) otherwise loses exactly the code the image lacks. Not in normal use: the save takes the
+    // shared code lock, which the aborting thread may hold.
+    if (const char *a = getenv("X86CODE_A64_AOT_AUTOSAVE"); a && atoi(a) == 1) jitcache_save_on_exit();
     signal(SIGABRT, SIG_DFL);
     raise(SIGABRT);
 }

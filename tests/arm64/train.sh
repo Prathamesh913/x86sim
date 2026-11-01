@@ -22,6 +22,9 @@ for p in 'prefs:root=General' 'prefs:root=DISPLAY' 'prefs:root=Sounds' 'prefs:ro
 	'prefs:root=WIFI' 'prefs:root=Bluetooth' 'prefs:root=BATTERY_USAGE' 'prefs:root=General&path=STORAGE_MGMT'; do
 	home 3; open_ "$p"; sleep 8
 done
+# Speed 27: Maps' place card and directions (SwiftUI route views; translated live they missed AttributeGraph's update
+# deadline and Maps hit a fatal precondition), three times so their code gets into the profile
+for i in 1 2 3; do "$(dirname "$0")/gate/mapsroute.sh" "mapsroute$i"; done
 # app switcher (swipe up + hold), then home
 home 4; touch_ swipe 603 2615 603 1700 400 300; sleep 4; shot "$O/switcher.png"; home 6
 c=$(crashes); [ -n "$c" ] && say "CRASH in: $c"

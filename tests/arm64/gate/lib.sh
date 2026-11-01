@@ -28,6 +28,35 @@ crashes() {
 		tail -c +$(( ${o:-0} + 1 )) "$f" 2>/dev/null | grep -Eq "$CRASHRE" && echo "$(basename "$f")"
 	done
 }
+# Speed 27: logs first. A check reads the screen only once the logs say the app is alive: its process is running and
+# its per-process JIT log has no crash since mark_logs. (A screenshot of something that already crashed is wasted.)
+pid_of() { ps -eo pid=,comm= | awk -v n="$1" '$2==n{print $1; exit}'; }
+# crashed_proc NAME: a crash line in NAME's JIT logs since mark_logs
+crashed_proc() {
+	for f in "$LOGB"/"$1".*.log; do
+		[ -f "$f" ] || continue
+		local o; o=$(awk -v f="$f" '$1==f{print $2}' "$O/.sizes" 2>/dev/null)
+		tail -c +$(( ${o:-0} + 1 )) "$f" 2>/dev/null | grep -Eq "$CRASHRE" && return 0
+	done
+	return 1
+}
+# proc_state NAME: alive | crashed | gone (gone: not running and no crash logged, e.g. it exited)
+proc_state() {
+	crashed_proc "$1" && { echo crashed; return; }
+	[ -n "$(pid_of "$1")" ] && echo alive || echo gone
+}
+# wait_proc LABEL NAME MAXSECS: the app's process comes up (polled from the process list, no screen)
+wait_proc() {
+	local i
+	for i in $(seq 1 "$3"); do
+		case $(proc_state "$2") in
+			alive) return 0 ;;
+			crashed) say "CRASH $1: $2 crashed at launch ($(ls -t "$LOGB"/"$2".*.log 2>/dev/null | head -1 | xargs -r basename))"; return 5 ;;
+		esac
+		sleep 1
+	done
+	say "NOPROC $1: $2 not running after $3 s"; return 6
+}
 # summed CPU seconds (whole) of this phone's guest processes (runtime binaries); changes while the phone works
 guest_cpu() { ps -eo times=,args= 2>/dev/null | awk '/RuntimeRoot|runtimes\/ios-/ {s += $1} END {print s + 0}'; }
 # wait_ocr LABEL REGEX MAXSECS: poll every 2 s (GATE_SLOW=n: n x the limits, for JIT-only training boots); HIT/STALL (30 s without any screen or CPU change)/TIMEOUT
@@ -36,6 +65,12 @@ wait_ocr() {
 	t0=$(date +%s.%N)
 	while :; do
 		sleep 2
+		if [ -n "${PROC:-}" ]; then
+			case $(proc_state "$PROC") in
+				crashed) say "CRASH $1: $PROC crashed"; return 5 ;;
+				gone) say "GONE $1: $PROC is no longer running"; return 6 ;;
+			esac
+		fi
 		o=$(ocr); el=$(python3 -c "print(f'{$(date +%s.%N)-$t0:.0f}')")
 		# FRESH=1: the status-bar clock must show the current (or last) minute, so a frame left in the ring from the
 		# previous boot doesn't count
@@ -56,8 +91,22 @@ wait_ocr() {
 		[ "${el%.*}" -ge $(( $3 * ${GATE_SLOW:-1} )) ] && { cp "$O/now.png" "$O/$1-timeout.png"; say "TIMEOUT $1 [${o:0:110}]"; return 4; }
 	done
 }
-# open_check LABEL BUNDLE REGEX MAX: from home, open, wait for the regex
-open_check() { home 6; app "$2"; wait_ocr "$1" "$3" "$4"; }
+# open_check LABEL BUNDLE REGEX MAX [PROC]: from home, open; logs first (the process comes up, no crash), then wait for
+# the regex on screen while the process stays alive. PROC: the app's process name (default: from the bundle id).
+open_check() {
+	local p=${5:-$(proc_for "$2")}
+	home 6; app "$2"
+	if [ -n "$p" ]; then wait_proc "$1" "$p" 60 || return $?; fi
+	PROC=$p wait_ocr "$1" "$3" "$4"
+}
+proc_for() {
+	case $1 in
+		com.apple.Preferences) echo Preferences ;; com.apple.mobilecal) echo MobileCal ;;
+		com.apple.mobileslideshow) echo MobileSlideShow ;; com.apple.Maps) echo Maps ;;
+		com.apple.DocumentsApp) echo Files ;; com.apple.Health) echo Health ;; com.apple.Passbook) echo Passbook ;;
+		com.apple.MobileSMS) echo MobileSMS ;; com.apple.news) echo News ;; com.apple.mobilesafari) echo MobileSafari ;;
+	esac
+}
 pss() { "$AOT" sim status 2>/dev/null | grep -o 'procs [0-9]*\|PSS [0-9]* MB' | paste -sd' '; }
 # tap_word WORD: OCR the current frame (TSV) and tap the centre of the first word equal to WORD; 1 if not on screen
 tap_word() {
@@ -77,4 +126,31 @@ photos_whatsnew() {
 	tap_word Continue || touch_ tap 603 2430
 	sleep 3; touch_ dismiss  # then Photos asks to send notifications
 	wait_ocr "$1-after" 'Library|Collections|No Photos|Recent|Search' 60
+}
+# maps_tiles LABEL (Speed 27): Maps is up (logs first), then its map area must show tiles (maptiles.py: water and
+# land colours); polled up to 90 s while Maps stays alive. Saves the frame as LABEL.png and logs the colour counts.
+maps_tiles() {
+	local i r st
+	for i in $(seq 1 18); do
+		st=$(proc_state Maps); [ "$st" = alive ] || { say "FAIL $1: Maps $st"; return 5; }
+		shot "$O/now.png"; r=$(python3 "$X/tests/arm64/gate/maptiles.py" "$O/now.png")
+		case $r in "tiles yes"*) cp "$O/now.png" "$O/$1.png"; say "HIT $1 [$r]"; return 0 ;; esac
+		sleep 5
+	done
+	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no map tiles drawn [$r]"; return 4
+}
+# app_switcher LABEL (Speed 27): from home, swipe up from the bottom edge and hold: SpringBoard's switcher shows the
+# recent apps' cards with their names and no home-screen dock/Search pill; home again afterwards.
+app_switcher() {
+	local o i
+	home 5
+	touch_ swipe 603 2610 603 1500 600 700; sleep 3
+	for i in 1 2 3 4 5; do
+		o=$(ocr)
+		if echo "$o" | grep -Eq 'Settings|Messages|News|Safari|Wallet|Health|Files' && ! echo "$o" | grep -q 'Search'; then
+			cp "$O/now.png" "$O/$1.png"; say "HIT $1 [${o:0:110}]"; home 5; return 0
+		fi
+		sleep 2
+	done
+	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no app switcher [${o:0:110}]"; home 5; return 4
 }

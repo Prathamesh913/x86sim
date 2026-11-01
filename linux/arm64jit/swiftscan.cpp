@@ -295,9 +295,16 @@ void index_sync(u64 base, u64 count) {
         ix.begins.push_back(b);
         ix.ends.push_back(e);
         for (u64 r = b; r != e; r += 4) {
+            const u64 pos = i << 32 | (r - b);
+            // Speed 27: a record that names its type indirectly (kind 1: a pointer slot dyld binds) is resolved at
+            // lookup time, as the guest loop does: when the section is indexed right after its image was added the
+            // slot may not be bound yet (0), and such records were dropped for good. SwiftUI's conformance for
+            // DynamicContainerInfo<DynamicLayoutViewAdaptor> was then never found (an AttributeGraph precondition
+            // "attribute failed to set an initial value": Maps aborted building a route card).
+            const u64 desc = r + (s64)GuestThread::rd<s32>(r);
+            if (((GuestThread::rd<u32>(desc + 12) >> 3) & 7) == 1) { ix.other.push_back(pos); continue; }
             const u64 td = record_type(r);
             if (!td) continue;
-            const u64 pos = i << 32 | (r - b);
             u64 h;
             if (descriptor_key(td, h)) ix.named.emplace_back(h, pos);
             else ix.other.push_back(pos);
@@ -372,7 +379,9 @@ void swifttype_step(GuestThread &t) {
             index_sync(base, (secend - base) / 16);
             const u64 si = (sec - base) / 16;
             if (si < g_ix.begins.size() && g_ix.begins[si] <= rec && rec < g_ix.ends[si] && g_ix.ends[si] == end) {
-                const u64 nx = index_next(si << 32 | (rec - g_ix.begins[si]), w);
+                u64 nx = index_next(si << 32 | (rec - g_ix.begins[si]), w);
+                // an indirect record not bound yet names no type: the guest loop skips it, so do we
+                while (nx != ~0ull && !record_type(g_ix.begins[nx >> 32] + (nx & 0xffffffffu))) nx = index_next(nx + 4, w);
                 if (nx == ~0ull) {
                     t.set_x(23, secend);
                     t.jit->SetPC(kBase + kDoneOff);
