@@ -256,7 +256,13 @@ def on_activate(app):
     def emit(phase, x, y):
         x, y = norm(x, y)
         if state["mode"] == "one":
-            send("touch %s %.5f %.5f" % (phase, x, y))
+            edge = ""
+            if phase == "down":
+                # an edge touch, as Apple's Simulator marks one (begins within ~16 pt of the edge; top/bottom win in
+                # the corners): home indicator gestures, Notification/Control Center (see host/simhid/simhid.m)
+                mx, my = 0.04, 0.04 * state["size"][0] / max(state["size"][1], 1)
+                edge = " bottom" if y >= 1 - my else " top" if y <= my else " left" if x <= mx else " right" if x >= 1 - mx else ""
+            send("touch %s %.5f %.5f%s" % (phase, x, y, edge))
             return
         if state["mode"] == "pinch":
             x2, y2 = 1.0 - x, 1.0 - y          # mirrored through the centre

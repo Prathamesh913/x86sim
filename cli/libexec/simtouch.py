@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Send touches/keys/buttons to the simulator (host/simhid, backboardd's virtual HID services).
     cli/libexec/simtouch.py tap <x> <y>                    device pixels (size from the frame ring / device env)
-    cli/libexec/simtouch.py swipe <x1> <y1> <x2> <y2> [ms]
+    cli/libexec/simtouch.py swipe <x1> <y1> <x2> <y2> [ms] [hold_ms]   a swipe that starts at a screen edge is an edge
+                                                      touch, as in Apple's Simulator (bottom: home indicator; top
+                                                      left/right: Notification/Control Center); hold_ms: stay at
+                                                      (x2,y2) before lifting (swipe up + hold = app switcher)
+    cli/libexec/simtouch.py edgeswipe <edge|none> <x1> <y1> <x2> <y2> [ms] [hold_ms]   the edge given explicitly
     cli/libexec/simtouch.py home | lock                    press + release
     cli/libexec/simtouch.py pinch <cx> <cy> <r1> <r2> [ms]   two fingers on a horizontal line through (cx,cy), their
                                                       distance from it going from r1 to r2 (r2 > r1 = zoom in)
@@ -64,8 +68,19 @@ def send(s, *lines):
     s.sendall("".join(l + "\n" for l in lines).encode())
 
 
-def touch(s, phase, x, y):
-    send(s, "touch %s %.5f %.5f" % (phase, x / W, y / H))
+def touch(s, phase, x, y, edge=None):
+    send(s, "touch %s %.5f %.5f%s" % (phase, x / W, y / H, " " + edge if edge else ""))
+
+
+def edge_at(x, y, w, h):
+    """The screen edge a touch at device pixel (x, y) begins on, like Apple's Simulator marks it (within ~16 pt of the
+    edge; the top and bottom win in the corners), or None."""
+    m = 0.04 * w
+    if y >= h - m: return "bottom"
+    if y <= m: return "top"
+    if x <= m: return "left"
+    if x >= w - m: return "right"
+    return None
 
 
 # x86Code: permission prompts. cli/libexec/seedperms.py pre-answers them before a boot; whatever still comes up (an app
@@ -150,14 +165,28 @@ def main(a):
     if a[0] == "tap":
         x, y = float(a[1]), float(a[2])
         touch(s, "down", x, y); time.sleep(0.08); touch(s, "up", x, y)
-    elif a[0] == "swipe":
+    elif a[0] in ("swipe", "edgeswipe"):
+        edge = None
+        if a[0] == "edgeswipe":
+            edge, a = a[1], a[1:]
         x1, y1, x2, y2 = map(float, a[1:5])
         ms = float(a[5]) if len(a) > 5 else 300
+        hold = float(a[6]) if len(a) > 6 else 0
+        if edge is None:
+            edge = edge_at(x1, y1, W, H)
         n = max(int(ms / 16), 2)
-        touch(s, "down", x1, y1)
+        touch(s, "down", x1, y1, edge)
         for i in range(1, n + 1):
             time.sleep(ms / 1000 / n)
-            touch(s, "move", x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n)
+            # with a hold the finger slows down into the stop (ease-out), as a hand does: UIKit's pan velocity only
+            # changes when the touch moves, so a constant-speed drag that stops dead keeps its full velocity and
+            # SpringBoard never sees the pause (pauseVelocityThresholdForAppSwitcher) that opens the app switcher
+            f = i / n if not hold else 1 - (1 - i / n) ** 3
+            touch(s, "move", x1 + (x2 - x1) * f, y1 + (y2 - y1) * f)
+        t = time.time() + hold / 1000
+        while time.time() < t:   # a still finger: a digitizer keeps reporting it at its scan rate (~60 Hz)
+            time.sleep(0.016)
+            touch(s, "move", x2, y2)
         touch(s, "up", x2, y2)
     elif a[0] in ("pinch", "pan2"):
         ms = float(a[5]) if len(a) > 5 else 500

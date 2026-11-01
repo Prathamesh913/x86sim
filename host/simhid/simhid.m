@@ -12,7 +12,9 @@
 //
 // Socket: $SIMHID_SOCKET (default <SIMULATOR_SHARED_RESOURCES_DIRECTORY>/simhid.sock), stream, any number of
 // clients, one text command per line:
-//   touch down|move|up <x> <y>     x, y normalized to the display (0..1, origin top left)
+//   touch down|move|up <x> <y> [edge]   x, y normalized to the display (0..1, origin top left); edge (on down, kept
+//                                  for the whole touch): none|top|left|bottom|right, a touch that begins at that screen
+//                                  edge (system gestures: home indicator, Control/Notification Center)
 //   touch2 down|move|up <x1> <y1> <x2> <y2>   two fingers (pinch, two-finger pan): one hand event with two finger
 //                                  children, finger indexes 1 and 2 with their own identities
 //   key down|up <usage>            keyboard usage (page 7), e.g. 4 = 'a', 0x28 = return
@@ -71,6 +73,13 @@ extern void IOHIDEventSetIntegerValue(IOHIDEventRef, uint32_t field, CFIndex val
 #define kDigitizerPosition 0x4
 #define kDigitizerIdentity 0x20
 #define kFieldDigitizerIsDisplayIntegrated ((11 << 16) | 25)
+// x86Code: how Apple's Simulator marks edge touches (SimulatorKit IndigoHIDMessageForMouseNSEvent, Xcode 27.1): the
+// IndigoHIDEdge (0 none, 1 top, 2 left, 3 bottom, 4 right) picks the digitizer event mask from a table, 0x40000 |
+// {0, 0x02000000, 0x08000000, 0x01000000, 0x04000000} (the swipe direction away from that edge: top = swipe down,
+// bottom = swipe up ...), and SimulatorHID passes that mask to IOHIDEventCreateDigitizerFingerEvent on every phase.
+// SpringBoard's system gestures (home indicator, Control/Notification Center) only claim touches carrying these bits.
+static const uint32_t edge_mask[5] = { 0x40000, 0x02040000, 0x08040000, 0x01040000, 0x04040000 };
+static int touch_edge;
 
 // x86Code arm64: also mirror to a host-visible log file. stderr under the JIT can be late or
 // interleaved with backboardd's own logging; a dedicated file lets us see whether the socket
@@ -177,15 +186,16 @@ static void dispatch_event(VService* s, IOHIDEventRef e) {
 static bool touching;
 static uint32_t touch_identity = 2;
 
-static void send_touch(const char* phase, double x, double y) {
+static void send_touch(const char* phase, double x, double y, int edge) {
 	bool down = !strcmp(phase, "down"), up = !strcmp(phase, "up"), move = !strcmp(phase, "move");
 	if (!down && !up && !move) return;
 	if (move && !touching) return;
-	if (down) { if (touching) send_touch("up", x, y); touching = true; touch_identity++; }
+	if (down) { if (touching) send_touch("up", x, y, 0); touching = true; touch_identity++; touch_edge = edge; }
 	// (a single-finger down while two fingers are down: the two-finger contact is lifted first, see send_touch2)
 	if (up) { if (!touching) return; touching = false; }
 	uint64_t ts = mach_absolute_time();
 	uint32_t mask = kDigitizerPosition | (down || up ? kDigitizerTouch | kDigitizerRange | kDigitizerIdentity : 0);
+	mask |= edge_mask[touch_edge];
 	bool in = !up;
 	IOHIDEventRef hand = IOHIDEventCreateDigitizerEvent(kCFAllocatorDefault, ts, kDigitizerTransducerHand, 0, 0, mask, 0,
 		x, y, 0, in ? 1 : 0, 0, in, in, 0);
@@ -195,7 +205,7 @@ static void send_touch(const char* phase, double x, double y) {
 	IOHIDEventSetIntegerValue(finger, kFieldDigitizerIsDisplayIntegrated, 1);
 	IOHIDEventAppendEvent(hand, finger, 0);
 	CFRelease(finger);
-	slog("touch %s (%.4f,%.4f) svc=%p queue=%p", phase, x, y, touch_svc.service, touch_svc.queue);
+	slog("touch %s (%.4f,%.4f) edge=%d svc=%p queue=%p", phase, x, y, touch_edge, touch_svc.service, touch_svc.queue);
 	dispatch_event(&touch_svc, hand);
 }
 
@@ -208,13 +218,14 @@ static void send_touch2(const char* phase, double x1, double y1, double x2, doub
 	if (!down && !up && !move) return;
 	if (move && !touching2) return;
 	if (down) {
-		if (touching) send_touch("up", x1, y1);
+		if (touching) send_touch("up", x1, y1, 0);
 		if (touching2) send_touch2("up", x1, y1, x2, y2);
 		touching2 = true; touch2_identity += 2;
 	}
 	if (up) { if (!touching2) return; touching2 = false; }
 	uint64_t ts = mach_absolute_time();
 	uint32_t mask = kDigitizerPosition | (down || up ? kDigitizerTouch | kDigitizerRange | kDigitizerIdentity : 0);
+	mask |= edge_mask[0];
 	bool in = !up;
 	IOHIDEventRef hand = IOHIDEventCreateDigitizerEvent(kCFAllocatorDefault, ts, kDigitizerTransducerHand, 0, 0, mask, 0,
 		(x1 + x2) / 2, (y1 + y2) / 2, 0, in ? 1 : 0, 0, in, in, 0);
@@ -239,7 +250,13 @@ static void handle_line(char* line) {
 	double x = 0, y = 0;
 	double x2 = 0, y2 = 0;
 	if (sscanf(line, "touch2 %15s %lf %lf %lf %lf", a, &x, &y, &x2, &y2) == 5) { send_touch2(a, x, y, x2, y2); return; }
-	if (sscanf(line, "touch %15s %lf %lf", a, &x, &y) == 3) { send_touch(a, x, y); return; }
+	if (sscanf(line, "touch %15s %lf %lf %15s", a, &x, &y, b) >= 3) {
+		static const char* edges[5] = { "none", "top", "left", "bottom", "right" };
+		int edge = 0;
+		for (int i = 1; i < 5; i++) if (!strcmp(b, edges[i])) edge = i;
+		send_touch(a, x, y, edge);
+		return;
+	}
 	unsigned usage;
 	if (sscanf(line, "key %15s %i", a, &usage) == 2) {
 #if __arm64__
