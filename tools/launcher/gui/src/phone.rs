@@ -34,14 +34,34 @@ impl App {
                 let others: Vec<(String, String, Phase, bool)> = self.insts.iter().map(|i| (i.id.clone(), i.name.clone(), self.phase(&i.id), i.runtime_present)).collect();
                 let mut go = None;
                 egui::containers::menu::MenuButton::from_button(egui::Button::new(txt).frame_when_inactive(false)).ui(ui, |ui| {
-                    ui.set_min_width(220.0);
+                    ui.set_width(260.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     for (oid, name, ph, present) in &others {
-                        let (_, col) = phase_look(*ph, *present);
-                        let t = egui::RichText::new(name).size(T_BODY).color(INK);
-                        let r = ui.add(egui::Button::selectable(oid == id, t).min_size(egui::vec2(ui.available_width(), 26.0)));
-                        ui.painter().circle_filled(r.rect.right_center() - egui::vec2(12.0, 0.0), 3.5, if col == INK_3 { RAISED } else { col });
-                        if r.clicked() {
+                        let (r, resp) = ui.allocate_exact_size(egui::vec2(260.0, 30.0), egui::Sense::click());
+                        let p = ui.painter();
+                        if resp.hovered() {
+                            p.rect_filled(r, R_SM, RAISED);
+                        }
+                        if oid == id {
+                            p.text(r.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, icon::CHECK, font(13.0), INK);
+                        }
+                        let g = galley_trunc(ui, name, font_m(T_BODY), INK, 150.0);
+                        p.galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, INK);
+                        let state = match ph {
+                            Phase::Running => "Running",
+                            Phase::Starting => "Starting",
+                            Phase::Stopping => "Stopping",
+                            Phase::Off if !present => "No iOS",
+                            Phase::Off => "Off",
+                        };
+                        p.text(r.right_center() - egui::vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, state, font(T_SMALL), INK_3);
+                        if *ph == Phase::Running {
+                            let w = ui.painter().layout_no_wrap(state.into(), font(T_SMALL), INK_3).size().x;
+                            ui.painter().circle_filled(r.right_center() - egui::vec2(18.0 + w, 0.0), 3.5, GOOD);
+                        }
+                        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             go = Some(oid.clone());
+                            ui.close();
                         }
                     }
                 });
