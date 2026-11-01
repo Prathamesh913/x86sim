@@ -434,10 +434,22 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(28, 16))).show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.page {
-                Page::Simulator => self.page_sim(ui, &simst, booted),
-                Page::Features => self.page_features(ui, booted),
-                Page::Aot => self.page_aot(ui, building, &status, status_busy),
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                // keep content at a readable width, centred on wide windows
+                let w = ui.available_width().min(900.0);
+                let pad = (ui.available_width() - w) / 2.0;
+                ui.horizontal(|ui| {
+                    ui.add_space(pad);
+                    ui.vertical(|ui| {
+                        ui.set_width(w);
+                        match self.page {
+                            Page::Simulator => self.page_sim(ui, &simst, booted),
+                            Page::Features => self.page_features(ui, booted),
+                            Page::Aot => self.page_aot(ui, building, &status, status_busy),
+                        }
+                        ui.add_space(24.0);
+                    });
+                });
             });
         });
     }
@@ -551,28 +563,48 @@ impl App {
             let n = list.len();
             for (i, f) in list.into_iter().enumerate() {
                 let mut on = f.enabled;
+                // "What it is. Off: what you lose." -> description, plus the consequence once it is off
+                let (what, off) = match f.desc.split_once(" Off:") {
+                    Some((a, b)) => (a.trim().to_string(), b.trim().to_string()),
+                    None => (f.desc.clone(), String::new()),
+                };
+                let right_w = 150.0;
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.label(egui::RichText::new(&f.title).strong());
-                        ui.add(egui::Label::new(muted(&f.desc).size(12.5)).wrap());
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let left_w = (ui.available_width() - right_w - 16.0).max(200.0);
+                    ui.allocate_ui_with_layout(egui::vec2(left_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.set_width(left_w);
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        ui.label(egui::RichText::new(&f.title).size(15.0).strong());
+                        ui.add(egui::Label::new(muted(&what).size(12.5)).wrap());
+                        if !on && !off.is_empty() {
+                            ui.add(egui::Label::new(egui::RichText::new(format!("When off: {off}")).color(ORANGE).size(12.5)).wrap());
+                        }
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(16.0);
+                    ui.allocate_ui_with_layout(egui::vec2(right_w, 44.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if toggle(ui, &mut on).changed() {
                             let _ = features::set(&dev, &f.id, on);
                             self.features_changed = true;
                         }
-                        ui.add_space(6.0);
-                        ui.label(muted(format!("~{} MB · {}", f.cost_mb, if f.when == "boot" { "every boot" } else { "when used" })).size(12.0));
+                        ui.add_space(14.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                                ui.label(egui::RichText::new(if f.cost_mb > 0 { format!("{} MB", f.cost_mb) } else { "—".into() }).size(13.5).strong());
+                                ui.label(muted(if f.when == "boot" { "every boot" } else { "when used" }).size(11.5));
+                            });
+                        });
                     });
-                });
+                }).response.on_hover_text(&f.desc);
                 if !on && f.default {
                     total_off += f.cost_mb;
                 }
                 if i + 1 < n {
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
+                    let r = ui.available_rect_before_wrap();
+                    ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0_f32, BORDER));
+                    ui.add_space(9.0);
                 }
             }
         });
@@ -696,7 +728,8 @@ impl App {
                         }
                     });
                     if !live {
-                        ui.label(egui::RichText::new(format!("{}: {}", p.state, p.message)).color(col));
+                        let t = match p.state.as_str() { "done" => "✔  Last build finished", "cancelled" => "Last build cancelled", _ => "Last build failed" };
+                        ui.label(egui::RichText::new(t).color(col)).on_hover_text(&p.message);
                     }
                 }
             }
@@ -730,9 +763,9 @@ impl App {
                 ]);
                 ui.add_space(6.0);
                 ui.add(egui::Label::new(muted(format!(
-                    "{} · {} libraries beyond the {} MB budget are translated on demand · {} training profiles",
-                    s.image, s.dropped, s.budget_mb, s.training_files
-                )).size(12.5)).wrap());
+                    "{} libraries beyond the {} MB budget are translated on demand · {} training profiles",
+                    s.dropped, s.budget_mb, s.training_files
+                )).size(12.5)).wrap()).on_hover_text(&s.image);
                 ui.add_space(10.0);
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -769,7 +802,7 @@ impl App {
                             ui.label(c.name.rsplit('/').next().unwrap_or(&c.name)).on_hover_text(&c.name);
                             ui.label(muted(format!("{:.1} MB", c.slot_mb)));
                             ui.label(muted(if c.blocks > 0 { c.blocks.to_string() } else { format!("{} hot", c.hot_blocks) }));
-                            ui.label(muted(c.reasons.join("; ")));
+                            ui.add(egui::Label::new(muted(c.reasons.join("; "))).truncate());
                             ui.end_row();
                         }
                         if shown == 0 {
