@@ -45,6 +45,7 @@ struct App {
     models: Vec<(String, String)>,
     adding: bool,
     new_model: usize,
+    new_runtime: usize,
     new_name: String,
 }
 
@@ -58,13 +59,16 @@ enum Page {
 impl App {
     fn new(cc: &eframe::CreationContext) -> App {
         theme(&cc.egui_ctx);
-        let jc = aot::Paths::default_jc();
-        let paths = aot::Paths::new(&jc);
-        let cfg = paths.load_config();
         let runtimes = sim::runtimes();
         let devices = sim::devices();
-        let runtime = runtimes.iter().position(|r| r.1 == cfg.runtime_root).unwrap_or(0);
-        let device = devices.iter().position(|d| Some(&d.1) == cfg.device.as_ref()).unwrap_or(0);
+        let cfg0 = aot::Paths::new(&aot::Paths::default_jc()).load_config();
+        let device = devices.iter().position(|d| Some(&d.1) == cfg0.device.as_ref()).unwrap_or(0);
+        // Speed 24: the iOS version is the phone's (its runtime file); the AOT cache dir is that runtime's
+        let rt_root = devices.get(device).map(|d| sim::device_runtime(&d.1)).unwrap_or(cfg0.runtime_root.clone());
+        let runtime = runtimes.iter().position(|r| r.1 == rt_root).unwrap_or(0);
+        let jc = sim::jc_for(&rt_root);
+        let paths = aot::Paths::new(&jc);
+        let cfg = paths.load_config();
         let max_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
         let app = App {
             jc,
@@ -88,6 +92,7 @@ impl App {
             models: sim::models(),
             adding: false,
             new_model: 0,
+            new_runtime: 0,
             new_name: String::new(),
         };
         // sim status every 3 s
@@ -99,6 +104,18 @@ impl App {
         });
         app.refresh_status();
         app
+    }
+
+    /// Select a phone: the iOS version and the AOT cache dir follow it
+    fn select_device(&mut self, i: usize) {
+        self.device = i;
+        if let Some(d) = self.device_dir() {
+            let rt = sim::device_runtime(&d);
+            self.runtime = self.runtimes.iter().position(|r| r.1 == rt).unwrap_or(self.runtime);
+            self.jc = sim::jc_for(&rt);
+            self.paths = aot::Paths::new(&self.jc);
+            self.cfg = self.paths.load_config();
+        }
     }
 
     fn device_dir(&self) -> Option<PathBuf> {
@@ -469,19 +486,21 @@ impl App {
         card(ui, |ui| {
             section(ui, "Phone");
             egui::Grid::new("simgrid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-                ui.label(muted("iOS version"));
-                egui::ComboBox::from_id_salt("rt").width(320.0).selected_text(self.runtimes.get(self.runtime).map(|r| r.0.clone()).unwrap_or("none".into())).show_ui(ui, |ui| {
-                    for (i, r) in self.runtimes.iter().enumerate() {
-                        ui.selectable_value(&mut self.runtime, i, &r.0);
-                    }
-                });
-                ui.end_row();
-                ui.label(muted("Model"));
-                egui::ComboBox::from_id_salt("dev").width(320.0).selected_text(self.devices.get(self.device).map(|d| d.0.clone()).unwrap_or("none".into())).show_ui(ui, |ui| {
+                ui.label(muted("Phone"));
+                let mut pick = self.device;
+                let phone_text = |d: &(String, PathBuf)| format!("{}  ·  {}", d.0, sim::runtime_short(&sim::device_runtime(&d.1)));
+                egui::ComboBox::from_id_salt("dev").width(320.0).selected_text(self.devices.get(self.device).map(phone_text).unwrap_or("none".into())).show_ui(ui, |ui| {
                     for (i, d) in self.devices.iter().enumerate() {
-                        ui.selectable_value(&mut self.device, i, &d.0);
+                        ui.selectable_value(&mut pick, i, phone_text(d));
                     }
                 });
+                if pick != self.device {
+                    self.select_device(pick);
+                }
+                ui.end_row();
+                ui.label(muted("iOS version"));
+                ui.label(self.runtimes.get(self.runtime).map(|r| r.0.clone()).unwrap_or("–".into()))
+                    .on_hover_text(self.runtimes.get(self.runtime).map(|r| format!("{}\nEach phone keeps its own iOS version; add a phone to use another one.", r.1.display())).unwrap_or_default());
                 ui.end_row();
                 if self.adding {
                     ui.label(muted("New phone"));
@@ -491,18 +510,25 @@ impl App {
                                 ui.selectable_value(&mut self.new_model, i, &m.0);
                             }
                         });
+                        egui::ComboBox::from_id_salt("newrt").width(90.0).selected_text(self.runtimes.get(self.new_runtime).map(|r| sim::runtime_short(&r.1)).unwrap_or_default()).show_ui(ui, |ui| {
+                            for (i, r) in self.runtimes.iter().enumerate() {
+                                ui.selectable_value(&mut self.new_runtime, i, sim::runtime_short(&r.1)).on_hover_text(&r.0);
+                            }
+                        });
                         ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("Name (optional)").desired_width(120.0))
-                            .on_hover_text("Makes var/device-a64-<name> with this model's screen and settings (copied from the main phone's data)");
+                            .on_hover_text("Makes var/device-a64-<name> with this model's screen and settings, on the iOS version picked here (an iOS 27.0 phone starts from the main phone's data)");
                     });
                     ui.end_row();
                     ui.label("");
                     ui.horizontal(|ui| {
                         if ui.add(primary("Add")).clicked() {
                             if let Some(m) = self.models.get(self.new_model).map(|m| m.0.clone()) {
-                                match sim::create_device(&m, &self.new_name) {
+                                let rt = self.runtimes.get(self.new_runtime).map(|r| r.1.clone()).unwrap_or_default();
+                                match sim::create_device(&m, &self.new_name, &rt) {
                                     Ok(p) => {
                                         self.devices = sim::devices();
-                                        self.device = self.devices.iter().position(|d| d.1 == p).unwrap_or(self.device);
+                                        let i = self.devices.iter().position(|d| d.1 == p).unwrap_or(self.device);
+                                        self.select_device(i);
                                         self.message = format!("Added {m}");
                                         self.adding = false;
                                         self.new_name.clear();
@@ -521,10 +547,9 @@ impl App {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let dev = self.device_dir();
-                let rt = self.runtimes.get(self.runtime).map(|r| r.1.clone());
                 if ui.add_enabled(!booted && dev.is_some(), primary("▶  Start")).clicked() {
-                    if let (Some(d), Some(r)) = (dev.clone(), rt.clone()) {
-                        self.message = match sim::start(&d, &r, &self.jc) {
+                    if let Some(d) = dev.clone() {
+                        self.message = match sim::start(&d) {
                             Ok(_) => "Starting…".to_string(),
                             Err(e) => format!("{e:#}"),
                         };
@@ -660,10 +685,10 @@ impl App {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.add_enabled(booted && self.features_changed, primary("⟳  Restart now")).clicked() {
-                if let Some(r) = self.runtimes.get(self.runtime).map(|r| r.1.clone()) {
-                    let (d, jc) = (dev.clone(), self.jc.clone());
+                {
+                    let d = dev.clone();
                     std::thread::spawn(move || {
-                        let _ = sim::restart(&d, &r, &jc);
+                        let _ = sim::restart(&d);
                     });
                     self.message = "Restarting…".into();
                     self.features_changed = false;

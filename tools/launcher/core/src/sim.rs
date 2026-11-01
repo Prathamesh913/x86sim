@@ -40,6 +40,31 @@ pub fn devices() -> Vec<(String, PathBuf)> {
     v
 }
 
+/// The RuntimeRoot a device boots on: its `runtime` file (a runtimes/ dir name, device-a64.py create --ios), else 27.0
+pub fn device_runtime(dev: &Path) -> PathBuf {
+    let d = std::fs::read_to_string(dev.join("runtime")).map(|s| s.trim().to_string()).unwrap_or_default();
+    let d = if d.is_empty() { "ios-27.0-24A434-arm64".to_string() } else { d };
+    repo_root().join("runtimes").join(d).join("RuntimeRoot")
+}
+
+/// The JIT/AOT cache dir of a runtime, as boot-a64.sh picks it: 27.0 the default one, others $SCRATCH/jc-<build>
+pub fn jc_for(runtime_root: &Path) -> PathBuf {
+    let dir = runtime_root.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match dir.split('-').collect::<Vec<_>>()[..] {
+        ["ios", _, build, ..] if build != "24A434" => scratch().join(format!("jc-{build}")),
+        _ => crate::aot::Paths::default_jc(),
+    }
+}
+
+/// "iOS 27.2" for a RuntimeRoot
+pub fn runtime_short(runtime_root: &Path) -> String {
+    let dir = runtime_root.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match dir.split('-').collect::<Vec<_>>()[..] {
+        ["ios", ver, ..] => format!("iOS {ver}"),
+        _ => dir,
+    }
+}
+
 /// "ios-27.0-24A434-arm64" -> "iOS 27.0 (24A434)"
 fn runtime_label(dir: &str) -> String {
     match dir.split('-').collect::<Vec<_>>()[..] {
@@ -80,9 +105,10 @@ fn device_label(dir: &Path) -> String {
 }
 
 /// New device of a model (cli/libexec/arm64/device-a64.py create): var/device-a64-<name>
-pub fn create_device(model: &str, name: &str) -> Result<PathBuf> {
+pub fn create_device(model: &str, name: &str, runtime_root: &Path) -> Result<PathBuf> {
+    let rt = runtime_root.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut cmd = Command::new("python3");
-    cmd.arg(repo_root().join("cli/libexec/arm64/device-a64.py")).args(["create", "--model", model]);
+    cmd.arg(repo_root().join("cli/libexec/arm64/device-a64.py")).args(["create", "--model", model, "--ios", &rt]);
     if !name.trim().is_empty() {
         cmd.arg(name.trim());
     }
@@ -102,7 +128,8 @@ fn boot_script() -> PathBuf {
     repo_root().join("cli/libexec/arm64/boot-a64.sh")
 }
 
-pub fn start(device: &Path, runtime: &Path, jitcache: &Path) -> Result<u32> {
+/// Boots a device; boot-a64.sh takes its iOS version (runtime) and that runtime's cache dir from the device
+pub fn start(device: &Path) -> Result<u32> {
     let log = std::fs::File::create(scratch().join("launcher-boot.log"))?;
     let mut cmd = Command::new("setsid");
     cmd.arg(boot_script())
@@ -111,8 +138,8 @@ pub fn start(device: &Path, runtime: &Path, jitcache: &Path) -> Result<u32> {
         .env("X86CODE_METAL", "all")
         .env("SECS", "20")
         .env("A64_DEVICE", device)
-        .env("A64_RUNTIME", runtime)
-        .env("X86CODE_A64_JITCACHE_DIR", jitcache)
+        .env_remove("A64_RUNTIME")
+        .env_remove("X86CODE_A64_JITCACHE_DIR")
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -266,7 +293,7 @@ pub fn home_frame() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-pub fn restart(device: &Path, runtime: &Path, jitcache: &Path) -> Result<u32> {
+pub fn restart(device: &Path) -> Result<u32> {
     stop(device)?;
-    start(device, runtime, jitcache)
+    start(device)
 }

@@ -206,12 +206,12 @@ fn run() -> Result<()> {
                         );
                     }
                 }
-                "start" => println!("booting (pid {})", sim::start(&dev, &cfg.runtime_root, &jc)?),
+                "start" => println!("booting (pid {})", sim::start(&dev)?),
                 "stop" => {
                     sim::stop(&dev)?;
                     println!("stopped");
                 }
-                "restart" => println!("restarting (pid {})", sim::restart(&dev, &cfg.runtime_root, &jc)?),
+                "restart" => println!("restarting (pid {})", sim::restart(&dev)?),
                 "show" => sim::show()?,
                 _ => bail!("sim status|start|stop|restart|show"),
             }

@@ -15,10 +15,17 @@
 #        X86CODE_METAL=0|1|backboardd|all  (default 0 = software; needs host/metalhostd/arm64/metalhostd)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 export X86SIM_ARCH=arm64
-export X86SIM_RUNTIME=${A64_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.0-24A434-arm64/RuntimeRoot}
 export X86SIM_DEVICE=${A64_DEVICE:-$X86SIM_ROOT/var/device-a64}
+# Speed 24: a device's iOS version is its <device>/runtime (a runtimes/ dir name, device-a64.py create --ios); A64_RUNTIME
+# overrides. Each runtime has its own JIT/AOT cache dir ($X86SIM_SCRATCH/jc-<build>; 27.0: jitcache) and placement table.
+A64_RT_DIR=$(cat "$X86SIM_DEVICE/runtime" 2>/dev/null)
+export X86SIM_RUNTIME=${A64_RUNTIME:-$X86SIM_ROOT/runtimes/${A64_RT_DIR:-ios-27.0-24A434-arm64}/RuntimeRoot}
+A64_BUILD=$(basename "$(dirname "$X86SIM_RUNTIME")" | sed -n 's/^ios-[0-9.]*-\([0-9A-Za-z]*\)-arm64$/\1/p')
 export X86SIM_STATE=${A64_STATE:-$X86SIM_ROOT/var/run-a64}
 . "$X86SIM_ROOT/cli/lib/config.sh"
+if [ -z "${X86CODE_A64_JITCACHE_DIR:-}" ] && [ -n "$A64_BUILD" ] && [ "$A64_BUILD" != 24A434 ]; then
+	export X86CODE_A64_JITCACHE_DIR=$X86SIM_SCRATCH/jc-$A64_BUILD
+fi
 export DPREFIX=${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}
 export X86SIM_DPREFIX=$DPREFIX
 export X86CODE_METAL=${X86CODE_METAL-0}
@@ -315,7 +322,8 @@ CMDEOF
 # Speed 14: fixed placement of non-cache Mach-Os (libarm64jit; mkplacement.py): the jitcache dir gets the committed
 # table when it has none (the table is part of the JIT cache key: the AOT image must be built with the same one)
 JCD=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
-[ -f "$JCD/placement.txt" ] || cp "$X/cli/libexec/arm64/placement-24A434.txt" "$JCD/placement.txt" 2>/dev/null
+mkdir -p "$JCD"
+[ -f "$JCD/placement.txt" ] || cp "$X/cli/libexec/arm64/placement-${A64_BUILD:-24A434}.txt" "$JCD/placement.txt" 2>/dev/null
 # Speed 14: the early set (pages in first-touch order up to ~home) is read in that order here, outside the IO-capped
 # scope: ~1-2 s of sequential reads instead of ~10-20 s at 40 MB/s, competing with the boot's own faults. The rest
 # (prefetch.hot) stays a capped WILLNEED inside the scope. A64_PREFETCH_EARLY_CAPPED=1: the early set capped too.

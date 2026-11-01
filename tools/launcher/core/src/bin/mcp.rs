@@ -23,8 +23,8 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "sim_devices", "description": "Devices (folder, label with phone model) and the phone models a new device can be.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "sim_add_device", "description": "Make a new device of a phone model (see sim_devices models), optional name. Boot it with sim_start device=<path>.",
-         "inputSchema": {"type": "object", "properties": {"model": {"type": "string"}, "name": {"type": "string"}}, "required": ["model"]}},
+        {"name": "sim_add_device", "description": "Make a new device of a phone model (see sim_devices models), optional name and iOS version (ios, e.g. \"27.2\"; see sim_devices runtimes; default 27.0). Boot it with sim_start device=<path>.",
+         "inputSchema": {"type": "object", "properties": {"model": {"type": "string"}, "name": {"type": "string"}, "ios": {"type": "string"}}, "required": ["model"]}},
         {"name": "sim_restart", "description": "Restart the simulator (stop, then boot with the device's current features and the AOT image). Returns at once; poll sim_status for home.",
          "inputSchema": {"type": "object", "properties": {"device": dev}}},
         {"name": "sim_start", "description": "Boot the simulator.", "inputSchema": {"type": "object", "properties": {"device": dev}}},
@@ -57,11 +57,17 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
             json!({"preset": n, "features": features::list(&device), "note": "applies at the next boot (sim_restart)"})
         }
         "sim_status" => serde_json::to_value(sim::status(1000))?,
-        "sim_devices" => json!({"devices": sim::devices().into_iter().map(|d| json!({"label": d.0, "path": d.1})).collect::<Vec<_>>(),
-                                "models": sim::models().into_iter().map(|m| m.0).collect::<Vec<_>>()}),
-        "sim_add_device" => json!({"device": sim::create_device(a["model"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""))?}),
-        "sim_restart" => json!({"restarting": true, "pid": sim::restart(&device, &cfg.runtime_root, &jc)?}),
-        "sim_start" => json!({"booting": true, "pid": sim::start(&device, &cfg.runtime_root, &jc)?}),
+        "sim_devices" => json!({"devices": sim::devices().into_iter().map(|d| json!({"label": d.0, "path": d.1, "ios": sim::runtime_short(&sim::device_runtime(&d.1))})).collect::<Vec<_>>(),
+                                "models": sim::models().into_iter().map(|m| m.0).collect::<Vec<_>>(),
+                                "runtimes": sim::runtimes().into_iter().map(|r| r.0).collect::<Vec<_>>()}),
+        "sim_add_device" => {
+            let want = a["ios"].as_str().unwrap_or("27.0");
+            let rt = sim::runtimes().into_iter().find(|r| r.0.starts_with(&format!("iOS {want} ")) || r.0.contains(want))
+                .map(|r| r.1).ok_or_else(|| anyhow::anyhow!("no iOS {want} runtime (see sim_devices runtimes)"))?;
+            json!({"device": sim::create_device(a["model"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""), &rt)?})
+        }
+        "sim_restart" => json!({"restarting": true, "pid": sim::restart(&device)?}),
+        "sim_start" => json!({"booting": true, "pid": sim::start(&device)?}),
         "sim_stop" => {
             sim::stop(&device)?;
             json!({"stopped": true})
