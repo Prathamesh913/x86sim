@@ -88,6 +88,52 @@ def darling(path):
     return DARLING_VIEW + path
 
 
+def feature_enabled(name):
+    """x86Code (Speed 25): a FeatureFlags flag "Domain/flag" as the runtime's own code sees it
+    (<runtime>/System/Library/FeatureFlags/Domain/<Domain>.plist): its Enabled key, else on when FeatureComplete."""
+    dom, _, flag = name.partition("/")
+    # a device's own override (<device>/data/Library/Preferences/FeatureFlags/Domain/<Domain>.plist) wins
+    dev = os.environ.get("X86SIM_DEVICE", "")
+    try:
+        with open(os.path.join(dev, "data/Library/Preferences/FeatureFlags/Domain", dom + ".plist"), "rb") as f:
+            o = plistlib.load(f).get(flag)
+        if isinstance(o, dict) and "Enabled" in o:
+            return bool(o["Enabled"])
+    except (OSError, plistlib.InvalidFileException):
+        pass
+    try:
+        with open(os.path.join(RUNTIME, "System/Library/FeatureFlags/Domain", dom + ".plist"), "rb") as f:
+            e = plistlib.load(f).get(flag)
+    except (OSError, plistlib.InvalidFileException):
+        return False
+    if not isinstance(e, dict):
+        return False
+    if "Enabled" in e:
+        return bool(e["Enabled"])
+    return e.get("DevelopmentPhase") == "FeatureComplete"
+
+
+def resolve_feature_flags(v):
+    """x86Code (Speed 25): resolve launchd's {"#IfFeatureFlagEnabled": flag, "#Then": a, "#Else": b} values with the
+    runtime's FeatureFlags. launchd_sim judged them by the host side's flags (no such domain: off), while the code in
+    the simulator reads the runtime's: on 27.2 InputUI's com.apple.UIKit.KeyboardManagement.hosted (UIKit/
+    kbarbiter_in_inputui, FeatureComplete) was never registered, UIKit looked for the keyboard arbiter in InputUI and
+    no keyboard ever appeared. A "#Else": False drops the key."""
+    if isinstance(v, dict):
+        if "#IfFeatureFlagEnabled" in v:
+            return resolve_feature_flags(v.get("#Then" if feature_enabled(v["#IfFeatureFlagEnabled"]) else "#Else", False))
+        out = {}
+        for k, x in v.items():
+            r = resolve_feature_flags(x)
+            if r is False and isinstance(x, dict) and "#IfFeatureFlagEnabled" in x:
+                continue
+            out[k] = r
+        return out
+    if isinstance(v, list):
+        return [resolve_feature_flags(x) for x in v]
+    return v
+
+
 def runtime_climb_depth():
     """Number of /.. needed so xpcproxy_sim's access(RuntimeRoot + program) reaches /.
 
@@ -172,6 +218,9 @@ def main():
             src, dst = os.path.join(RUNTIME, "System/Library/LaunchAngels", job + ".plist"), angels
         with open(src, "rb") as f:
             plist = plistlib.load(f)
+            # X86CODE_FF_SKIP=label,...: leave these jobs' feature-flag conditionals to launchd_sim (experiments)
+            if job not in os.environ.get("X86CODE_FF_SKIP", "").split(","):
+                plist = resolve_feature_flags(plist)
         # launchd_sim's system domain never leaves bootstrap mode here (on a Mac something,
         # presumably CoreSimulator, ends it), so system-only jobs are loaded into the user
         # domain instead, where all lookups from the device's jobs resolve.

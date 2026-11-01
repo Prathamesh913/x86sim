@@ -119,10 +119,13 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # medialibraryd (Speed 22, on demand): the music library (com.apple.medialibraryd.xpc), which creates and migrates
 # Media/iTunes_Control/iTunes/MediaLibrary.sqlitedb. Without it the file stayed an empty database and Settings > General >
 # About aborted counting Songs (ML3DatabaseException "no such table: _MLDatabaseProperties").
+# StatusKitAgent (Speed 25, on demand): Focus/availability status. Without it opening a Messages conversation spun the
+# main thread at 100% forever: IMCore asks StatusKit per chat item, each sync XPC call failed its lookup, and asked again.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
-	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd"
+	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd
+	com.apple.StatusKitAgent"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"
