@@ -3,7 +3,7 @@
 # the guest's frameworks, so they must be guest code): simshim, SimFramebuffer (simfb), SimulatorHID (simhid),
 # metalhostd (+vkmtl), iosurfaced, mtlprobe. Output under host/<name>/arm64/ (mksimdevice.py X86SIM_ARCH=arm64
 # picks them up). The x86_64 builds are not touched.
-# Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig]
+# Usage: build/mac-build-arm64-shims.sh [simshim simaudio simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig]
 set -e
 . "$(dirname "$0")/mac-env.sh"
 T="-target arm64-apple-ios17.0-simulator"
@@ -18,6 +18,13 @@ simshim)
 	cc -dynamiclib -framework IOKit -framework CoreFoundation -lobjc -lsqlite3 -o libsimshim.dylib simshim.o oslog.o >&2 &&
 	cat libsimshim.dylib" > "$W/libsimshim.dylib"
 	mkdir -p "$X/host/simshim/arm64/compat" && mv "$W/libsimshim.dylib" "$X/host/simshim/arm64/compat/libsimshim.dylib" ;;
+simaudio)
+	# Speed 27: the audio devices (CoreAudio HAL stand-in, host/simaudio) for arm64 processes; as build/mac-build-simaudio.sh:
+	# flat namespace + dynamic lookup, CoreAudio references weak (inert in processes without CoreAudio)
+	mac "rm -rf /tmp/a64sa && mkdir -p /tmp/a64sa && cat > /tmp/a64sa/simaudio.c && cd /tmp/a64sa && xcrun -sdk iphonesimulator clang $T \
+		-O2 -Wall -Wno-unused-function -dynamiclib -framework CoreFoundation -Wl,-flat_namespace -Wl,-undefined,dynamic_lookup \
+		-o libsimaudio.dylib simaudio.c >&2 && cat libsimaudio.dylib" < "$X/host/simaudio/simaudio.c" > "$W/libsimaudio.dylib"
+	mkdir -p "$X/host/simaudio/arm64" && mv "$W/libsimaudio.dylib" "$X/host/simaudio/arm64/libsimaudio.dylib" ;;
 simfb)
 	mac "rm -rf /tmp/a64fb && mkdir -p /tmp/a64fb && cat > /tmp/a64fb/simfb.c && cd /tmp/a64fb && xcrun -sdk iphonesimulator clang $T \
 		-DWIDTH0=1206 -DHEIGHT0=2622 -O1 -Wall -Wno-unused-parameter -fvisibility=hidden -dynamiclib \

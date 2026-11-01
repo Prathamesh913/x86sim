@@ -321,6 +321,8 @@ stop_prefix
 rm -f "$ST/jetsam.pid"
 [ -f "$ST/mdns.pid" ] && kill "$(cat "$ST/mdns.pid")" 2>/dev/null
 rm -f "$ST/mdns.pid" "$ST/mDNSResponder"
+[ -f "$ST/simaudio.pid" ] && kill "$(cat "$ST/simaudio.pid")" 2>/dev/null
+rm -f "$ST/simaudio.pid"
 [ "${A64_STOP_ONLY:-0}" = 1 ] && exit 0  # Speed 10: stop this device's container only
 # the marks of the last boot (Darling pids are reused)
 rm -rf "$DPREFIX/private/var/run/x86code-suspended"
@@ -347,6 +349,14 @@ for d in GeoServicesData; do
 		echo "  note: no runtimes/macos-host/System/Library/$d (cli/libexec/arm64/fetch-macos-host.sh): Maps has no tiles"
 	fi
 done
+# Speed 27: the audio devices (what a Mac's CoreSimulator/coreaudiod provide): host/simaudio/arm64/libsimaudio.dylib in
+# each process (mksimdevice, X86CODE_AUDIO) streams PCM to cli/libexec/simaudio.py (PipeWire). Without an input device
+# Siri's recording failed at once (corespeechd: "siriInputSource 'sino'. No Input available", AudioQueue -66680 finding
+# Default-InputOutput, prepareRecordForStream -11790) and Siri never got further.
+if [ "${X86CODE_AUDIO:-0}" != 0 ]; then
+	setsid python3 "$X/cli/libexec/simaudio.py" "$ST/simaudio.sock" > "$ST/simaudio.log" 2>&1 < /dev/null &
+	echo $! > "$ST/simaudio.pid"
+fi
 if [ "${X86SIM_JETSAM:-1}" != 0 ]; then
 	setsid python3 "$X/cli/libexec/jetsam.py" > "$ST/jetsam.log" 2>&1 < /dev/null &
 	echo $! > "$ST/jetsam.pid"

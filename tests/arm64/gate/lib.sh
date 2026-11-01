@@ -102,7 +102,7 @@ open_check() {
 proc_for() {
 	case $1 in
 		com.apple.Preferences) echo Preferences ;; com.apple.mobilecal) echo MobileCal ;;
-		com.apple.mobileslideshow) echo MobileSlideShow ;; com.apple.Maps) echo Maps ;;
+		com.apple.mobileslideshow) echo Photos ;; com.apple.Maps) echo Maps ;;
 		com.apple.DocumentsApp) echo Files ;; com.apple.Health) echo Health ;; com.apple.Passbook) echo Passbook ;;
 		com.apple.MobileSMS) echo MobileSMS ;; com.apple.news) echo News ;; com.apple.mobilesafari) echo MobileSafari ;;
 	esac
@@ -139,18 +139,21 @@ maps_tiles() {
 	done
 	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no map tiles drawn [$r]"; return 4
 }
-# app_switcher LABEL (Speed 27): from home, swipe up from the bottom edge and hold: SpringBoard's switcher shows the
-# recent apps' cards with their names and no home-screen dock/Search pill; home again afterwards.
+# app_switcher LABEL (Speed 27): Settings opened, then from home swipe up from the bottom edge and hold: SpringBoard's switcher
+# shows the recent apps as cards, each with its name and icon above it (the front card's label in the band y 250-450 px
+# on a 1206x2622 frame) and no status-bar clock; home again afterwards. (A frame of an app full screen or of the home
+# screen has no app name in that band.)
 app_switcher() {
-	local o i
-	home 5
-	touch_ swipe 603 2610 603 1500 600 700; sleep 3
+	local i xy
+	open_check "$1-app" com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General' 60 || return $?
 	for i in 1 2 3 4 5; do
-		o=$(ocr)
-		if echo "$o" | grep -Eq 'Settings|Messages|News|Safari|Wallet|Health|Files' && ! echo "$o" | grep -q 'Search'; then
-			cp "$O/now.png" "$O/$1.png"; say "HIT $1 [${o:0:110}]"; home 5; return 0
-		fi
+		# from the home screen (Settings is the most recent app), as the gesture is made on a phone at rest
+		home 5; touch_ swipe 603 2615 603 1700 400 300; sleep 4
+		shot "$O/now.png"
+		xy=$(timeout 20 tesseract "$O/now.png" stdout -c tessedit_create_tsv=1 2>/dev/null |
+			awk -F'\t' 'NF==12 && $12 ~ /^(Settings|Photos|Maps|Messages|News|Safari|Wallet|Health|Files|Calendar)$/ {y=$8+$10/2; if (y>=250 && y<=450) {print $12, int(y); exit}}')
+		if [ -n "$xy" ]; then cp "$O/now.png" "$O/$1.png"; say "HIT $1 [card label: $xy]"; home 5; return 0; fi
 		sleep 2
 	done
-	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no app switcher [${o:0:110}]"; home 5; return 4
+	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no app switcher cards"; home 5; return 4
 }

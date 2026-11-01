@@ -4,7 +4,7 @@
 # Logs first: Maps' liveness (process list + its JIT log) is checked between steps, screens are read only while it lives.
 # Taps are for an iPhone 17 (1206x2622). Run on a booted phone (lib.sh env: A64_DEVICE, O). Exit 0: route shown.
 . "$(dirname "$0")/lib.sh"
-L=${1:-mapsroute}; O=${O:-$SCR/gate/$L}; mkdir -p "$O"; [ -f "$O/.sizes" ] || mark_logs
+L=${1:-mapsroute}; O=${O:-$SCR/gate/$L}; mkdir -p "$O"; mark_logs
 alive() { local s; s=$(proc_state Maps); [ "$s" = alive ] || { say "FAIL $L: Maps $s at $1"; exit 1; }; }
 kill -9 $(pid_of Maps) 2>/dev/null; sleep 2
 app com.apple.Maps; wait_proc "$L" Maps 60 || exit 1; sleep 25; alive open; touch_ dismiss
