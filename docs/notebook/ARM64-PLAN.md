@@ -1606,3 +1606,30 @@ Details in round-done/speed23.md.
   Not found in our code (boot-a64, run scripts, launcher, libarm64jit, fpsim2host's log shows no unlink calls). No
   /home snapshots. Gate g1 was clean (home 44 s, Settings 31/16 s on the OCR poll, About, Calendar 6/2, Photos 6/2,
   Maps 13/2, keyboard, Siri, Files, Health 10 s, Wallet 6 s, 0 CRASH); g2/g3 invalid.
+
+## Gestures + launch gap (2026-11-01): edge touches, prefix self-heal, what the black launch gap is
+
+- **Home-indicator / edge gestures work** (commit 302facf). Apple's Simulator marks an edge touch in the digitizer
+  event mask (SimulatorKit IndigoHIDMessageForMouseNSEvent, Xcode 27.1: IndigoHIDEdge 0-4 -> 0x40000 |
+  {0, 0x02000000 top, 0x08000000 left, 0x01000000 bottom, 0x04000000 right}); simhid does the same, simview marks
+  touches beginning within ~16 pt of an edge, simtouch `swipe` detects it (`edgeswipe`, `[hold_ms]`). 27.2 iPhone 17:
+  swipe up -> home, swipe up + 250 ms hold -> switcher (3/3, card tracks the finger from ~140 ms at 60 fps), tap card,
+  swipe card away, swipe along the bottom -> previous app, Notification and Control Center.
+  - A hold only opens the switcher when the drag slows into it: UIKit's pan velocity changes only when the touch moves,
+    so a constant-speed drag that stops dead keeps its velocity (SBHomeGestureSettings pauseVelocityThresholdForAppSwitcher).
+    simtouch's hold eases out. Earlier misses were a load artifact: `X86CODE_NODT=all,-com.apple.SpringBoard` (os_log
+    text) put SpringBoard at ~92% CPU and it drew nothing until ~1 s after the lift.
+  - Control Center's first page is empty by default: the Mac's fresh 27.2 device writes the identical
+    ControlsIconState.plist (Now Playing and Connectivity on pages 2-3); + -> "Add a Control" works.
+- **a64prefix self-heal** (648cbb0): the prefix recreated by the scratch loss lost Speed 12's libsystem_kernel
+  (dserver RPC fix), and backboardd aborted again on Photos/Maps launches ("Bad S2C call"). boot-a64 runs
+  cli/libexec/arm64/prefix-heal.sh: manifest pieces whose build differs go into darling-prefix (the lower layer).
+- **The black gap on a cold app open** (ring timestamps, tap at 0): Wallet black 655-5365 ms, Health 605-6207 ms,
+  Messages 666-3871 ms. It is the app's own start up to its first frame: there is no launch image for a never-run
+  stock app (only suspend snapshots of apps that ran; the Mac's devices look the same). splashboardd in the job set
+  (284 MB) made no launch image and did not shorten it: not kept.
+- **Non-cache code ("lead 1")** was already persisted for placed images (Speed 14). On 27.2, images outside the
+  placement table: Messages 3 small ones (~0.3 MB guest text), Health's executable 2.2 MB. Messages after a cold open:
+  152 MB of code from the AOT image, 22 MB compiled live, so most live compiling is dyld-cache code the image does not
+  cover (untrained paths), not unplaced images. Any placement-table change is in the cache key (image rebuild).
+- News returns to the home screen ~11.6 s after a cold open (not investigated).
