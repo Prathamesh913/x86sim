@@ -20,7 +20,7 @@ simshim)
 	mkdir -p "$X/host/simshim/arm64/compat" && mv "$W/libsimshim.dylib" "$X/host/simshim/arm64/compat/libsimshim.dylib" ;;
 simfb)
 	mac "rm -rf /tmp/a64fb && mkdir -p /tmp/a64fb && cat > /tmp/a64fb/simfb.c && cd /tmp/a64fb && xcrun -sdk iphonesimulator clang $T \
-		-DWIDTH=1206 -DHEIGHT=2622 -O1 -Wall -Wno-unused-parameter -fvisibility=hidden -dynamiclib \
+		-DWIDTH0=1206 -DHEIGHT0=2622 -O1 -Wall -Wno-unused-parameter -fvisibility=hidden -dynamiclib \
 		-install_name /System/Library/PrivateFrameworks/SimFramebuffer.framework/SimFramebuffer -framework CoreFoundation \
 		-framework CoreGraphics -framework IOSurface -lobjc -o SimFramebuffer simfb.c >&2 && cat SimFramebuffer" \
 		< "$X/host/simfb/simfb.c" > "$W/SimFramebuffer"

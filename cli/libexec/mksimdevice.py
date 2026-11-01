@@ -45,6 +45,35 @@ DEVTYPE = {"model": "iPhone18,3", "class": "V57", "w": "1206", "h": "2622", "jso
            "version": "26.5", "build": "23F73", "arch": "x86_64"}
 
 
+# Speed 22: arm64 devices of other models. <device>/model names an entry of cli/lib/devicetypes-a64.json (Xcode 27.1's
+# device types: identifier, product class, screen, capabilities); written by `x86sim device create --model`. No file:
+# iPhone 17, as before.
+DEVTYPES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", "devicetypes-a64.json")
+
+
+def device_type(device):
+    if not ARM64:
+        return dict(DEVTYPE, scale="3.000000", pitch="460.000000", suffix="iphone")
+    try:
+        name = open(os.path.join(device, "model")).read().strip()
+    except OSError:
+        name = "iPhone 17"
+    with open(DEVTYPES) as f:
+        dt = dict(DEVTYPE, **json.load(f)[name])
+    # the runtime's own version (another iOS 27.x runtime via A64_RUNTIME)
+    try:
+        with open(os.path.join(RUNTIME, "System/Library/CoreServices/SystemVersion.plist"), "rb") as f:
+            sv = plistlib.load(f)
+        dt.update(version=sv["ProductVersion"], build=sv["ProductBuildVersion"])
+    except (OSError, KeyError, plistlib.InvalidFileException):
+        pass
+    try:
+        dt["name"] = open(os.path.join(device, "name")).read().strip() or "x86code"
+    except OSError:
+        pass
+    return dt
+
+
 def host_path(rel):
     """Linux path of one of our in-simulator binaries (rel: host/<name>/...); for arm64 host/<name>/arm64/..., or
     None if that build doesn't exist."""
@@ -196,7 +225,8 @@ def main():
     rt, home = darling(RUNTIME), darling(data)
     # x86Code: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
     capabilities = device + "/capabilities.plist"
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", DEVTYPE["json"])) as f:
+    dt = device_type(device)
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", dt["json"])) as f:
         caps = json.load(f)
     with open(capabilities, "wb") as f:
         plistlib.dump(caps, f)
@@ -338,16 +368,16 @@ def main():
             if (k.startswith("X86CODE_A64_") and k not in ("X86CODE_A64_EXE", "X86CODE_A64_LOG")) or k == "SIMFB_HZ"}
            if ARM64 else {}),
         "SIMULATOR_UDID": udid,
-        "SIMULATOR_DEVICE_NAME": "x86code",
-        "SIMULATOR_RUNTIME_VERSION": DEVTYPE["version"],
-        "SIMULATOR_RUNTIME_BUILD_VERSION": DEVTYPE["build"],
-        "SIMULATOR_MODEL_IDENTIFIER": DEVTYPE["model"],
-        "SIMULATOR_PRODUCT_CLASS": DEVTYPE["class"],
-        "SIMULATOR_MAINSCREEN_WIDTH": DEVTYPE["w"],
-        "SIMULATOR_MAINSCREEN_HEIGHT": DEVTYPE["h"],
-        "SIMULATOR_MAINSCREEN_SCALE": "3.000000",
-        "SIMULATOR_MAINSCREEN_PITCH": "460.000000",
-        "SIMULATOR_LEGACY_ASSET_SUFFIX": "iphone",
+        "SIMULATOR_DEVICE_NAME": dt.get("name", "x86code"),
+        "SIMULATOR_RUNTIME_VERSION": dt["version"],
+        "SIMULATOR_RUNTIME_BUILD_VERSION": dt["build"],
+        "SIMULATOR_MODEL_IDENTIFIER": dt["model"],
+        "SIMULATOR_PRODUCT_CLASS": dt["class"],
+        "SIMULATOR_MAINSCREEN_WIDTH": dt["w"],
+        "SIMULATOR_MAINSCREEN_HEIGHT": dt["h"],
+        "SIMULATOR_MAINSCREEN_SCALE": dt["scale"],
+        "SIMULATOR_MAINSCREEN_PITCH": dt["pitch"],
+        "SIMULATOR_LEGACY_ASSET_SUFFIX": dt["suffix"],
         # x86Code: the device type's capabilities (CoreSimulator: <device type>.simdevicetype/Contents/Resources/
         # capabilities.plist), which libMobileGestalt answers from (ArtworkTraits, displays, DeviceCornerRadius, ...).
         # Without it the runtime's apps got by, but an installed app aborted in UIKit's
@@ -361,7 +391,7 @@ def main():
         # listener). A Mac's device has the same empty file and variable.
         "SIMULATOR_MEMORY_WARNINGS": home + "/var/run/memory_warning_simulation",
         "SIMULATOR_BOOT_TIME": str(int(os.path.getmtime(data))),
-        "SIMULATOR_VERSION_INFO": "x86Code - Device: x86code (%s) - Runtime: iOS %s (%s)" % (udid, DEVTYPE["version"], DEVTYPE["build"]),
+        "SIMULATOR_VERSION_INFO": "x86Code - Device: x86code (%s) - Runtime: iOS %s (%s)" % (udid, dt["version"], dt["build"]),
         "XPC_SIMULATOR_LAUNCHD_NAME": "com.apple.CoreSimulator.SimDevice." + udid,
         # x86Code: no XPC_SERVICE_NAME here. launchd_sim gives each job XPC_SERVICE_NAME=<label> only when its own
         # environment has none, so every job inherited the device's name: lsd's [NSProcessInfo bs_jobLabel] wasn't

@@ -24,10 +24,19 @@
 
 #define EXPORT __attribute__((visibility("default")))
 
-#ifndef WIDTH  // x86Code: the arm64 build (iPhone 17, iOS 27) passes 1206 x 2622
-#define WIDTH 1179
-#define HEIGHT 2556
+#ifndef WIDTH0  // x86Code: the arm64 build (iPhone 17, iOS 27) passes 1206 x 2622
+#define WIDTH0 1179
+#define HEIGHT0 2556
 #endif
+// Speed 22: the device's screen from sim.env (SIMULATOR_MAINSCREEN_WIDTH/HEIGHT, set per model by mksimdevice.py);
+// the build's size when unset.
+static uint32_t screen_dim(const char* var, uint32_t dflt) {
+	const char* v = getenv(var);
+	long n = v ? strtol(v, NULL, 10) : 0;
+	return n > 0 && n < 16384 ? (uint32_t)n : dflt;
+}
+#define WIDTH screen_dim("SIMULATOR_MAINSCREEN_WIDTH", WIDTH0)
+#define HEIGHT screen_dim("SIMULATOR_MAINSCREEN_HEIGHT", HEIGHT0)
 
 typedef struct __attribute__((packed)) {
 	uint32_t mode_id, width, height, unknown_0c, unknown_10, pixel_format, colorspace, refresh_centihz;

@@ -23,6 +23,9 @@ Simulator
                        a cached sudo for the setuid launcher)
   status               what is running (boot, container, mtlvk, viewer, stream, site)
   wait [home|app] [s]  wait for the home screen (or an app page) on the framebuffer
+  device models|list   arm64 phone models / devices (var/device-a64*)
+  device create --model "iPhone 17 Pro" [name]
+                       new arm64 device of that model (var/device-a64-<name>); boot it with A64_DEVICE=<dir>
   mkdevice [job ...]   only (re)write the device's launchd configuration (mksimdevice.py)
   run <binary> [args]  run one iOS-simulator binary under Darling with dyld_sim (run-sim.sh)
   logs [label]         list the device's job logs, or tail one (<device>/data/var/log/<label>.log)
@@ -250,6 +253,7 @@ case $c in
 	status) cmd_status ;;
 	wait) exec python3 "$L/framecheck.py" wait "${1:-home}" "${2:-300}" ;;
 	mkdevice) exec python3 "$L/mksimdevice.py" "$X86SIM_DEVICE" "$@" ;;
+	device) exec python3 "$L/arm64/device-a64.py" "$@" ;;
 	run) exec "$L/run-sim.sh" "$@" ;;
 	logs) cmd_logs "$@" ;;
 	view) cmd_view "$@" ;;

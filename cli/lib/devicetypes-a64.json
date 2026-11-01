@@ -1,0 +1,62 @@
+{
+ "iPhone 17": {
+  "model": "iPhone18,3",
+  "class": "V57",
+  "w": "1206",
+  "h": "2622",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,3.json"
+ },
+ "iPhone 17 Pro": {
+  "model": "iPhone18,1",
+  "class": "V53",
+  "w": "1206",
+  "h": "2622",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,1.json"
+ },
+ "iPhone 17 Pro Max": {
+  "model": "iPhone18,2",
+  "class": "V54",
+  "w": "1320",
+  "h": "2868",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,2.json"
+ },
+ "iPhone Air": {
+  "model": "iPhone18,4",
+  "class": "D23",
+  "w": "1260",
+  "h": "2736",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,4.json"
+ },
+ "iPhone 17e": {
+  "model": "iPhone18,5",
+  "class": "V159",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,5.json"
+ },
+ "iPad Air 11-inch (M4)": {
+  "model": "iPad16,9",
+  "class": "J708",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,9.json"
+ }
+}
