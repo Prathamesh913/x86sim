@@ -151,6 +151,37 @@ static bool fjcvtzs(GuestThread &t, u32 insn) {
     return true;
 }
 
+// FRINT32Z / FRINT32X / FRINT64Z / FRINT64X (scalar, single and double; FEAT_FRINTTS, Speed 27): round to an integral
+// value (Z: toward zero, X: the FPCR mode) that fits a 32- or 64-bit integer; NaN, infinity or out of range give that
+// width's most negative integer (as a float). An M1 has FEAT_FRINTTS; JavaScriptCore's JIT emits FRINT32Z
+// (WebContent aborted: "unimplemented instruction 1e68401f", frint32z d31, d0, loading en.wikipedia.org).
+// Encoding 0 0 0 11110 0 ftype 1 0100 op(2) 10000 Rn Rd: op 00 32Z, 01 32X, 10 64Z, 11 64X; ftype 00 single, 01 double.
+static bool frintts(GuestThread &t, u32 insn) {
+    if ((insn & 0xFFBE7C00u) != 0x1E284000u) return false;
+    auto &j = *t.jit;
+    const int Rd = insn & 31, Rn = (insn >> 5) & 31, op = (insn >> 15) & 3;
+    const bool dbl = (insn >> 22) & 1, is64 = op & 2, x = op & 1;
+    const int mode = x ? fpcr_mode(t) : 3;
+    const double lim = is64 ? 9223372036854775808.0 : 2147483648.0;  // 2^63 / 2^31
+    auto rnd = [&](double v) -> double {
+        double r;
+        switch (mode) { case 0: r = std::nearbyint(v); break; case 1: r = std::ceil(v); break;
+                        case 2: r = std::floor(v); break; default: r = std::trunc(v); }
+        if (!std::isfinite(v) || r < -lim || r >= lim) return -lim;
+        return r;
+    };
+    V n = j.GetVector(Rn), out{0, 0};
+    if (dbl) {
+        double v; memcpy(&v, &n[0], 8);
+        const double r = rnd(v); memcpy(&out[0], &r, 8);
+    } else {
+        float v; const u32 b = (u32)n[0]; memcpy(&v, &b, 4);
+        const float r = (float)rnd(v); u32 rb; memcpy(&rb, &r, 4); out[0] = rb;
+    }
+    j.SetVector(Rd, out);
+    return true;
+}
+
 // MRS Xt, CNTVCT_EL0 / CNTPCTSS_EL0 / CNTVCTSS_EL0 (Speed 26): dynarmic translates them now (as CNTPCT_EL0); blocks
 // translated before (an AOT image built with the same codegen) still end in the fallback here: same value.
 static bool mrs_counter(GuestThread &t, u32 insn) {
@@ -162,7 +193,7 @@ static bool mrs_counter(GuestThread &t, u32 insn) {
 }
 
 bool fp16_interpret(GuestThread &t, u32 insn) {
-    if (fjcvtzs(t, insn) || mrs_counter(t, insn)) return true;
+    if (fjcvtzs(t, insn) || frintts(t, insn) || mrs_counter(t, insn)) return true;
     auto &j = *t.jit;
     const int Rd = insn & 31, Rn = (insn >> 5) & 31, Rm = (insn >> 16) & 31;
     const int Q = (insn >> 30) & 1, U = (insn >> 29) & 1;

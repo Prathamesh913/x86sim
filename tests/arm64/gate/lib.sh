@@ -157,3 +157,17 @@ app_switcher() {
 	done
 	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no app switcher cards"; home 5; return 4
 }
+# health_welcome LABEL (Speed 27): Health's first-run "Welcome to Health" (as on a Mac's simulator after a fresh install
+# or reset of its data): recorded, continued through (Continue / Get Started / Not Now / Done on each page), then the
+# Summary must show.
+health_welcome() {
+	ocr | grep -qi "Welcome to Health" || return 0
+	say "$1: Welcome to Health (first run): continuing through it"
+	local i
+	for i in 1 2 3 4 5 6; do
+		ocr | grep -Eq 'Summary|Pinned|Health Data|Sharing' && break
+		tap_word Continue || tap_word Started || tap_word Now || tap_word Done || tap_word Next || touch_ tap 603 2430
+		sleep 4; touch_ dismiss
+	done
+	PROC=Health wait_ocr "$1-after" 'Summary|Pinned|Health Data|Sharing' 60
+}

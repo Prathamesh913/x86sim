@@ -44,7 +44,7 @@ touch_ text " photos"; sleep 8; crashed_proc Spotlight && { say "CRASH keyboard:
 home 5; touch_ raw "button lock down"; sleep 2.5; touch_ raw "button lock up"; sleep 4; shot "$O/siri.png"; sleep 6
 siri=$(ps -eo comm | grep -c -E '^(Siri|Campo|SiriViewService)$'); say "siri UI processes: $siri"; [ "$siri" -gt 0 ] || FAIL=$((FAIL + 1))
 f open_check files com.apple.DocumentsApp 'On My iPhone|Browse|Recents|Shared' 120
-f open_check health com.apple.Health 'Summary|Pinned|Health Data|Sharing' 120
+f open_check health com.apple.Health 'Summary|Pinned|Health Data|Sharing|Welcome to Health' 120 && f health_welcome health
 f open_check wallet com.apple.Passbook 'Wallet|Passes|Apple Pay|Tickets' 120
 # Speed 27: Messages, News, Safari with a page
 f open_check messages com.apple.MobileSMS 'Messages|Edit|Filters|New Message|Start a conversation' 120
