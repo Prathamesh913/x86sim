@@ -127,12 +127,15 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # corespeechd, sirittsd, siriinferenced, siriknowledged, siriactionsd (Speed 26, on demand): Siri's speech capture,
 # speech synthesis, inference, knowledge and actions services, which a Mac's simulator has on demand. Without corespeechd
 # assistantd's recording failed at once ("Unable to prepareAudioProvider", kAFAssistantErrorDomain 221).
+# searchd + corespotlightservice (Speed 26, on demand): the Spotlight index (com.apple.spotlight.SearchAgent / IndexAgent /
+# IndexDelegateAgent) and Spotlight's resources (com.apple.MobileAsset.SpotlightResources). Without them Files' Recents
+# showed "Content Unavailable ... unknown error" and apps' CoreSpotlight indexing failed its lookups.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
 	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd
 	com.apple.StatusKitAgent com.apple.mobileassetd com.apple.assetsubscriptiond com.apple.corespeechd com.apple.sirittsd
-	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd"
+	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd com.apple.searchd com.apple.corespotlightservice"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"
