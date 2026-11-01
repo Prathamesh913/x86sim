@@ -20,7 +20,7 @@ pub fn runtimes() -> Vec<(String, PathBuf)> {
         .flatten()
         .filter_map(|e| {
             let rr = e.path().join("RuntimeRoot");
-            crate::dyldcache::Cache::cache_dir(&rr).join(crate::dyldcache::CACHE_NAME).exists().then(|| (e.file_name().to_string_lossy().into_owned(), rr))
+            crate::dyldcache::Cache::cache_dir(&rr).join(crate::dyldcache::CACHE_NAME).exists().then(|| (runtime_label(&e.file_name().to_string_lossy()), rr))
         })
         .collect();
     v.sort();
@@ -34,10 +34,34 @@ pub fn devices() -> Vec<(String, PathBuf)> {
         .flatten()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with("device-a64") && e.path().join("sim.env").exists())
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+        .map(|e| (device_label(&e.path()), e.path()))
         .collect();
     v.sort();
     v
+}
+
+/// "ios-27.0-24A434-arm64" -> "iOS 27.0 (24A434)"
+fn runtime_label(dir: &str) -> String {
+    match dir.split('-').collect::<Vec<_>>()[..] {
+        ["ios", ver, build, ..] => format!("iOS {ver} ({build})"),
+        _ => dir.to_string(),
+    }
+}
+
+/// "iPhone 17 Pro · device-a64" from the device's sim.env
+fn device_label(dir: &Path) -> String {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let env = std::fs::read_to_string(dir.join("sim.env")).unwrap_or_default();
+    let model = env.lines().find_map(|l| l.strip_prefix("SIMULATOR_MODEL_IDENTIFIER=")).unwrap_or("");
+    let product = match model {
+        "iPhone18,1" => "iPhone 17 Pro",
+        "iPhone18,2" => "iPhone 17 Pro Max",
+        "iPhone18,3" => "iPhone 17",
+        "iPhone18,4" => "iPhone Air",
+        "" => return name,
+        m => m,
+    };
+    format!("{product} · {name}")
 }
 
 fn boot_script() -> PathBuf {
