@@ -49,6 +49,48 @@ def current_sock():
     return sockpath
 
 ring = fbring.Ring()
+STATE_DIR = os.path.join(os.path.dirname(os.path.dirname(here)), "var/run-a64")
+
+
+def device_ring():
+    """The booted device's frame ring (sim.env SIMFB_RING), else fbring's default: each phone has its own."""
+    d = booted_device()
+    if d and os.environ.get("SIMVIEW_FOLLOW", "1") != "0":
+        try:
+            for line in open(os.path.join(d, "sim.env")):
+                if line.startswith("SIMFB_RING="):
+                    return line.split("=", 1)[1].strip().replace("/Volumes/SystemRoot", "", 1)
+        except OSError:
+            pass
+    return fbring.RING
+
+
+def sim_running():
+    """A darlingserver is up (the sim's scope can outlive it: mtlvk stays for the next boot)."""
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            try:
+                if open("/proc/%s/comm" % pid).read().strip() == "darlingserver":
+                    return True
+            except OSError:
+                pass
+    return False
+
+
+def boot_started():
+    """When the current boot began (boot-a64.sh rewrites var/run-a64/device at every start)."""
+    try:
+        return os.path.getmtime(os.path.join(STATE_DIR, "device"))
+    except OSError:
+        return 0.0
+
+
+def frame_is_current(t):
+    """A ring outlives its sim: only frames published by this boot of a running sim are the screen."""
+    return sim_running() and t >= boot_started() - 2
+
+
+ring.path = device_ring()
 
 
 def initial_size():
@@ -285,6 +327,37 @@ def on_activate(app):
             state["shown"], state["logged"], state["peak"], state["logseq"] = 0, now, 0, seq
         state["peak"] = max(state.get("peak", 0), len(f))
 
+    def blank():
+        """Black screen instead of a stale frame: "Starting…" while a boot is on its way, else "Off"."""
+        why = "Starting…" if sim_running() else "Off"
+        if state.get("blank") == why:
+            return
+        state["blank"] = why
+        print("simview: screen cleared (%s)" % why, flush=True)
+        w, h = state["size"]
+        pic.set_paintable(Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.B8G8R8A8_PREMULTIPLIED,
+                                                GLib.Bytes.new(bytes(w * h * 4)), w * 4))
+        state["frame_t"] = None
+        win.set_title("x86Code iOS Simulator — %s" % why)
+
+    def watch():
+        """Once a second: follow the booted phone's ring, and drop the picture when the sim stops or reboots."""
+        p = device_ring()
+        if p != ring.path:
+            ring.path, ring.mm, ring.ino, state["key"] = p, None, None, None
+        t = state.get("frame_t")
+        if state.get("blank") is None and (t is None and state.get("seq") is None or t is not None and not frame_is_current(t)):
+            blank()
+        elif state.get("blank") and state["blank"] != ("Starting…" if sim_running() else "Off"):
+            state["blank"] = None
+            blank()
+        if state.get("blank"):
+            state["key"] = None   # retry the ring: a frame from the new boot replaces the black screen
+        return GLib.SOURCE_CONTINUE
+
+    GLib.timeout_add_seconds(1, watch)
+    blank() if not ring.seq() else None
+
     # x86Code: event-driven. A thread sleeps on the ring (fbring.Ring.wait: a futex simfb wakes at every publish) and
     # hands each new frame to the GTK main loop; nothing runs while the screen doesn't change (the frame-clock tick of
     # before woke the process at the display's rate all the time). Without a ring: framebuffer.bgra every 0.5 s.
@@ -294,8 +367,12 @@ def on_activate(app):
             if seq:
                 if (ring.ino, seq) != state["key"]:
                     f = ring.latest()
-                    if f:   # None: torn read (simfb reused the slot mid-copy), or no frame copied yet; retried
+                    if f and not frame_is_current(f[4] / 1e9):   # an old session's frame: not the screen
+                        blank()
+                        state["key"] = (ring.ino, seq)
+                    elif f:   # None: torn read (simfb reused the slot mid-copy), or no frame copied yet; retried
                         show(f[0], f[1], f[2], f[3], f[5])
+                        state["blank"] = None
                         state["seq"], state["key"], state["frame_t"] = seq, (ring.ino, seq), f[4] / 1e9
                         state.pop("noframe", None)
                     else:
