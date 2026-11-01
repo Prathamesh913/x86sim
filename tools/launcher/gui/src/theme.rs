@@ -603,6 +603,17 @@ pub fn fmt_s(s: f64) -> String {
     }
 }
 
+/// Uptime at minute resolution ("<1 min", "12 min", "2 h 05 min"): it changes once a minute, so the hub
+/// doesn't repaint every second to show it.
+pub fn fmt_uptime(s: f64) -> String {
+    let m = (s / 60.0) as u64;
+    match m {
+        0 => "<1 min".into(),
+        1..=59 => format!("{m} min"),
+        _ => format!("{} h {:02} min", m / 60, m % 60),
+    }
+}
+
 pub fn fmt_mb(mb: f64) -> String {
     if mb >= 1000.0 {
         format!("{:.1} GB", mb / 1024.0)

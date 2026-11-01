@@ -112,7 +112,8 @@ impl Viewer {
                         }
                     }
                     if mode == THUMB || seq == 0 {
-                        std::thread::sleep(Duration::from_millis(if seq == 0 { 1000 } else { 500 }));
+                        // thumbnails: one frame a second is enough for a card
+                        std::thread::sleep(Duration::from_millis(1000));
                     } else {
                         ring.wait(seq, Duration::from_secs(1));
                     }

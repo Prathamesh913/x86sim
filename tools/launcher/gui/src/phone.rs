@@ -337,7 +337,7 @@ impl App {
             stat_row(ui, CARD, &[
                 ("Memory", fmt_mb(st.map(|s| s.pss_mb).unwrap_or(0.0)), ""),
                 ("CPU", format!("{:.0}%", st.map(|s| s.cpu_pct).unwrap_or(0.0)), ""),
-                ("Up for", st.and_then(|s| s.uptime_s).map(fmt_s).unwrap_or("–".into()), ""),
+                ("Up for", st.and_then(|s| s.uptime_s).map(fmt_uptime).unwrap_or("–".into()), ""),
             ]);
             ui.add_space(S3);
         }

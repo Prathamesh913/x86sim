@@ -241,7 +241,7 @@ impl App {
                 };
                 let r = ui.horizontal(|ui| dot_label(ui, &line, col)).response;
                 if let Some(u) = st.as_ref().and_then(|s| s.uptime_s) {
-                    r.on_hover_text(format!("Up for {}", fmt_s(u)));
+                    r.on_hover_text(format!("Up for {}", fmt_uptime(u)));
                 }
                 ui.add_space(S3);
                 ui.horizontal(|ui| {

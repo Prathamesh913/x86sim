@@ -308,10 +308,15 @@ fn pss_mb(pid: u32) -> f64 {
     0.0
 }
 
+const PSS_EVERY: std::time::Duration = std::time::Duration::from_secs(12);
+
 /// Samples CPU between calls (keeps the last ticks per pid).
 #[derive(Default)]
 pub struct Monitor {
     last: HashMap<u32, (u64, std::time::Instant)>,
+    /// PSS per pid and when it was read: smaps_rollup walks every mapping (~1-10 ms for a phone process, ~130 ms for
+    /// two phones), so it is re-read every PSS_EVERY while CPU is sampled every poll
+    pss: HashMap<u32, (f64, std::time::Instant)>,
     home_seen: HashMap<String, u32>,
     pub stopping: HashMap<String, std::time::Instant>,
     pub starting: HashMap<String, std::time::Instant>,
@@ -386,7 +391,14 @@ impl Monitor {
                     _ => 0.0,
                 };
                 self.last.insert(*p, (r.ticks, now));
-                let m = pss_mb(*p);
+                let m = match self.pss.get(p) {
+                    Some((v, at)) if now.duration_since(*at) < PSS_EVERY => *v,
+                    _ => {
+                        let v = pss_mb(*p);
+                        self.pss.insert(*p, (v, now));
+                        v
+                    }
+                };
                 cpu += c;
                 pss += m;
                 plist.push(Proc { pid: *p, comm: r.comm.clone(), cpu_pct: c, pss_mb: m });
@@ -426,6 +438,7 @@ impl Monitor {
             out.push(Status { id: inst.id.clone(), phase, home, procs: plist, cpu_pct: cpu, pss_mb: pss, uptime_s, boot_time, state_dir, prefix, mtlvk, launchd_pid: launchd, fresh: !home_marker(&inst.dir).exists() });
         }
         self.last.retain(|p, _| seen_pids.contains(p));
+        self.pss.retain(|p, _| seen_pids.contains(p));
         out
     }
 }

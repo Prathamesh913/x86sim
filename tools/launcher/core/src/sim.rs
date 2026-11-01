@@ -75,6 +75,11 @@ fn runtime_label(dir: &str) -> String {
 
 /// The phone models a device can be made of (cli/lib/devicetypes-a64.json, from Xcode's device types): (name, model id)
 pub fn models() -> Vec<(String, String)> {
+    static M: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    M.get_or_init(load_models).clone()
+}
+
+fn load_models() -> Vec<(String, String)> {
     let txt = std::fs::read_to_string(repo_root().join("cli/lib/devicetypes-a64.json")).unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
     let mut out = vec![];

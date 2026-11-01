@@ -101,18 +101,50 @@ impl App {
         // status of every phone every 2 s; one repaint per poll
         let sh = shared.clone();
         let ctx = cc.egui_ctx.clone();
-        std::thread::spawn(move || loop {
-            let insts = instance::list();
-            {
-                let mut g = sh.lock().unwrap();
-                let st = g.monitor.poll(&insts);
-                g.status = st.into_iter().map(|s| (s.id.clone(), s)).collect();
-                g.insts = insts;
-                g.polled = true;
-                g.fetches = host::fetches();
+        // repaint only when something shown changed (state, memory to 64 MB, CPU to 5 %, uptime minutes, downloads)
+        std::thread::spawn(move || {
+            let mut last_sig = 0u64;
+            let mut n = 0u64;
+            loop {
+                let insts = instance::list();
+                let sig;
+                {
+                    let mut g = sh.lock().unwrap();
+                    let st = g.monitor.poll(&insts);
+                    // downloads: every poll while one runs, else every third (another /proc scan)
+                    let fetches = if !g.fetches.is_empty() || n % 3 == 0 { host::fetches() } else { vec![] };
+                    n += 1;
+                    let mut h = x86code_core::key::Fnv64::new();
+                    for i in &insts {
+                        h.str(&i.id);
+                        h.str(&i.name);
+                        h.str(&i.ring.to_string_lossy());
+                        h.u64(i.runtime_present as u64);
+                    }
+                    for s in &st {
+                        h.u64(s.phase as u64 | (s.home as u64) << 4 | (s.fresh as u64) << 5);
+                        h.u64((s.pss_mb / 64.0) as u64);
+                        h.u64((s.cpu_pct / 5.0) as u64);
+                        h.u64(s.uptime_s.map(|u| (u / 60.0) as u64 + 1).unwrap_or(0));
+                        h.u64(s.procs.len() as u64);
+                    }
+                    for f in &fetches {
+                        h.str(&f.build);
+                        h.str(&f.phase);
+                        h.u64(f.done_bytes >> 24);
+                    }
+                    sig = h.finish();
+                    g.status = st.into_iter().map(|s| (s.id.clone(), s)).collect();
+                    g.insts = insts;
+                    g.polled = true;
+                    g.fetches = fetches;
+                }
+                if sig != last_sig {
+                    last_sig = sig;
+                    ctx.request_repaint();
+                }
+                std::thread::sleep(Duration::from_secs(2));
             }
-            ctx.request_repaint();
-            std::thread::sleep(Duration::from_secs(2));
         });
         let runtimes = host::runtimes();
         let catalogue = Arc::new(Mutex::new(None));
@@ -277,6 +309,16 @@ impl App {
         }
     }
 
+    fn view_name(&self) -> &str {
+        match &self.view {
+            View::Home => "home",
+            View::Phone(id) => id,
+            View::Ios => "ios",
+            View::Aot => "aot",
+            View::Settings => "settings",
+        }
+    }
+
     fn running_summary(&self) -> (usize, f64) {
         let n = self.status.values().filter(|s| s.phase != instance::Phase::Off).count();
         let mb: f64 = self.status.values().map(|s| s.pss_mb).sum();
@@ -286,6 +328,19 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // X86CODE_LAUNCHER_FPS=1: frames per second on stderr (idle cost checks)
+        static FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *FPS.get_or_init(|| std::env::var_os("X86CODE_LAUNCHER_FPS").is_some()) {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            static T: Mutex<Option<Instant>> = Mutex::new(None);
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut t = T.lock().unwrap();
+            let t0 = *t.get_or_insert_with(Instant::now);
+            if t0.elapsed() >= Duration::from_secs(5) {
+                eprintln!("frames/s {:.1} ({:?})", N.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / t0.elapsed().as_secs_f64(), self.view_name());
+                *t = Some(Instant::now());
+            }
+        }
         self.sync();
         if self.last_slow.elapsed() > Duration::from_secs(10) {
             self.last_slow = Instant::now();
