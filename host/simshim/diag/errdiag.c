@@ -11,6 +11,8 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
+#include <sys/mman.h>
 #include <sys/attr.h>
 #include <sys/xattr.h>
 #include <sys/mount.h>
@@ -80,6 +82,14 @@ WRAP(int, copyfile, (const char* a, const char* b, copyfile_state_t s, copyfile_
 WRAP(int, fcopyfile, (int a, int b, copyfile_state_t s, copyfile_flags_t f), (a, b, s, f), NULL, f)
 WRAP(int, ftruncate, (int f, off_t l), (f, l), NULL, l)
 WRAP(int, fsync, (int f), (f), NULL, 0)
+// Speed 27: writes and mappings (Core ML's BNNS graph compiler: "failed to write out file ... Invalid argument")
+WRAP(ssize_t, write, (int f, const void* b, size_t n), (f, b, n), NULL, n)
+WRAP(ssize_t, pwrite, (int f, const void* b, size_t n, off_t o), (f, b, n, o), NULL, o)
+WRAP(ssize_t, writev, (int f, const struct iovec* v, int n), (f, v, n), NULL, n)
+WRAP(void*, mmap, (void* a, size_t l, int p, int fl, int f, off_t o), (a, l, p, fl, f, o), NULL, fl)
+WRAP(int, msync, (void* a, size_t l, int fl), (a, l, fl), NULL, fl)
+WRAP(int, madvise, (void* a, size_t l, int adv), (a, l, adv), NULL, adv)
+WRAP(off_t, lseek, (int f, off_t o, int w), (f, o, w), NULL, w)
 static int d_fcntl(int f, int c, ...)
 {
 	va_list ap; va_start(ap, c); void* a = va_arg(ap, void*); va_end(ap);

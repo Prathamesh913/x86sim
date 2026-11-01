@@ -130,12 +130,16 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # searchd + corespotlightservice (Speed 26, on demand): the Spotlight index (com.apple.spotlight.SearchAgent / IndexAgent /
 # IndexDelegateAgent) and Spotlight's resources (com.apple.MobileAsset.SpotlightResources). Without them Files' Recents
 # showed "Content Unavailable ... unknown error" and apps' CoreSpotlight indexing failed its lookups.
+# assistant_cdmd (Speed 27, on demand): Siri's dialog manager (com.apple.assistant.cdm), also the embedding service of
+# Spotlight's query parser. Without it the parser's model load failed ("QU model load failed ... com.apple.assistant.cdm
+# ... lookup"), its token stayed nil and Spotlight crashed on typing (SPSearchEntity / _CSSuggestionToken).
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
 	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd
 	com.apple.StatusKitAgent com.apple.mobileassetd com.apple.assetsubscriptiond com.apple.corespeechd com.apple.sirittsd
-	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd com.apple.searchd com.apple.corespotlightservice"
+	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd com.apple.searchd com.apple.corespotlightservice
+	com.apple.assistant_cdmd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"
@@ -318,6 +322,17 @@ rm -f "$ST/mdns.pid" "$ST/mDNSResponder"
 rm -rf "$DPREFIX/private/var/run/x86code-suspended"
 # the Darling pieces our build fixed (libsystem_kernel ...), also into a recreated prefix: cli/libexec/arm64/prefix-heal.sh
 [ "${A64_PREFIX_HEAL:-1}" != 0 ] && sh "$X/cli/libexec/arm64/prefix-heal.sh" "$DPREFIX"
+# Speed 27: frameworks a Mac host has in /System/Library/Frameworks that the simulator opens there by absolute path (not
+# under its runtime root), as run-launchd-sim.sh does for the x86_64 boot: CoreSpotlight reads its localized strings
+# from [NSBundle bundleWithPath:@"/System/Library/Frameworks/CoreSpotlight.framework"]. The arm64 prefix only had the
+# install root's link into the iOS 26.5 runtime, which is gone: every CoreSpotlight string was nil (PHOTO_TOKEN) and
+# Spotlight crashed on the first typed letter ("attempt to insert nil object" in -[_CSSuggestionToken init...]). The
+# booted runtime's own copy (its real path) is linked in the prefix's upper layer at every boot.
+for fw in CoreSpotlight; do
+	mkdir -p "$DPREFIX/System/Library/Frameworks"
+	ln -sfn "/Volumes/SystemRoot$(realpath "$X86SIM_RUNTIME")/System/Library/Frameworks/$fw.framework" \
+		"$DPREFIX/System/Library/Frameworks/$fw.framework"
+done
 if [ "${X86SIM_JETSAM:-1}" != 0 ]; then
 	setsid python3 "$X/cli/libexec/jetsam.py" > "$ST/jetsam.log" 2>&1 < /dev/null &
 	echo $! > "$ST/jetsam.pid"
