@@ -1633,3 +1633,32 @@ Details in round-done/speed23.md.
   152 MB of code from the AOT image, 22 MB compiled live, so most live compiling is dyld-cache code the image does not
   cover (untrained paths), not unplaced images. Any placement-table change is in the cache key (image rebuild).
 - News returns to the home screen ~11.6 s after a cold open (not investigated).
+
+## Launcher QA (2026-11-01): the hub tested end to end with a second phone
+
+Tested on a private Xvfb with a new 27.2 phone ("QA") next to the running ios272: Phones page (cards, live screens,
+states, the missing-iOS group), Add phone, start / stop / restart, two phones at once (own prefix, state dir, ring;
+screens and memory independent; stopping one leaves the other's processes and GPU helper alone), tap, wheel scroll,
+edge swipe to the switcher, Home, keyboard into Settings search, features + restart to apply, logs, performance,
+advanced, separate viewer window, iOS download (progress, cancel, resume, discard), Pre-translate, MCP, idle cost.
+Fixed in tools/launcher (commits 5083f7a..1aa2bea):
+- **Codegen version from the translator.** key::codegen() reads kCodegenVersion from the installed libarm64jit.so
+  (g_build's initial value in .data), so GUI, x86code-aot and MCP key the image alike whatever value they were built
+  with (a build with 0x10 compiled in still reads 0x17; the 0x18 bump during the test was picked up without a rebuild).
+- **Wrong screen.** A new phone's sim.env names the default ring until its first boot; its viewer kept that path and
+  showed ios272's screen. Viewers follow the phone's current ring.
+- **Fresh device first boot.** QA stalled 4 min at 1% CPU (the known LaunchServices stall); the hub restarts a phone
+  that never reached home (no <device>/.home-reached) once after 150 s idle in Starting; the second boot reached home in
+  ~90 s.
+- **Stuck Shift.** The key-up of Shift+key came without the modifier, so Shift stayed held on the phone ("Wi-Fi" ->
+  "Wi_Fi"); Shift now mirrors the host key. Wheel scrolling added; Ctrl+V types the clipboard.
+- **Stop leaked mtlvk** (~370 MB per stop: A64_STOP_ONLY stops the container only); Stop now ends the phone's own
+  helper unless a running container's environment names its socket; Restart keeps it.
+- **Idle cost** ~10% -> ~2-3% of a core (Xvfb/llvmpipe): smaps_rollup of ~100 processes every 2 s was ~130 ms; PSS is
+  cached 12 s, repaints only on visible change.
+- Rename / remove phones, download progress/cancel/resume/discard, runs started outside the hub shown (and
+  cancellable) on Pre-translate, "nothing to do" runs say so, logs in five sources, "Restart to apply" from file times,
+  shortcuts, MCP phones_list.
+Not launcher (seen during the test): Spotlight runs at ~100% CPU and grows to 2.4-3.7 GB on both 27.2 phones; Settings
+search pegs Preferences (~93% CPU) and stops taking input for a while; limited.sh reported the guests outside the
+phone's memory scope (IN=0 OUT=107).
