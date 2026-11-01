@@ -421,12 +421,12 @@ impl eframe::App for App {
                     if building {
                         let frac = self.progress.as_ref().map(|p| if p.chunks_total > 0 { p.chunks_done as f32 / p.chunks_total as f32 } else { 0.0 }).unwrap_or(0.0);
                         ui.add(egui::ProgressBar::new(frac).desired_height(6.0).fill(ACCENT).corner_radius(3));
-                        ui.label(muted(format!("Pre-translating… {:.0}%", frac * 100.0)).size(12.0));
+                        ui.label(muted(format!("Preparing… {:.0}%", frac * 100.0)).size(12.0));
                         ui.add_space(6.0);
                     }
                     match &simst {
                         Some(s) if s.home => pill(ui, "Running", GREEN),
-                        Some(s) if s.booted => pill(ui, "Booting", ORANGE),
+                        Some(s) if s.booted => pill(ui, "Starting", ORANGE),
                         Some(_) => pill(ui, "Stopped", MUTED),
                         None => pill(ui, "Checking", MUTED),
                     }
@@ -457,18 +457,18 @@ impl eframe::App for App {
 
 impl App {
     fn page_sim(&mut self, ui: &mut egui::Ui, simst: &Option<sim::SimStatus>, booted: bool) {
-        page_header(ui, "Simulator", "Boot an iOS device and open it in the viewer.");
+        page_header(ui, "Simulator", "Start a phone and open its window.");
         card(ui, |ui| {
-            section(ui, "Device");
+            section(ui, "Phone");
             egui::Grid::new("simgrid").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
-                ui.label(muted("Runtime"));
+                ui.label(muted("iOS version"));
                 egui::ComboBox::from_id_salt("rt").width(320.0).selected_text(self.runtimes.get(self.runtime).map(|r| r.0.clone()).unwrap_or("none".into())).show_ui(ui, |ui| {
                     for (i, r) in self.runtimes.iter().enumerate() {
                         ui.selectable_value(&mut self.runtime, i, &r.0);
                     }
                 });
                 ui.end_row();
-                ui.label(muted("Device"));
+                ui.label(muted("Model"));
                 egui::ComboBox::from_id_salt("dev").width(320.0).selected_text(self.devices.get(self.device).map(|d| d.0.clone()).unwrap_or("none".into())).show_ui(ui, |ui| {
                     for (i, d) in self.devices.iter().enumerate() {
                         ui.selectable_value(&mut self.device, i, &d.0);
@@ -483,7 +483,7 @@ impl App {
                 if ui.add_enabled(!booted && dev.is_some(), primary("▶  Start")).clicked() {
                     if let (Some(d), Some(r)) = (dev.clone(), rt.clone()) {
                         self.message = match sim::start(&d, &r, &self.jc) {
-                            Ok(p) => format!("Booting (pid {p})"),
+                            Ok(_) => "Starting…".to_string(),
                             Err(e) => format!("{e:#}"),
                         };
                     }
@@ -496,9 +496,9 @@ impl App {
                         self.message = "Stopping".into();
                     }
                 }
-                if ui.add(secondary("🖵  Show window")).clicked() {
+                if ui.add(secondary("🖵  Show")).clicked() {
                     self.message = match sim::show() {
-                        Ok(()) => "Viewer opened on :0".into(),
+                        Ok(()) => "Window opened".into(),
                         Err(e) => format!("{e:#}"),
                     };
                 }
@@ -513,33 +513,31 @@ impl App {
             None => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(muted("Reading status…"));
+                    ui.label(muted("Checking…"));
                 });
             }
             Some(s) => {
-                let (st, col) = if s.home { ("Running", GREEN) } else if s.booted { ("Booting", ORANGE) } else { ("Stopped", MUTED) };
+                let (st, col) = if s.home { ("Running", GREEN) } else if s.booted { ("Starting", ORANGE) } else { ("Stopped", MUTED) };
                 stat_row(ui, vec![
                     ("STATUS", st.into(), col),
-                    ("MEMORY (PSS)", if s.booted { format!("{:.0} MB", s.pss_mb) } else { "–".into() }, TEXT),
+                    ("MEMORY", if s.booted { format!("{:.0} MB", s.pss_mb) } else { "–".into() }, TEXT),
                     ("CPU", if s.booted { format!("{:.0}%", s.cpu_pct) } else { "–".into() }, TEXT),
                     ("PROCESSES", if s.booted { s.procs.to_string() } else { "–".into() }, TEXT),
                 ]);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if s.booted {
-                        ui.label(muted(format!("Anonymous memory {:.0} MB", s.pss_anon_mb)).size(12.5));
-                        ui.label(muted("·").size(12.5));
-                    }
-                    ui.label(muted(if s.simview { "Viewer open" } else { "Viewer closed" }).size(12.5));
+                                            }
+                    ui.label(muted(if s.simview { "Window open" } else { "Window closed" }).size(12.5));
                 });
             }
         }
     }
 
     fn page_features(&mut self, ui: &mut egui::Ui, booted: bool) {
-        page_header(ui, "Features", "Turn off what you don't need to make the simulator lighter. Everything is on by default.");
+        page_header(ui, "Features", "Turn off what you don't use to save memory.");
         let Some(dev) = self.device_dir() else {
-            card(ui, |ui| ui.label(muted("No device selected.")));
+            card(ui, |ui| ui.label(muted("Pick a phone first.")));
             return;
         };
         let prof = features::load(&dev);
@@ -576,9 +574,11 @@ impl App {
                         ui.set_width(left_w);
                         ui.spacing_mut().item_spacing.y = 3.0;
                         ui.label(egui::RichText::new(&f.title).size(15.0).strong());
-                        ui.add(egui::Label::new(muted(&what).size(12.5)).wrap());
+                        if !what.is_empty() {
+                            ui.add(egui::Label::new(muted(&what).size(12.5)).wrap());
+                        }
                         if !on && !off.is_empty() {
-                            ui.add(egui::Label::new(egui::RichText::new(format!("When off: {off}")).color(ORANGE).size(12.5)).wrap());
+                            ui.add(egui::Label::new(egui::RichText::new(off.clone()).color(ORANGE).size(12.5)).wrap());
                         }
                     });
                     ui.add_space(16.0);
@@ -596,7 +596,7 @@ impl App {
                             });
                         });
                     });
-                }).response.on_hover_text(&f.desc);
+                }).response.on_hover_text(&f.tech);
                 if !on && f.default {
                     total_off += f.cost_mb;
                 }
@@ -610,35 +610,34 @@ impl App {
         });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(booted && self.features_changed, primary("⟳  Restart to apply")).clicked() {
+            if ui.add_enabled(booted && self.features_changed, primary("⟳  Restart now")).clicked() {
                 if let Some(r) = self.runtimes.get(self.runtime).map(|r| r.1.clone()) {
                     let (d, jc) = (dev.clone(), self.jc.clone());
                     std::thread::spawn(move || {
                         let _ = sim::restart(&d, &r, &jc);
                     });
-                    self.message = "Restarting with the new features".into();
+                    self.message = "Restarting…".into();
                     self.features_changed = false;
                 }
             }
             if self.features_changed {
-                ui.label(egui::RichText::new("Changes apply at the next boot").color(ORANGE));
+                ui.label(egui::RichText::new("Restart to apply").color(ORANGE));
             }
             if total_off > 0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    pill(ui, &format!("Saves ~{total_off} MB"), GREEN);
+                    pill(ui, &format!("Saving {total_off} MB"), GREEN);
                 });
             }
         });
     }
 
     fn page_aot(&mut self, ui: &mut egui::Ui, building: bool, status: &Option<Result<aot::Status, String>>, status_busy: bool) {
-        page_header(ui, "Pre-translate", "Convert the runtime's arm64 code to x86 ahead of time so apps open fast.");
+        page_header(ui, "Pre-translate", "Get apps ready ahead of time so they open fast.");
         egui::Frame::new().fill(ACCENT.gamma_multiply(0.10)).stroke(egui::Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.35))).corner_radius(12).inner_margin(16).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("ℹ  One-time setup, then incremental").strong());
+            ui.label(egui::RichText::new("ℹ  Takes a while the first time").strong());
             ui.add(egui::Label::new(muted(
-                "The first pre-translate is a longer one-time upfront cost. After that, only what changed is rebuilt, \
-                 as needed: a runtime update, an app change or a translator update rebuilds just the affected chunks.",
+                "The first run is slow, but you only do it once. After that, only what changed gets updated.",
             )).wrap());
         });
         ui.add_space(12.0);
@@ -654,26 +653,26 @@ impl App {
                 } else {
                     let resumable = self.progress.as_ref().is_some_and(|p| p.state == "cancelled" || p.state == "error");
                     let label = if resumable && need > 0 {
-                        format!("⏵  Resume ({need} left)")
+                        "⏵  Continue".to_string()
                     } else if need > 0 && st_ok.as_ref().is_some_and(|s| s.up_to_date > 0) {
-                        format!("⟳  Update {need} chunks")
+                        "⟳  Update".to_string()
                     } else if need == 0 && st_ok.is_some() {
-                        "✔  Up to date".to_string()
+                        "✔  Ready".to_string()
                     } else {
-                        "⚡  Pre-translate".to_string()
+                        "⚡  Start".to_string()
                     };
                     if ui.add_enabled(need > 0 || st_ok.as_ref().is_some_and(|s| !s.image_current), primary(label)).clicked() {
                         self.start_build(false);
                     }
-                    if ui.add(secondary("Full rebuild")).on_hover_text("Relayout every chunk (compacts the slab and the constant pool)").clicked() {
+                    if ui.add(secondary("Redo all")).on_hover_text("Start over from scratch").clicked() {
                         self.start_build(true);
                     }
                 }
             });
             ui.add_space(12.0);
             egui::Grid::new("aotopts").num_columns(2).spacing([16.0, 12.0]).show(ui, |ui| {
-                ui.label(muted("Scope"));
-                let scopes = [("hot", "Trained code"), ("loaded", "Loaded libraries"), ("all", "Everything")];
+                ui.label(muted("How much"));
+                let scopes = [("hot", "Common"), ("loaded", "More"), ("all", "Everything")];
                 let sel = scopes.iter().position(|s| self.cfg.scope == s.0);
                 if let Some(i) = segmented(ui, &scopes.map(|s| s.1), sel, !building) {
                     self.cfg.scope = scopes[i].0.into();
@@ -681,10 +680,10 @@ impl App {
                     self.refresh_status();
                 }
                 ui.end_row();
-                ui.label(muted("CPU cores"));
+                ui.label(muted("Speed"));
                 ui.horizontal(|ui| {
                     ui.add_enabled(!building, egui::Slider::new(&mut self.cores, 1..=self.max_cores));
-                    ui.label(muted("runs at low priority").size(12.5));
+                    ui.label(muted("cores, won't slow your PC").size(12.5));
                 });
                 ui.end_row();
                 ui.label(muted("Skip off features"));
@@ -695,7 +694,7 @@ impl App {
                         let _ = self.paths.save_config(&self.effective_cfg());
                         self.refresh_status();
                     }
-                    ui.label(muted("don't translate code for features you turned off").size(12.5));
+                    ui.label(muted("skip what you turned off").size(12.5));
                 });
                 ui.end_row();
             });
@@ -715,20 +714,19 @@ impl App {
                     };
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("{:.0}%", frac * 100.0)).size(20.0).strong());
-                        ui.label(muted(format!("{} of {} chunks · {} unchanged", p.chunks_done, p.chunks_total, p.chunks_skipped)));
+                        ui.label(muted(format!("{} of {} parts", p.chunks_done, p.chunks_total)));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(muted(format!("{} elapsed · {} left", fmt_s(p.elapsed_s), p.eta_s.map(fmt_s).unwrap_or("–".into()))));
+                            if live {
+                                ui.label(muted(format!("{} left", p.eta_s.map(fmt_s).unwrap_or("–".into()))));
+                            }
                         });
                     });
                     ui.add(egui::ProgressBar::new(frac).desired_height(10.0).fill(col).corner_radius(5).animate(live));
-                    ui.horizontal(|ui| {
-                        ui.label(muted(format!("{} blocks · {:.0} MB written", p.blocks, p.mb_written)).size(12.5));
-                        if live && !p.current.is_empty() {
-                            ui.label(muted(format!("· {}", p.current.join(", "))).size(12.5));
-                        }
-                    });
+                    if live && !p.current.is_empty() {
+                        ui.label(muted(format!("Working on {}", p.current.join(", "))).size(12.5));
+                    }
                     if !live {
-                        let t = match p.state.as_str() { "done" => "✔  Last build finished", "cancelled" => "Last build cancelled", _ => "Last build failed" };
+                        let t = match p.state.as_str() { "done" => "✔  Done", "cancelled" => "Stopped", _ => "Something went wrong" };
                         ui.label(egui::RichText::new(t).color(col)).on_hover_text(&p.message);
                     }
                 }
@@ -737,7 +735,7 @@ impl App {
         ui.add_space(14.0);
 
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Image").size(18.0).strong());
+            ui.label(egui::RichText::new("Status").size(18.0).strong());
             if ui.add_enabled(!status_busy, egui::Button::new("↻").min_size(egui::vec2(32.0, 28.0))).on_hover_text("Check again").clicked() {
                 self.refresh_status();
             }
@@ -754,29 +752,28 @@ impl App {
                 card(ui, |ui| ui.label(egui::RichText::new(e).color(RED)));
             }
             Some(Ok(s)) => {
-                let (img, ic) = if s.image_current { ("Current", GREEN) } else if s.image_present { ("Out of date", ORANGE) } else { ("Missing", RED) };
+                let (img, ic) = if s.image_current { ("Ready", GREEN) } else if s.image_present { ("Needs update", ORANGE) } else { ("Not started", RED) };
                 stat_row(ui, vec![
-                    ("IMAGE", img.into(), ic),
-                    ("UP TO DATE", format!("{} / {}", s.up_to_date, s.total), TEXT),
-                    ("NEED REBUILD", need.to_string(), if need > 0 { ORANGE } else { TEXT }),
-                    ("HOT BLOCKS", s.hot_blocks.to_string(), TEXT),
+                    ("STATUS", img.into(), ic),
+                    ("READY", format!("{} / {}", s.up_to_date, s.total), TEXT),
+                    ("TO UPDATE", need.to_string(), if need > 0 { ORANGE } else { TEXT }),
+                    ("SIZE", format!("{:.0} MB", s.chunks.iter().map(|c| c.slot_mb).sum::<f64>()), TEXT),
                 ]);
                 ui.add_space(6.0);
-                ui.add(egui::Label::new(muted(format!(
-                    "{} libraries beyond the {} MB budget are translated on demand · {} training profiles",
-                    s.dropped, s.budget_mb, s.training_files
-                )).size(12.5)).wrap()).on_hover_text(&s.image);
+                if s.dropped > 0 {
+                    ui.label(muted(format!("{} more get ready the first time they're used.", s.dropped)).size(12.5));
+                }
                 ui.add_space(10.0);
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("🔍  Filter chunks").desired_width(260.0));
+                        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("🔍  Search").desired_width(260.0));
                         ui.add_space(10.0);
                         toggle(ui, &mut self.only_attention);
-                        ui.label(muted("Only stale or missing"));
+                        ui.label(muted("Only show what needs work"));
                     });
                     ui.add_space(8.0);
-                    egui::Grid::new("chunks").striped(true).num_columns(5).spacing([18.0, 6.0]).min_col_width(60.0).show(ui, |ui| {
-                        for h in ["STATE", "CHUNK", "SIZE", "BLOCKS", "WHY"] {
+                    egui::Grid::new("chunks").striped(true).num_columns(4).spacing([18.0, 6.0]).min_col_width(60.0).show(ui, |ui| {
+                        for h in ["STATUS", "NAME", "SIZE", "NOTE"] {
                             ui.label(muted(h).size(11.5).strong());
                         }
                         ui.end_row();
@@ -794,19 +791,18 @@ impl App {
                                 break;
                             }
                             let (t, col) = match c.state.as_str() {
-                                "up-to-date" => ("Up to date", GREEN),
-                                "stale" => ("Stale", ORANGE),
+                                "up-to-date" => ("Ready", GREEN),
+                                "stale" => ("Old", ORANGE),
                                 _ => ("Missing", RED),
                             };
                             pill(ui, t, col);
                             ui.label(c.name.rsplit('/').next().unwrap_or(&c.name)).on_hover_text(&c.name);
                             ui.label(muted(format!("{:.1} MB", c.slot_mb)));
-                            ui.label(muted(if c.blocks > 0 { c.blocks.to_string() } else { format!("{} hot", c.hot_blocks) }));
                             ui.add(egui::Label::new(muted(c.reasons.join("; "))).truncate());
                             ui.end_row();
                         }
                         if shown == 0 {
-                            ui.label(muted(if self.only_attention { "Everything is up to date" } else { "Nothing matches" }));
+                            ui.label(muted(if self.only_attention { "All done" } else { "Nothing matches" }));
                             ui.end_row();
                         }
                     });

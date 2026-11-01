@@ -10,6 +10,9 @@ pub struct Feature {
     pub id: String,
     pub title: String,
     pub desc: String,
+    /// what runs behind it (daemons, extensions), for tooltips and the MCP server
+    #[serde(default)]
+    pub tech: String,
     #[serde(default)]
     pub default: bool,
     #[serde(default)]
@@ -115,6 +118,7 @@ pub struct FeatureState {
     pub id: String,
     pub title: String,
     pub desc: String,
+    pub tech: String,
     pub enabled: bool,
     pub default: bool,
     pub cost_mb: u64,
@@ -126,6 +130,6 @@ pub fn list(device: &Path) -> Vec<FeatureState> {
     defs()
         .features
         .into_iter()
-        .map(|f| FeatureState { enabled: p.enabled(&f.id), id: f.id, title: f.title, desc: f.desc, default: f.default, cost_mb: f.cost_mb, when: f.when })
+        .map(|f| FeatureState { enabled: p.enabled(&f.id), id: f.id, title: f.title, desc: f.desc, tech: f.tech, default: f.default, cost_mb: f.cost_mb, when: f.when })
         .collect()
 }
