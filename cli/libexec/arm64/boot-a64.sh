@@ -133,13 +133,17 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # assistant_cdmd (Speed 27, on demand): Siri's dialog manager (com.apple.assistant.cdm), also the embedding service of
 # Spotlight's query parser. Without it the parser's model load failed ("QU model load failed ... com.apple.assistant.cdm
 # ... lookup"), its token stayed nil and Spotlight crashed on typing (SPSearchEntity / _CSSuggestionToken).
+# nanoregistryd (Speed 27, on demand): the paired-device (Watch) registry, which a Mac's simulator runs. Without it
+# NanoRegistry's sync query failed its lookup, NSXPCConnection ran the error handler inline and that dispatch_sync'd onto
+# the queue the thread was on: a deadlock inside +[NRPairedDeviceRegistry sharedInstance]'s dispatch_once, which Maps'
+# main thread waits on (GEO observer callback): Maps froze on a bare globe, no tiles, no input.
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
 	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd
 	com.apple.StatusKitAgent com.apple.mobileassetd com.apple.assetsubscriptiond com.apple.corespeechd com.apple.sirittsd
 	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd com.apple.searchd com.apple.corespotlightservice
-	com.apple.assistant_cdmd"
+	com.apple.assistant_cdmd com.apple.nanoregistryd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"
@@ -332,6 +336,16 @@ for fw in CoreSpotlight; do
 	mkdir -p "$DPREFIX/System/Library/Frameworks"
 	ln -sfn "/Volumes/SystemRoot$(realpath "$X86SIM_RUNTIME")/System/Library/Frameworks/$fw.framework" \
 		"$DPREFIX/System/Library/Frameworks/$fw.framework"
+done
+# Speed 27: and host data a Mac has in /System/Library (cli/libexec/arm64/fetch-macos-host.sh fetches it from the Mac
+# into runtimes/macos-host): geod seeds its resource manifest from /System/Library/GeoServicesData/ResourceManifest.json;
+# without it there was no active tile group and Maps drew a bare globe grid without ever requesting a tile.
+for d in GeoServicesData; do
+	if [ -d "$X/runtimes/macos-host/System/Library/$d" ]; then
+		ln -sfn "/Volumes/SystemRoot$X/runtimes/macos-host/System/Library/$d" "$DPREFIX/System/Library/$d"
+	else
+		echo "  note: no runtimes/macos-host/System/Library/$d (cli/libexec/arm64/fetch-macos-host.sh): Maps has no tiles"
+	fi
 done
 if [ "${X86SIM_JETSAM:-1}" != 0 ]; then
 	setsid python3 "$X/cli/libexec/jetsam.py" > "$ST/jetsam.log" 2>&1 < /dev/null &
