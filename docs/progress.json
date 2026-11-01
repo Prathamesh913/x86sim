@@ -68,7 +68,7 @@
   {
    "name": "2. Boot to the home screen",
    "status": "done",
-   "detail": "launchd_sim → daemons → backboardd → SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
+   "detail": "launchd_sim \u2192 daemons \u2192 backboardd \u2192 SpringBoard, all arm64 under the JIT, software rendering. Fixed: native malloc, signal delivery, per-thread data, tagged pointers, FP16 instructions, thread cleanup, memory-range exhaustion."
   },
   {
    "name": "3. Fast and lean",
@@ -117,7 +117,7 @@
   ],
   [
    "32-speed1c-gpu-home.png",
-   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID — wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
+   "Speed 1c: CORRECT GPU home (stride-safe PNG). Speed 1b's 31-speed1b-gpu-home.png INVALID \u2014 wrong-stride save (tight w*4 on 4864 pitch), not GPU corruption."
   ],
   [
    "31-speed1b-gpu-home.png",
@@ -125,19 +125,19 @@
   ],
   [
    "15-stage3-compact-maps-home.png",
-   "Stage 3: compact patch+fastmem maps — SB 1.4→1.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
+   "Stage 3: compact patch+fastmem maps \u2014 SB 1.4\u21921.18 GB PSS, 448 MB VMA gone, whole-sim ~3.56 GB"
   ],
   [
    "14-stage3-pagemap-home.png",
-   "Stage 3: page-map cold boot home — host_heap 137→79 MB; 448 MB anon VMA remains"
+   "Stage 3: page-map cold boot home \u2014 host_heap 137\u219279 MB; 448 MB anon VMA remains"
   ],
   [
    "13-stage3-idle-cpu-fix-home.png",
-   "Stage 3: idle CPU fix — home with icons, whole-sim ~1.3% core, PSS≈3.7 GB"
+   "Stage 3: idle CPU fix \u2014 home with icons, whole-sim ~1.3% core, PSS\u22483.7 GB"
   ],
   [
    "12-stage3-slim-park-home.png",
-   "Stage 3: slim-park home — PSS≈3.9 GB, WR parked 12 MB, reaper gone, bright≈0.21"
+   "Stage 3: slim-park home \u2014 PSS\u22483.9 GB, WR parked 12 MB, reaper gone, bright\u22480.21"
   ],
   [
    "03-home-screen.png",
@@ -621,5 +621,33 @@
    3532,
    3623
   ]
+ },
+ "speed23": {
+  "date": "2026-10-31",
+  "summary": "Memory regression fixed (jetsam stand-in on the arm64 boot), iOS 27.1/27.2 boot to home on their own AOT images (builder runtime + placement fixes)",
+  "pss_idle_mb": {
+   "before": 4368,
+   "after_fresh_boot": 2559,
+   "gates_idle": [
+    2799,
+    2799,
+    2763
+   ],
+   "gates_with_apps": [
+    3416,
+    3414,
+    3377
+   ]
+  },
+  "runtimes": {
+   "27.2 24B8117": "home ~55 s on image, Settings ok, Maps black (wedges SpringBoard)",
+   "27.1 24A94425": "home + Settings; Apple's image lacks most apps"
+  },
+  "tap": {
+   "response_s": 0.45,
+   "content_s": "0.77-0.95",
+   "astc_native": "not done"
+  },
+  "gates": "g1-g3 clean"
  }
 }

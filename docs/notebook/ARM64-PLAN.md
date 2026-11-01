@@ -1539,3 +1539,33 @@ Details in round-done/speed22.md.
   2870-3053 MB, with apps 3532-3674 MB (~200 MB above Speed 21, not explained yet: medialibraryd exits when idle).
 - GSAMPLE_TRACE printed `g_thunks[i].name` while threads still add thunks (vector reallocation): SIGSEGV in the
   sampler thread. It prints the thunk number now.
+
+## Speed 23 (2026-10-31): memory regression found (no jetsam on arm64), iOS 27.1/27.2 boot on their own images
+
+Details in round-done/speed23.md.
+- **Memory regression.** The launcher's 4.5 GB / 80 procs was a long-running sim: the arm64 boot never ran the jetsam
+  stand-in (cli/libexec/jetsam.py; only the x86 rundev.sh did), so everything RunningBoard suspended stayed resident:
+  the 12 poster extensions PosterBoard updates at every boot (Emoji, Pride, Unity x3, Weather, Gradient, Clock,
+  Infograph, Aegir, Photos, ImagePlayground: ~470 MB; Speed 21's boots did not start them, cause not found: same
+  device data, env and job list) plus every app opened. boot-a64.sh now clears the last boot's suspension marks and
+  runs jetsam.py, which only looks at its own container's pid namespace (Darling pids overlap between containers).
+  Fresh idle 4.37 GB/80 -> 2.56 GB/47 (Speed 21 2.68-2.72 GB). Gates: idle (Settings open) 2763-2799 MB, with apps
+  3377-3416 MB right after the apps (before reclaim). Not reclaimed: Maps, Health, Wallet, Photos are never suspended by
+  RunningBoard (no pid_suspend), so after a full app pass the launcher still shows ~4.0 GB / 65 procs: next lead.
+  Where idle memory sits: dyld cache pages 715 MB, anon 637 + heap 176 MB, AOT .map 430 MB, NVIDIA 228 MB.
+- **27.1 / 27.2.** x86code-aot's builders ran tests/arm64/run.sh without A64_RUNTIME, so they always mapped 27.0:
+  another runtime's image was 27.0 code under its cache UUID (every xpcproxy_sim jumped to 0x200 and was killed).
+  Fixed (A64_RUNTIME = config runtime_root). mkplacement.py PLACEMENT_RUNTIME=<root> makes a runtime's placement table
+  from 27.0's keys (committed placement-24B8117/24A94425.txt); without one apps on the image hung black. Per-runtime
+  cache dirs ($SCRATCH/jc-<build>, aot/config.json runtime_root + training from one JIT-only boot): images build in
+  21-35 s. 27.2: home with all icons in ~55 s on its image, Settings opens; Maps stays black and wedges SpringBoard
+  (also JIT-only: not the image). 27.1 (24A94425): home + Settings; Apple's 27.1 simulator image itself has no
+  Calendar/Maps/Photos/Health/Wallet/News/Files (7.85 vs 8.32 GB in the catalogue). A fresh device's first boot stalls
+  on LaunchServices (known); the second boot works.
+- **Tap / ASTC.** Not done. libate decodes rows in parallel (ASTCEncoder::IsDecompressionMonolithic = false;
+  dispatch per row, `DecodeRow(void*, size_t)` at 0x25cc13c90) through three function pointers in its context
+  (+208 block decode into a 2640-byte intermediate, +224 transform, +216 texel writer). A native path must replace
+  DecodeRow with that context layout; the entry points are virtual (ASTCEncoder vtable at enc+80). Warm tap unchanged:
+  response 0.45 s, content 0.77-0.95 s.
+- Gates g1-g3 3 consecutive clean (home 36-37 s, Settings 20-21/10-11 s, About "iPhone 17 / A3258 / 27.0",
+  Calendar/Photos/Maps 4/2, 4/2, 6-9/2, keyboard, Siri, Files, Health 11 s, Wallet 5 s), 0 CRASH/STALL.
