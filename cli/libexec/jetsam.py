@@ -34,13 +34,46 @@ RELAUNCH = 60.0
 NEVER = ("SpringBoard.app/", "PosterBoard.app/", "Spotlight.app/")   # system apps RunningBoard may background; never reclaimed here
 
 
-def darling_pids():
-    """Darling pid (the container namespace's) -> (Linux pid, executable path, start time as epoch seconds)."""
-    out = {}
+def container_ns():
+    """The pid namespace of X86SIM_DPREFIX's container (its darlingserver's children), or None. Several containers can
+    run at once (the arm64 device next to the x86_64 one, or a second arm64 instance): their Darling pids overlap."""
+    prefix = os.path.realpath(x86config.get("X86SIM_DPREFIX"))
+    servers = set()
+    kids = {}
     for p in os.listdir("/proc"):
         if not p.isdigit():
             continue
         try:
+            with open("/proc/%s/stat" % p) as f:
+                kids.setdefault(int(f.read().rsplit(")", 1)[1].split()[1]), []).append(p)
+            with open("/proc/%s/comm" % p) as f:
+                if f.read().strip() != "darlingserver":
+                    continue
+            with open("/proc/%s/cmdline" % p, "rb") as f:
+                args = f.read().split(b"\0")
+            if len(args) > 1 and os.path.realpath(args[1].decode(errors="replace")) == prefix:
+                servers.add(int(p))
+        except (OSError, ValueError, IndexError):
+            pass
+    for s in servers:
+        for k in kids.get(s, []):
+            try:
+                return os.readlink("/proc/%s/ns/pid" % k)
+            except OSError:
+                pass
+    return None
+
+
+def darling_pids():
+    """Darling pid (the container namespace's) -> (Linux pid, executable path, start time as epoch seconds)."""
+    out = {}
+    ns_want = container_ns()
+    for p in os.listdir("/proc"):
+        if not p.isdigit():
+            continue
+        try:
+            if ns_want and os.readlink("/proc/%s/ns/pid" % p) != ns_want:
+                continue
             with open("/proc/%s/status" % p) as f:
                 ns = next((l.split()[1:] for l in f if l.startswith("NSpid:")), [])
             if len(ns) < 2:

@@ -3,7 +3,7 @@
 # seconds and summarise. Everything is separate from the x86_64 iOS 26.5 stack, which keeps running untouched:
 # its own Darling prefix (A64_DPREFIX, default $X86SIM_SCRATCH/a64prefix: only that container is shut down and
 # restarted), device (var/device-a64), state dir (var/run-a64) and frame ring (/dev/shm/x86code-a64-simfb.ring).
-# mdns/jetsam stay with the x86 boot. mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
+# mdns stays with the x86 boot (jetsam: Speed 23, below). mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
 # socket ($ST/mtlvk.sock) and pidfile — never pkill -x mtlvk (would hit a frozen x86 stack's mtlvk).
 # Runs in the systemd scope of cli/libexec/limited.sh (40 MB/s IO, memory cap X86SIM_MEM_MAX).
 #
@@ -285,7 +285,19 @@ stop_prefix() {
 	fi
 }
 stop_prefix
+# Speed 23: jetsam stand-in (cli/libexec/jetsam.py, as the x86_64 boot's rundev.sh): reclaims extensions and older
+# background apps that RunningBoard keeps suspended, as a device's memorystatus does. Without it every poster
+# extension PosterBoard updated at boot (12 of them, ~470 MB PSS) and every app opened stayed resident.
+# X86SIM_JETSAM=0: off. Scoped to this prefix's container (jetsam.container_ns).
+[ -f "$ST/jetsam.pid" ] && kill "$(cat "$ST/jetsam.pid")" 2>/dev/null
+rm -f "$ST/jetsam.pid"
 [ "${A64_STOP_ONLY:-0}" = 1 ] && exit 0  # Speed 10: stop this device's container only
+# the marks of the last boot (Darling pids are reused)
+rm -rf "$DPREFIX/private/var/run/x86code-suspended"
+if [ "${X86SIM_JETSAM:-1}" != 0 ]; then
+	setsid python3 "$X/cli/libexec/jetsam.py" > "$ST/jetsam.log" 2>&1 < /dev/null &
+	echo $! > "$ST/jetsam.pid"
+fi
 sleep 1
 
 # Host zone name (no darling yet). The TZ link itself must run *inside* limited.sh so it does not birth
