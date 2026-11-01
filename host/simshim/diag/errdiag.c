@@ -18,12 +18,14 @@
 #include <sys/mount.h>
 extern int fsctl(const char*, unsigned long, void*, unsigned int);
 extern int ffsctl(int, unsigned long, void*, unsigned int);
+extern int openbyid_np(fsid_t*, fsobj_id_t*, int);
+extern ssize_t fsgetpath(char*, size_t, fsid_t*, uint64_t);
 #include <sys/clonefile.h>
 #include <copyfile.h>
 #define DYLD_INTERPOSE(_replacement, _replacee) \
 	__attribute__((used)) static struct { const void* replacement; const void* replacee; } _interpose_##_replacee \
 	__attribute__((section("__DATA,__interpose"))) = { (const void*) (unsigned long) &_replacement, (const void*) (unsigned long) &_replacee };
-static int en = -1, fd = -1;
+static int en = -1, fd = -1, all_enoent;
 static int on(void)
 {
 	if (en < 0) {
@@ -34,7 +36,7 @@ static int on(void)
 			ssize_t n = read(f, buf, sizeof(buf) - 1); close(f);
 			if (n > 0) {
 				buf[strcspn(buf, "\n")] = 0;
-				for (char* t = strtok(buf, ","); t; t = strtok(NULL, ",")) if (!strcmp(t, getprogname()) || !strcmp(t, "all")) en = 1;
+				for (char* t = strtok(buf, ","); t; t = strtok(NULL, ",")) { if (!strcmp(t, getprogname()) || !strcmp(t, "all")) en = 1; if (!strcmp(t, "+enoent")) all_enoent = 1; }
 			}
 		}
 		if (en) {
@@ -48,7 +50,10 @@ static int on(void)
 }
 static void report(const char* what, const char* path, long arg, int err)
 {
-	if (!on() || (err != EINVAL && err != ENOTSUP && err != ENOSYS && err != ENOTTY)) return;
+	if (!on()) return;
+	// Speed 27: ENOENT too for renames (lsd's atomic CSStore move: "file doesn't exist")
+	if (err != EINVAL && err != ENOTSUP && err != ENOSYS && err != ENOTTY && !(err == ENOENT && (all_enoent || strstr(what, "rename"))))
+		return;
 	dprintf(fd, "%s(%s, 0x%lx) -> errno %d\n", what, path ? path : "-", arg, err);
 	void* f[10]; int k = backtrace(f, 10);
 	for (int i = 2; i < k; i++) { Dl_info di; if (dladdr(f[i], &di) && di.dli_fname) dprintf(fd, "    %s %s+0x%lx\n", strrchr(di.dli_fname, '/') + 1, di.dli_sname ? di.dli_sname : "", (long) ((char*) f[i] - (char*) di.dli_fbase)); }
@@ -59,6 +64,7 @@ static void report(const char* what, const char* path, long arg, int err)
 WRAP(int, mkdir, (const char* p, mode_t m), (p, m), p, m)
 WRAP(int, mkdirat, (int d, const char* p, mode_t m), (d, p, m), p, m)
 WRAP(int, rename, (const char* a, const char* b), (a, b), a, 0)
+WRAP(int, renameat, (int fa, const char* a, int fb, const char* b), (fa, a, fb, b), a, 0)
 WRAP(int, renamex_np, (const char* a, const char* b, unsigned f), (a, b, f), a, f)
 WRAP(int, renameatx_np, (int fa, const char* a, int fb, const char* b, unsigned f), (fa, a, fb, b, f), a, f)
 WRAP(int, setattrlist, (const char* p, void* l, void* b, size_t s, unsigned int o), (p, l, b, s, o), p, ((struct attrlist*) l)->commonattr)
@@ -89,6 +95,12 @@ WRAP(ssize_t, writev, (int f, const struct iovec* v, int n), (f, v, n), NULL, n)
 WRAP(void*, mmap, (void* a, size_t l, int p, int fl, int f, off_t o), (a, l, p, fl, f, o), NULL, fl)
 WRAP(int, msync, (void* a, size_t l, int fl), (a, l, fl), NULL, fl)
 WRAP(int, madvise, (void* a, size_t l, int adv), (a, l, adv), NULL, adv)
+WRAP(int, fsgetpath, (char* b, size_t s, fsid_t* fs, uint64_t id), (b, s, fs, id), NULL, (long) id)
+WRAP(int, openbyid_np, (fsid_t* fs, fsobj_id_t* id, int fl), (fs, id, fl), NULL, fl)
+WRAP(int, getattrlistbulk, (int d, void* l, void* b, size_t s, uint64_t o), (d, l, b, s, o), NULL, ((struct attrlist*) l)->commonattr)
+WRAP(int, getattrlistat, (int d, const char* p, void* l, void* b, size_t s, unsigned long o), (d, p, l, b, s, o), p, ((struct attrlist*) l)->commonattr)
+WRAP(int, statfs, (const char* p, struct statfs* b), (p, b), p, 0)
+WRAP(int, fstatfs, (int f, struct statfs* b), (f, b), NULL, 0)
 WRAP(off_t, lseek, (int f, off_t o, int w), (f, o, w), NULL, w)
 static int d_fcntl(int f, int c, ...)
 {
