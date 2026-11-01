@@ -24,13 +24,44 @@ extern IOReturn IODeregisterForSystemPower(io_object_t* notifier);
 extern IOReturn IOAllowPowerChange(io_connect_t kernelPort, intptr_t notificationID);
 extern IOReturn IOCancelPowerChange(io_connect_t kernelPort, intptr_t notificationID);
 
+// x86Code (Speed 24): the fake ports are dead names, and IOServiceClose / IOObjectRelease on them succeed here. They
+// are MIG calls to the object's port; while this process held the receive right, nothing ever replied. iOS 27.2's
+// NSURLSession closes its system-power connection with IOServiceClose when a session is invalidated, so geod's
+// session queue blocked for good, and Maps waited for geod at launch (black screen, SpringBoard waiting on Maps).
+static mach_port_t fake_ports[64];
+static int fake_nports;
 static mach_port_t fake_port(void)
 {
 	mach_port_t port = MACH_PORT_NULL;
-	if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port) == KERN_SUCCESS)
+	if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port) == KERN_SUCCESS) {
 		mach_port_insert_right(mach_task_self(), port, port, MACH_MSG_TYPE_MAKE_SEND);
+		// a dead name: a MIG request on it (io_service_close, io_object_release, ... from code the interposers below
+		// don't reach, inside the shared cache) fails at once instead of waiting for a reply nobody sends
+		mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_RECEIVE, -1);
+	}
+	int i = __atomic_fetch_add(&fake_nports, 1, __ATOMIC_RELAXED);
+	if (i < 64)
+		fake_ports[i] = port;
 	return port;
 }
+static int is_fake_port(mach_port_t port)
+{
+	int n = __atomic_load_n(&fake_nports, __ATOMIC_RELAXED);
+	for (int i = 0; i < n && i < 64; i++)
+		if (port != MACH_PORT_NULL && fake_ports[i] == port)
+			return 1;
+	return 0;
+}
+static IOReturn shim_IOServiceClose(io_connect_t connect)
+{
+	return is_fake_port(connect) ? kIOReturnSuccess : IOServiceClose(connect);
+}
+DYLD_INTERPOSE(shim_IOServiceClose, IOServiceClose)
+static kern_return_t shim_IOObjectRelease(io_object_t object)
+{
+	return is_fake_port(object) ? KERN_SUCCESS : IOObjectRelease(object);
+}
+DYLD_INTERPOSE(shim_IOObjectRelease, IOObjectRelease)
 
 static io_connect_t shim_IORegisterForSystemPower(void* refcon, IONotificationPortRef* thePortRef,
 	IOServiceInterestCallback callback, io_object_t* notifier)

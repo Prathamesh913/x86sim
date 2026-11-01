@@ -109,7 +109,12 @@ void h_objc_msgSend(GuestThread &t, u32) {
 
 }  // namespace
 
+static u64 g_bks_text;  // BackBoardServices' __TEXT in this runtime's cache (sim_service_patches)
+
 void native_objc_prepare(const std::string &cache_path) {
+    u64 bks_hi = 0;
+    cache_exports(cache_path, "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices", nullptr,
+                  &g_bks_text, &bks_hi);
     // X86CODE_A64_GUEST_OBJC=1: leave guest A64 msgSend alone (baseline).
     const char *guest = getenv("X86CODE_A64_GUEST_OBJC");
     if (guest && *guest == '1') return;
@@ -216,11 +221,17 @@ void objc_cache_gc_guard(GuestThread &t) {
 // activate -> remoteTarget window is long enough for backboardd's reply to win, so cold boots restarted
 // SpringBoard 2-6 times. There is no server to reach in the simulator, so the overseer gets no remote target (what
 // it ends up with on a Mac too); mode pushes and queries go to nil. X86CODE_A64_UISENSOR=1 leaves it alone.
-constexpr u64 kUISensorConnect = 0x1c8e3e22cull;  // -[_BKSHIDUISensorOverseer _connectionLock_connectToRemoteServiceIfNeeded]
+// Speed 24: as an offset into BackBoardServices' __TEXT (0x1c8e3e22c in 27.0, 0x1c8dec22c in 27.2, 0x1c8f2622c in
+// 27.1: the same code, the image moved); patch_return checks the prologue.
+constexpr u64 kUISensorConnect = 0xb22c;  // -[_BKSHIDUISensorOverseer _connectionLock_connectToRemoteServiceIfNeeded]
 void sim_service_patches(GuestThread &t) {
     if (const char *e = getenv("X86CODE_A64_UISENSOR"); e && atoi(e) == 1) return;
+    if (!g_bks_text) {
+        logf("patch BKS UI sensor connect: BackBoardServices not in the cache; not patched");
+        return;
+    }
     // sub sp, sp, #0xb0 -> mov x0, #0
-    patch_return(t, kUISensorConnect, 0xd102c3ffu, 0xd2800000u, "BKS UI sensor connect -> nil");
+    patch_return(t, g_bks_text + kUISensorConnect, 0xd102c3ffu, 0xd2800000u, "BKS UI sensor connect -> nil");
 }
 
 void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {

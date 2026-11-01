@@ -1,4 +1,4 @@
-// Speed 6: native shortcuts inside dyld_sim (iOS 27.0 24A434), applied after dyld_sim is mapped, before it runs.
+// Speed 6: native shortcuts inside dyld_sim (iOS 27.x), applied after dyld_sim is mapped, before it runs.
 //
 // JustInTimeLoader::matchesPath(state, path) is how dyld finds an already-loaded image for dlopen and friends: for
 // each of the ~900 loaded images it compares the path, then (dylibs) the install name. To get the install name it
@@ -44,22 +44,33 @@ static const uint32_t kInstallName[] = {
     0xd65f03c0u,  // ret
     0x00000000u,  // empty: ""
 };
-constexpr u64 kMatchesPathCall = 0x1f2f4;  // JustInTimeLoader::matchesPath+0x44
+// JustInTimeLoader::matchesPath+0x44: 0x1f2f4 in 27.0/27.1, 0x1f378 in 27.2 (Speed 24: found by its code, so any
+// 27.x build gets it: "bl Loader::image" (same distance in every build so far); "add x0, sp, #8"; "bl installName")
+constexpr u64 kSearchLo = 0x1000, kSearchHi = 0x40000;
 constexpr u64 kTextPad = 0x5b000;          // __unwind_info ends at 0x5914c, __TEXT at 0x5c000
 
 void dyld_sim_patches(u64 slide) {
     if (const char *e = getenv("X86CODE_A64_DYLD_NATIVE"); e && atoi(e) == 0) return;
     // bl Loader::image; add x0, sp, #8; bl Header::installName  ->  bl kInstallName; nop; nop
-    auto *p = (uint32_t *)(slide + kMatchesPathCall);
+    uint32_t *p = nullptr;
+    for (u64 a = kSearchLo; a < kSearchHi && !p; a += 4) {
+        auto *q = (uint32_t *)(slide + a);
+        if (q[0] == 0x9400107au && q[1] == 0x910023e0u && (q[2] >> 26) == 0x25) p = q;
+    }
     auto *pad = (uint32_t *)(slide + kTextPad);
+    if (!p) {
+        logf("dyld_sim matchesPath: call not found; not patched");
+        return;
+    }
+    u64 call = (u64)p - slide;
     bool zero = true;
     for (size_t i = 0; i < sizeof kInstallName / 4; i++) zero &= pad[i] == 0;
-    if (p[0] != 0x9400107au || p[1] != 0x910023e0u || p[2] != 0x94006a33u || !zero) {
-        logf("dyld_sim matchesPath: code mismatch (%#x %#x %#x, pad %s); not patched", p[0], p[1], p[2], zero ? "ok" : "used");
+    if (!zero) {
+        logf("dyld_sim matchesPath: __TEXT padding in use; not patched");
         return;
     }
     memcpy(pad, kInstallName, sizeof kInstallName);
-    p[0] = 0x94000000u | (uint32_t)(((kTextPad - kMatchesPathCall) >> 2) & 0x3ffffff);  // bl
+    p[0] = 0x94000000u | (uint32_t)(((kTextPad - call) >> 2) & 0x3ffffff);  // bl
     p[1] = 0xd503201fu;  // nop
     p[2] = 0xd503201fu;  // nop
 }
