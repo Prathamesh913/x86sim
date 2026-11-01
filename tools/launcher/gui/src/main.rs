@@ -309,6 +309,35 @@ impl App {
         }
     }
 
+    /// Hub shortcuts. Not while the phone's screen has the keyboard (keys go to the phone) or a text field is focused.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        let phone_typing = matches!(&self.view, View::Phone(id) if self.viewers.get(id).is_some_and(|v| v.focused));
+        if phone_typing || ctx.wants_keyboard_input() || self.add.is_some() || self.dialog.is_some() {
+            return;
+        }
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let sc = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
+        if sc(Modifiers::COMMAND, Key::Num1) {
+            self.view = View::Home;
+        } else if sc(Modifiers::COMMAND, Key::Num2) {
+            self.view = View::Ios;
+            self.runtimes = host::runtimes();
+        } else if sc(Modifiers::COMMAND, Key::Num3) {
+            self.view = View::Aot;
+        } else if sc(Modifiers::COMMAND, Key::Num4) {
+            self.view = View::Settings;
+            self.last_slow = Instant::now() - Duration::from_secs(60);
+        } else if sc(Modifiers::COMMAND, Key::N) {
+            self.open_add_dialog();
+        } else if let View::Phone(id) = self.view.clone() {
+            if sc(Modifiers::COMMAND, Key::R) && self.phase(&id) != instance::Phase::Off {
+                self.restart(&id);
+            } else if sc(Modifiers::NONE, Key::Escape) {
+                self.view = View::Home;
+            }
+        }
+    }
+
     fn view_name(&self) -> &str {
         match &self.view {
             View::Home => "home",
@@ -342,6 +371,7 @@ impl eframe::App for App {
             }
         }
         self.sync();
+        self.shortcuts(ctx);
         if self.last_slow.elapsed() > Duration::from_secs(10) {
             self.last_slow = Instant::now();
             self.disk = host::disk(&x86code_core::aot::scratch());
@@ -396,17 +426,17 @@ impl eframe::App for App {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let n = self.insts.len();
                 let on_phones = matches!(self.view, View::Home | View::Phone(_));
-                if nav_item(ui, icon::SQUARES_FOUR, "Phones", on_phones, &if n > 0 { n.to_string() } else { String::new() }) {
+                if nav_item(ui, icon::SQUARES_FOUR, "Phones", on_phones, &if n > 0 { n.to_string() } else { String::new() }, "Ctrl+1") {
                     self.view = View::Home;
                 }
-                if nav_item(ui, icon::DOWNLOAD_SIMPLE, "iOS versions", self.view == View::Ios, "") {
+                if nav_item(ui, icon::DOWNLOAD_SIMPLE, "iOS versions", self.view == View::Ios, "", "Ctrl+2") {
                     self.view = View::Ios;
                     self.runtimes = host::runtimes();
                 }
-                if nav_item(ui, icon::LIGHTNING, "Pre-translate", self.view == View::Aot, if self.aot.building() { "•" } else { "" }) {
+                if nav_item(ui, icon::LIGHTNING, "Pre-translate", self.view == View::Aot, if self.aot.building() { "•" } else { "" }, "Ctrl+3") {
                     self.view = View::Aot;
                 }
-                if nav_item(ui, icon::GEAR_SIX, "Settings", self.view == View::Settings, "") {
+                if nav_item(ui, icon::GEAR_SIX, "Settings", self.view == View::Settings, "", "Ctrl+4") {
                     self.view = View::Settings;
                     self.last_slow = Instant::now() - Duration::from_secs(60);
                 }

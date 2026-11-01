@@ -524,7 +524,7 @@ pub fn segmented(ui: &mut egui::Ui, items: &[&str], sel: Option<usize>, enabled:
     out
 }
 
-pub fn nav_item(ui: &mut egui::Ui, ic: &str, label: &str, on: bool, trailing: &str) -> bool {
+pub fn nav_item(ui: &mut egui::Ui, ic: &str, label: &str, on: bool, trailing: &str, shortcut: &str) -> bool {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 30.0), Sense::click());
     let p = ui.painter();
@@ -539,7 +539,9 @@ pub fn nav_item(ui: &mut egui::Ui, ic: &str, label: &str, on: bool, trailing: &s
     if !trailing.is_empty() {
         p.text(rect.right_center() - egui::vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, trailing, font(T_SMALL), INK_3);
     }
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = if shortcut.is_empty() { resp } else { resp.on_hover_text(shortcut) };
+    resp.clicked()
 }
 
 /// Fold-out section header: chevron, title, summary at the right. Returns the new open state.

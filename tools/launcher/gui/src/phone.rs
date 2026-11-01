@@ -25,7 +25,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.set_min_height(32.0);
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if ui.add(Btn::ghost("Phones").icon(icon::CARET_LEFT)).clicked() {
+                if ui.add(Btn::ghost("Phones").icon(icon::CARET_LEFT)).on_hover_text("Back to all phones (Esc)").clicked() {
                     self.view = View::Home;
                 }
                 ui.label(egui::RichText::new("/").size(T_TITLE).color(BORDER_STRONG));
@@ -91,7 +91,11 @@ impl App {
                             if ui.add(Btn::secondary("Stop").icon(icon::STOP).icon_color(CRIT_INK).min_w(84.0)).clicked() {
                                 self.stop(id);
                             }
-                            if ui.add(Btn::secondary("Restart").icon(icon::ARROW_CLOCKWISE)).clicked() {
+                            if instance::needs_restart(&inst, st.as_ref()) {
+                                if ui.add(Btn::primary("Restart to apply").icon(icon::ARROW_CLOCKWISE)).on_hover_text("Feature or start settings changed since this phone started").clicked() {
+                                    self.restart(id);
+                                }
+                            } else if ui.add(Btn::secondary("Restart").icon(icon::ARROW_CLOCKWISE)).on_hover_text("Ctrl+R").clicked() {
                                 self.restart(id);
                             }
                         }
@@ -352,7 +356,13 @@ impl App {
         let prof = features::load(&inst.dir);
         let off: Vec<String> = features::defs().features.iter().filter(|f| !prof.enabled(&f.id)).map(|f| f.title.clone()).collect();
         kv(ui, lw, "Features", |ui| {
-            let t = if off.is_empty() { "Everything on".to_string() } else { format!("{} off", off.len()) };
+            let preset = features::preset_of(&prof).map(|p| match p.as_str() { "full" => "Full set", "lean" => "Lean set", "minimal" => "Minimal set", _ => "Custom" }.to_string());
+            let t = match (preset, off.len()) {
+                (Some(p), 0) => p,
+                (Some(p), n) => format!("{p} · {n} off"),
+                (None, 0) => "Everything on".to_string(),
+                (None, n) => format!("Custom · {n} off"),
+            };
             let r = ui.label(egui::RichText::new(t).size(T_SMALL).color(INK));
             if !off.is_empty() {
                 r.on_hover_text(format!("Off: {}", off.join(", ")));
@@ -433,7 +443,7 @@ impl App {
             let what = if !on && !lose.is_empty() {
                 format!("Off: {lose}")
             } else if what.is_empty() {
-                format!("When off, {}{}", lose.get(..1).unwrap_or("").to_lowercase(), lose.get(1..).unwrap_or(""))
+                format!("When off: {lose}")
             } else {
                 what
             };
@@ -461,13 +471,12 @@ impl App {
             }
             ui.add_space(S1);
         }
-        if changed {
-            self.open.insert("features-changed");
-        }
+
         if saving > 0 {
             dot_label(ui, &format!("Saving about {saving} MB"), GOOD);
         }
-        if self.open.contains("features-changed") && phase != Phase::Off {
+        let st = self.status.get(&inst.id).cloned();
+        if (changed || instance::needs_restart(inst, st.as_ref())) && phase != Phase::Off {
             ui.add_space(S1);
             egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(R_MD).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -476,7 +485,6 @@ impl App {
                     ui.label(body("Restart to apply"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add(Btn::secondary("Restart now").small()).clicked() {
-                            self.open.remove("features-changed");
                             self.restart(&inst.id);
                         }
                     });
@@ -558,16 +566,26 @@ impl App {
                         });
                         return;
                     }
-                    let srcw = 104.0;
+                    let srcw = 96.0;
+                    let tw = 60.0;
                     for l in &rows[range.start.min(rows.len())..range.end.min(rows.len())] {
                         let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
                         if resp.hovered() {
                             ui.painter().rect_filled(r, 0.0, egui::Color32::from_rgb(0x1b, 0x1c, 0x1f));
                         }
-                        let g = galley_trunc(ui, &l.source, mono.clone(), INK_3, srcw - 8.0);
-                        ui.painter().galley(egui::pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, INK_3);
-                        let g = galley_trunc(ui, &l.text, mono.clone(), INK, r.width() - srcw - 16.0);
-                        ui.painter().galley(egui::pos2(r.left() + 10.0 + srcw, r.center().y - g.size().y / 2.0), g, INK);
+                        let (time, msg) = logs::split_time(&l.text);
+                        let mut x = r.left() + 10.0;
+                        if let Some(t) = time {
+                            ui.painter().text(egui::pos2(x, r.center().y), egui::Align2::LEFT_CENTER, t, mono.clone(), INK_3);
+                        }
+                        x += tw;
+                        let g = galley_trunc(ui, &l.source, mono.clone(), INK_2, srcw - 8.0);
+                        ui.painter().galley(egui::pos2(x, r.center().y - g.size().y / 2.0), g, INK_2);
+                        x += srcw;
+                        let low = msg.to_ascii_lowercase();
+                        let col = if low.contains("error") || low.contains("fail") || low.contains("crash") { CRIT_INK } else if low.contains("warn") { WARN } else { INK };
+                        let g = galley_trunc(ui, msg, mono.clone(), col, r.right() - x - 8.0);
+                        ui.painter().galley(egui::pos2(x, r.center().y - g.size().y / 2.0), g, col);
                         resp.on_hover_ui(|ui| {
                             ui.set_max_width(520.0);
                             ui.label(muted(&l.source));

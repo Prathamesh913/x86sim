@@ -28,7 +28,8 @@ impl App {
     }
 
     pub fn open_add_dialog(&mut self) {
-        let rt = self.runtimes.iter().position(|r| r.present).unwrap_or(0);
+        // the newest installed iOS
+        let rt = self.runtimes.iter().rposition(|r| r.present).unwrap_or(0);
         self.add = Some(AddDialog { model: 0, runtime: rt, name: String::new(), busy: Arc::new(Mutex::new(None)), working: false });
     }
 
@@ -42,7 +43,7 @@ impl App {
         };
         let mut add = false;
         page_header(ui, "Phones", &subtitle, |ui| {
-            add = ui.add(Btn::primary("Add phone").icon(icon::PLUS)).clicked();
+            add = ui.add(Btn::primary("Add phone").icon(icon::PLUS)).on_hover_text("Ctrl+N").clicked();
         });
         if add {
             self.open_add_dialog();
@@ -239,7 +240,13 @@ impl App {
                     Some(s) if phase != Phase::Off => format!("{label} · {} · {:.0}% CPU", fmt_mb(s.pss_mb), s.cpu_pct),
                     _ => label.to_string(),
                 };
-                let r = ui.horizontal(|ui| dot_label(ui, &line, col)).response;
+                let pending = x86code_core::instance::needs_restart(&inst, st.as_ref());
+                let r = ui.horizontal(|ui| {
+                    dot_label(ui, &line, col);
+                    if pending {
+                        ui.label(egui::RichText::new(icon::ARROW_CLOCKWISE).size(13.0).color(WARN)).on_hover_text("Settings changed: restart to apply");
+                    }
+                }).response;
                 if let Some(u) = st.as_ref().and_then(|s| s.uptime_s) {
                     r.on_hover_text(format!("Up for {}", fmt_uptime(u)));
                 }
@@ -322,8 +329,13 @@ impl App {
                 });
                 ui.add_space(S3);
                 ui.label(egui::RichText::new("Name").size(T_SMALL).family(medium()).color(INK_2));
-                ui.add(egui::TextEdit::singleline(&mut d.name).hint_text(egui::RichText::new("Optional, e.g. Test phone").color(INK_3)).desired_width(fw).margin(egui::Margin::symmetric(8, 6)));
-                ui.add_space(S5);
+                let r = ui.add(egui::TextEdit::singleline(&mut d.name).hint_text(egui::RichText::new("Optional, e.g. Test phone").color(INK_3)).desired_width(fw).margin(egui::Margin::symmetric(8, 6)));
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && self.runtimes.get(d.runtime).is_some_and(|r| r.present) && !d.working {
+                    create = true;
+                }
+                ui.add_space(S3);
+                ui.label(muted("The first start takes a few minutes while iOS sets itself up."));
+                ui.add_space(S4);
                 ui.horizontal(|ui| {
                     if d.working {
                         ui.spinner();

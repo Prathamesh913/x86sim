@@ -532,12 +532,12 @@ pub fn log_sources(inst: &Instance, st: Option<&Status>) -> Vec<crate::logs::Src
     vec![
         Src::Dir("System", inst.log_dir.clone()),
         Src::Dir("Translator", prefix.join("private/var/tmp/x86code-a64")),
-        Src::File("Boot", boot_log(inst)),
-        Src::File("Boot", state_dir.join("lsim.out")),
-        Src::File("Boot", state_dir.join("launchd.log")),
-        Src::File("Boot", state_dir.join("aot-status.txt")),
-        Src::File("Graphics", state_dir.join("mtlvk.log")),
-        Src::File("Memory", state_dir.join("jetsam.log")),
+        Src::File("Boot", "start", boot_log(inst)),
+        Src::File("Boot", "launchd_sim", state_dir.join("lsim.out")),
+        Src::File("Boot", "launchd", state_dir.join("launchd.log")),
+        Src::File("Boot", "pre-translate", state_dir.join("aot-status.txt")),
+        Src::File("Graphics", "mtlvk", state_dir.join("mtlvk.log")),
+        Src::File("Memory", "jetsam", state_dir.join("jetsam.log")),
     ]
 }
 
@@ -612,4 +612,12 @@ pub fn delete(inst: &Instance, st: Option<&Status>) -> Result<()> {
         r.with_context(|| format!("removing {}", p.display()))?;
     }
     Ok(())
+}
+
+/// Feature or boot settings changed after this boot started (by the hub, the CLI or the MCP server): a restart
+/// applies them.
+pub fn needs_restart(inst: &Instance, st: Option<&Status>) -> bool {
+    let Some(boot) = st.filter(|s| s.phase != Phase::Off).and_then(|s| s.boot_time) else { return false };
+    let mtime = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs_f64());
+    [crate::features::profile_path(&inst.dir), settings_path(&inst.dir)].into_iter().filter_map(mtime).any(|t| t > boot + 1.0)
 }

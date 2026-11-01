@@ -21,7 +21,8 @@ pub struct Line {
 #[derive(Clone, Debug)]
 pub enum Src {
     Dir(&'static str, PathBuf),
-    File(&'static str, PathBuf),
+    /// group, the tag its lines get, path
+    File(&'static str, &'static str, PathBuf),
 }
 
 pub const GROUPS: [&str; 5] = ["System", "Translator", "Boot", "Graphics", "Memory"];
@@ -55,15 +56,15 @@ impl Tail {
 
     /// Reads what is new; returns the number of lines added.
     pub fn poll(&mut self) -> usize {
-        let mut paths: Vec<(&'static str, PathBuf)> = vec![];
+        let mut paths: Vec<(&'static str, Option<&'static str>, PathBuf)> = vec![];
         for s in &self.srcs {
             match s {
-                Src::File(g, p) => paths.push((g, p.clone())),
+                Src::File(g, t, p) => paths.push((g, Some(t), p.clone())),
                 Src::Dir(g, d) => {
                     for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
                         let p = e.path();
                         if p.extension().is_some_and(|x| x == "log" || x == "out" || x == "txt") {
-                            paths.push((g, p));
+                            paths.push((g, None, p));
                         }
                     }
                 }
@@ -71,7 +72,7 @@ impl Tail {
         }
         let since = self.since.map(|s| UNIX_EPOCH + Duration::from_secs_f64((s - 5.0).max(0.0)));
         let mut added = 0;
-        for (group, p) in paths {
+        for (group, fixed_tag, p) in paths {
             let Ok(md) = std::fs::metadata(&p) else { continue };
             let known = self.offs.get(&p).copied();
             if known.is_none() {
@@ -101,7 +102,7 @@ impl Tail {
                         };
                         let first_sight = known.is_none() && o > 0;
                         o += end as u64;
-                        let t = tag(&p);
+                        let t = fixed_tag.map(String::from).unwrap_or_else(|| tag(&p));
                         let s = String::from_utf8_lossy(&buf[..end]);
                         let mut it = s.lines().peekable();
                         if first_sight {
@@ -137,4 +138,15 @@ impl Tail {
 /// now as unix seconds
 pub fn now_s() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// "2026-11-01 07:54:40.355519 rest" -> (Some("07:54:40"), "rest"); also "[07:54:40] rest"
+pub fn split_time(text: &str) -> (Option<&str>, &str) {
+    let b = text.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b.get(r.clone()).is_some_and(|s| s.iter().all(u8::is_ascii_digit));
+    if b.len() > 20 && digits(0..4) && b[4] == b'-' && digits(5..7) && b[7] == b'-' && digits(8..10) && b[10] == b' ' && digits(11..13) && b[13] == b':' {
+        let end = text[11..].find(' ').map(|i| i + 11).unwrap_or(text.len());
+        return (Some(&text[11..19.min(end)]), text[end..].trim_start());
+    }
+    (None, text)
 }
