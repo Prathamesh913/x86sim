@@ -48,20 +48,54 @@ fn runtime_label(dir: &str) -> String {
     }
 }
 
-/// "iPhone 17 Pro · device-a64" from the device's sim.env
+/// The phone models a device can be made of (cli/lib/devicetypes-a64.json, from Xcode's device types): (name, model id)
+pub fn models() -> Vec<(String, String)> {
+    let txt = std::fs::read_to_string(repo_root().join("cli/lib/devicetypes-a64.json")).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
+    let mut out = vec![];
+    if let Some(m) = v.as_object() {
+        for (name, t) in m {
+            out.push((name.clone(), t["model"].as_str().unwrap_or("").to_string()));
+        }
+    }
+    out.sort_by_key(|m| !m.0.starts_with("iPhone"));
+    out
+}
+
+/// "iPhone 17 Pro Max · Pro Max" from the device's sim.env (model) and name file (else the folder name)
 fn device_label(dir: &Path) -> String {
-    let name = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let folder = dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let name = std::fs::read_to_string(dir.join("name")).map(|s| s.trim().to_string()).unwrap_or(folder);
     let env = std::fs::read_to_string(dir.join("sim.env")).unwrap_or_default();
     let model = env.lines().find_map(|l| l.strip_prefix("SIMULATOR_MODEL_IDENTIFIER=")).unwrap_or("");
-    let product = match model {
-        "iPhone18,1" => "iPhone 17 Pro",
-        "iPhone18,2" => "iPhone 17 Pro Max",
-        "iPhone18,3" => "iPhone 17",
-        "iPhone18,4" => "iPhone Air",
-        "" => return name,
-        m => m,
-    };
-    format!("{product} · {name}")
+    if model.is_empty() {
+        return name;
+    }
+    let product = models().into_iter().find(|m| m.1 == model).map(|m| m.0).unwrap_or_else(|| model.to_string());
+    if product == name {
+        product
+    } else {
+        format!("{product} · {name}")
+    }
+}
+
+/// New device of a model (cli/libexec/arm64/device-a64.py create): var/device-a64-<name>
+pub fn create_device(model: &str, name: &str) -> Result<PathBuf> {
+    let mut cmd = Command::new("python3");
+    cmd.arg(repo_root().join("cli/libexec/arm64/device-a64.py")).args(["create", "--model", model]);
+    if !name.trim().is_empty() {
+        cmd.arg(name.trim());
+    }
+    let out = cmd.current_dir(repo_root()).stdin(Stdio::null()).output()?;
+    anyhow::ensure!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr).trim());
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
+/// The device the arm64 sim was last booted with (boot-a64.sh writes var/run-a64/device)
+pub fn booted_device() -> Option<PathBuf> {
+    let s = std::fs::read_to_string(repo_root().join("var/run-a64/device")).ok()?;
+    let p = PathBuf::from(s.trim());
+    p.exists().then_some(p)
 }
 
 fn boot_script() -> PathBuf {
@@ -108,7 +142,7 @@ pub fn show() -> Result<()> {
         return Ok(());
     }
     let st = Command::new("systemd-run")
-        .args(["--user", "--unit", "x86sim-simview", "--collect", "-E", "DISPLAY=:0", "-p"])
+        .args(["--user", "--unit", "x86sim-simview", "--collect", "-E", "DISPLAY=:0", "-E", "SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring", "-p"])
         .arg(format!("WorkingDirectory={}", repo_root().display()))
         .args(["/usr/bin/python3", "cli/libexec/simview.py"])
         .stdout(Stdio::null())
@@ -121,6 +155,8 @@ pub fn show() -> Result<()> {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SimStatus {
     pub booted: bool,
+    /// the booted device (None when stopped)
+    pub device: Option<PathBuf>,
     pub home: bool,
     pub springboard_pid: Option<u32>,
     pub procs: usize,
@@ -201,7 +237,20 @@ pub fn status(sample_ms: u64) -> SimStatus {
             }
         }
     }
-    st.home = st.springboard_pid.is_some() && home_frame();
+    // Home once seen stays true for that SpringBoard: an open app (a dark one fails the frame test) is still running.
+    static HOME_SB: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+    let mut seen = HOME_SB.lock().unwrap();
+    st.home = match st.springboard_pid {
+        Some(sb) if *seen == Some(sb) => true,
+        Some(sb) if home_frame() => {
+            *seen = Some(sb);
+            true
+        }
+        _ => false,
+    };
+    if st.booted {
+        st.device = booted_device();
+    }
     st
 }
 

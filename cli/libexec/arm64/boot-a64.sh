@@ -26,6 +26,8 @@ export X86SIM_MEM_MAX=${X86SIM_MEM_MAX-12G}
 X=$X86SIM_ROOT; cd "$X"
 D=$X86SIM_DEVICE; ST=$X86SIM_STATE; SECS=${SECS:-90}
 mkdir -p "$D" "$ST"
+# Speed 22: the booted device, for simview (input socket, logs) and the launcher
+[ -n "${A64_STOP_ONLY:-}" ] || echo "$D" >"$ST/device"
 rm -rf "$D"/data/var/log/*.log
 # Speed 1: start this boot's mtlvk when Metal is requested. Own socket + pidfile under var/run-a64.
 # Speed 8: A64_MTLVK_SOCKET=<path of a running mtlvk's socket> shares that mtlvk (one per host for several devices; it

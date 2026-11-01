@@ -30,6 +30,23 @@ here = os.path.dirname(os.path.abspath(__file__))
 src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(x86config.data(), "framebuffer.bgra")
 div = int(sys.argv[2]) if len(sys.argv) > 2 else 2
 sockpath = os.environ.get("SIMHID_SOCKET", os.path.join(os.path.dirname(src), "simhid.sock"))
+# Speed 22: an arm64 boot records its device in var/run-a64/device (boot-a64.sh); input follows the booted device
+
+
+def booted_device():
+    try:
+        return open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                 "var/run-a64/device")).read().strip() or None
+    except OSError:
+        return None
+
+
+def current_sock():
+    if "SIMHID_SOCKET" not in os.environ or os.environ.get("SIMVIEW_FOLLOW", "1") != "0":
+        d = booted_device()
+        if d and os.path.exists(os.path.join(d, "data/simhid.sock")):
+            return os.path.join(d, "data/simhid.sock")
+    return sockpath
 
 ring = fbring.Ring()
 
@@ -62,7 +79,7 @@ def send(line):
             if state["sock"] is None:
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 s.settimeout(0.5)
-                s.connect(sockpath)
+                s.connect(current_sock())
                 state["sock"] = s
             state["sock"].sendall((line + "\n").encode())
             return
@@ -123,7 +140,7 @@ def on_activate(app):
         buf = tv.get_buffer()
         root = os.path.dirname(here)
         dirs = os.environ.get("SIMVIEW_LOGS") or ":".join([
-            os.path.join(os.path.dirname(root), "var/device-a64/data/var/log"),
+            os.path.join(booted_device() or os.path.join(os.path.dirname(root), "var/device-a64"), "data/var/log"),
             "/home/bobby/scratch/x86code/a64prefix/private/var/tmp/x86code-a64",
             os.path.join(x86config.data(), "var/log")])
         offs = {}
@@ -249,6 +266,12 @@ def on_activate(app):
     def show(w, h, stride, seq, px):
         tex = Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.B8G8R8A8_PREMULTIPLIED, GLib.Bytes.new(px), stride)
         pic.set_paintable(tex)
+        if state["size"] != (w, h):
+            # Speed 22: another phone model booted: size the window to its screen
+            print("simview: screen %dx%d" % (w, h), flush=True)
+            state["size"] = (w, h)
+            pic.set_size_request(w // div, h // div)
+            win.set_default_size(w // div + (560 if console else 0), h // div)
         state["size"] = (w, h)
         now = time.monotonic()
         state["frame_at"] = now

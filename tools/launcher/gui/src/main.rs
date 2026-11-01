@@ -42,6 +42,10 @@ struct App {
     only_attention: bool,
     features_changed: bool,
     page: Page,
+    models: Vec<(String, String)>,
+    adding: bool,
+    new_model: usize,
+    new_name: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -81,6 +85,10 @@ impl App {
             only_attention: true,
             features_changed: false,
             page: Page::Simulator,
+            models: sim::models(),
+            adding: false,
+            new_model: 0,
+            new_name: String::new(),
         };
         // sim status every 3 s
         let sh = app.shared.clone();
@@ -475,6 +483,40 @@ impl App {
                     }
                 });
                 ui.end_row();
+                if self.adding {
+                    ui.label(muted("New phone"));
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("newmodel").width(190.0).selected_text(self.models.get(self.new_model).map(|m| m.0.clone()).unwrap_or_default()).show_ui(ui, |ui| {
+                            for (i, m) in self.models.iter().enumerate() {
+                                ui.selectable_value(&mut self.new_model, i, &m.0);
+                            }
+                        });
+                        ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("Name (optional)").desired_width(120.0))
+                            .on_hover_text("Makes var/device-a64-<name> with this model's screen and settings (copied from the main phone's data)");
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.horizontal(|ui| {
+                        if ui.add(primary("Add")).clicked() {
+                            if let Some(m) = self.models.get(self.new_model).map(|m| m.0.clone()) {
+                                match sim::create_device(&m, &self.new_name) {
+                                    Ok(p) => {
+                                        self.devices = sim::devices();
+                                        self.device = self.devices.iter().position(|d| d.1 == p).unwrap_or(self.device);
+                                        self.message = format!("Added {m}");
+                                        self.adding = false;
+                                        self.new_name.clear();
+                                    }
+                                    Err(e) => self.message = format!("Couldn't add it: {e:#}"),
+                                }
+                            }
+                        }
+                        if ui.add(secondary("Cancel")).clicked() {
+                            self.adding = false;
+                        }
+                    });
+                    ui.end_row();
+                }
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -495,6 +537,9 @@ impl App {
                         });
                         self.message = "Stopping".into();
                     }
+                }
+                if !self.adding && ui.add(secondary("＋  Add phone")).clicked() {
+                    self.adding = true;
                 }
                 if ui.add(secondary("🖵  Show")).clicked() {
                     self.message = match sim::show() {
@@ -528,6 +573,10 @@ impl App {
                 ui.horizontal(|ui| {
                     if s.booted {
                                             }
+                    if let Some(d) = s.device.as_ref().and_then(|d| self.devices.iter().find(|x| &x.1 == d)) {
+                        ui.label(muted(format!("On: {}", d.0)).size(12.5));
+                        ui.add_space(10.0);
+                    }
                     ui.label(muted(if s.simview { "Window open" } else { "Window closed" }).size(12.5));
                 });
             }
