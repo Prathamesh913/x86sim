@@ -78,3 +78,11 @@ slowest.
 - **Siri on 27.2**: the gate's home-button hold starts no Siri process (also before this round).
 - Spotlight ~100% CPU / 2.4-3.7 GB, Settings search typing spin (launcher QA report): not started.
 - Lever 4b (GETBLOCK_FD probe): not done.
+
+## Zero-crash gate (27.2 phone, final binaries, codegen 0x19): NOT fully met
+z1-z3 (08:40, 08:45, 08:50), 3 consecutive cold boots: **0 CRASH lines**; home, Settings cold/warm, General > About,
+Calendar, Photos (cold; warm shows the "What's New in Photos" sheet, which the gate's regex doesn't accept), Maps,
+Files (opens; "Content Unavailable ... unknown error" in Recents), Health, Wallet all open; home swipe-up and the app
+switcher work. **Keyboard (TIMEOUT) and Siri (0 processes) fail in all three**: both also failed before any Speed 25
+change (train1, old binaries). The default device's 27.0 runtime is still missing, so the gate ran on 27.2 only.
+State left: 27.2 phone booted at home, default config.
