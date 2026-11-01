@@ -255,10 +255,12 @@ def main():
             else:
                 # no logd here either: without this libtrace streams to diagnosticd anyway
                 plist.setdefault("EnvironmentVariables", {})["OS_ACTIVITY_MODE"] = "disable"
-        # x86Code arm64 (Speed 13): assistantd is here only for com.apple.assistant.dictation (the keyboard's dictation
-        # availability; see boot-a64). Its LaunchEvents and its other ~30 MachServices started it at boot, and it
-        # then pulled in cloudd, nsurlsessiond, securityd and tccd. Serve dictation only. X86SIM_ASSISTANTD=full: Apple's.
-        if ARM64 and job == "com.apple.assistantd" and os.environ.get("X86SIM_ASSISTANTD") != "full":
+        # x86Code arm64: assistantd is Apple's plist (Speed 26). Speed 13 kept only com.apple.assistant.dictation; on
+        # iOS 27.2 the keyboard's dictation availability check also asks com.apple.assistant.settings, and each failed
+        # lookup posted "availability changed": the keyboard dock re-checked, the app's main thread spun (~75% CPU),
+        # hardware keys never reached the text field, and Siri had no assistant. X86SIM_ASSISTANTD=dictation: the old
+        # slim plist (experiments only; it turns features off).
+        if ARM64 and job == "com.apple.assistantd" and os.environ.get("X86SIM_ASSISTANTD") == "dictation":
             plist.pop("LaunchEvents", None)
             keep = os.environ.get("X86SIM_ASSISTANTD_MACH", "com.apple.assistant.dictation").split(",")
             plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
@@ -271,7 +273,12 @@ def main():
         with open(os.path.join(dst, job + ".plist"), "wb") as f:
             plistlib.dump(plist, f)
 
-    rt, home = darling(RUNTIME), darling(data)
+    # x86Code arm64 (Speed 26): the canonical runtime path (runtimes/<rt>/RuntimeRoot is a symlink into extracted/...), as a
+    # Mac's mounted runtime has none. dyld_sim takes its simulator root as the realpath and strips only that prefix, so
+    # with the symlinked root _dyld_shared_cache_contains_path("<root>/System/Library/Frameworks/WebKit.framework/WebKit")
+    # was false: CFBundle found no executable for cache-only frameworks and WebKit's WebContent/Networking/GPU services
+    # exited at once ("Unable to find entry point in WebKit.framework"): Safari never loaded a page.
+    rt, home = darling(os.path.realpath(RUNTIME) if ARM64 else RUNTIME), darling(data)
     # x86Code: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
     capabilities = device + "/capabilities.plist"
     dt = device_type(device)
@@ -482,7 +489,7 @@ def main():
             "ChildDefaults": child_defaults,
             "Self": env,
             "Paths": [darling(daemons), darling(angels)],
-            "SimulatorRuntimeRoot": darling(os.path.realpath(RUNTIME)) if ARM64 else rt,
+            "SimulatorRuntimeRoot": rt,
         },
     }
     with open(data + "/var/run/launchd_bootstrap.plist", "wb") as f:

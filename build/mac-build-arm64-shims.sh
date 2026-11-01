@@ -3,7 +3,7 @@
 # the guest's frameworks, so they must be guest code): simshim, SimFramebuffer (simfb), SimulatorHID (simhid),
 # metalhostd (+vkmtl), iosurfaced, mtlprobe. Output under host/<name>/arm64/ (mksimdevice.py X86SIM_ARCH=arm64
 # picks them up). The x86_64 builds are not touched.
-# Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid metalhostd iosurfaced mtlprobe openurl]
+# Usage: build/mac-build-arm64-shims.sh [simshim simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig]
 set -e
 . "$(dirname "$0")/mac-env.sh"
 T="-target arm64-apple-ios17.0-simulator"
@@ -70,8 +70,18 @@ openurl)
 	cat openurl" > "$W/openurl"
 	mkdir -p "$X/host/openurl/arm64" && mv "$W/openurl" "$X/host/openurl/arm64/openurl"
 	chmod +x "$X/host/openurl/arm64/openurl" ;;
+netconfig)
+	# Speed 26: the host network configuration into com.x86code.host-configd (mksimdevice skips the job when this build
+	# is missing: the arm64 phone then had no network state and every request failed "offline", -1009)
+	tar cf - -C "$X/host/netconfig" netconfig.m | mac "
+	rm -rf /tmp/a64netcfg && mkdir -p /tmp/a64netcfg && cd /tmp/a64netcfg && tar xf - &&
+	xcrun -sdk iphonesimulator clang $T -O1 -g -Wall -Wno-deprecated-declarations \
+		-fobjc-arc -framework Foundation -framework SystemConfiguration -o netconfig netconfig.m >&2 &&
+	cat netconfig" > "$W/netconfig"
+	mkdir -p "$X/host/netconfig/arm64" && mv "$W/netconfig" "$X/host/netconfig/arm64/netconfig"
+	chmod +x "$X/host/netconfig/arm64/netconfig" ;;
 *) echo "unknown target: $w" >&2; exit 1 ;;
 esac; done
 file "$X"/host/sim*/arm64/*/* "$X"/host/sim*/arm64/*/*/* \
 	"$X"/host/metalhostd/arm64/metalhostd "$X"/host/iosurfaced/arm64/iosurfaced \
-	"$X"/tests/metal/arm64/mtlprobe "$X"/host/openurl/arm64/openurl 2>/dev/null | grep -i mach || true
+	"$X"/tests/metal/arm64/mtlprobe "$X"/host/openurl/arm64/openurl "$X"/host/netconfig/arm64/netconfig 2>/dev/null | grep -i mach || true

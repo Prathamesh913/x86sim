@@ -3,7 +3,7 @@
 # seconds and summarise. Everything is separate from the x86_64 iOS 26.5 stack, which keeps running untouched:
 # its own Darling prefix (A64_DPREFIX, default $X86SIM_SCRATCH/a64prefix: only that container is shut down and
 # restarted), device (var/device-a64), state dir (var/run-a64) and frame ring (/dev/shm/x86code-a64-simfb.ring).
-# mdns stays with the x86 boot (jetsam: Speed 23, below). mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
+# DNS: own linux/mdnsd server per boot (Speed 26, below). mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
 # socket ($ST/mtlvk.sock) and pidfile — never pkill -x mtlvk (would hit a frozen x86 stack's mtlvk).
 # Runs in the systemd scope of cli/libexec/limited.sh (40 MB/s IO, memory cap X86SIM_MEM_MAX).
 #
@@ -102,7 +102,7 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # openurl: com.x86code.openurl (arm64 build) so simtouch.py app/openurl works on the a64 device.
 # InputUI (Speed 12): the keyboard service (LaunchAngel, on demand: started at SpringBoard's first osservice request).
 # Without the job SpringBoard's bootstrap of osservice<com.apple.InputUI> fails ~60 times per boot and text fields get no
-# keyboard. assistantd (on demand) serves com.apple.assistant.dictation: without it each failed dictation availability
+# keyboard. assistantd (Apple's plist since Speed 26) serves dictation and settings: without them each failed dictation availability
 # check posts "availability changed", the keyboard dock (mic key) re-checks, and the app's main thread spins at 100%
 # from the first text field tap, so InputUI's keyboard arbiter times the app out and no keyboard appears.
 # assetsd (on demand): the photo library; without it Photos throws in its library view's viewDidLoad.
@@ -121,11 +121,18 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # About aborted counting Songs (ML3DatabaseException "no such table: _MLDatabaseProperties").
 # StatusKitAgent (Speed 25, on demand): Focus/availability status. Without it opening a Messages conversation spun the
 # main thread at 100% forever: IMCore asks StatusKit per chat item, each sync XPC call failed its lookup, and asked again.
+# mobileassetd + assetsubscriptiond (Speed 26, on demand): Siri's UAF assets (Understanding, TTS, ASR: ~870 MB, as a Mac's
+# iOS 27 simulator device downloads them). Without them assistantd finds no asset set and Siri says "Data for using Siri
+# is downloading" forever; with them it downloads once into the device's data/private/var/MobileAsset.
+# corespeechd, sirittsd, siriinferenced, siriknowledged, siriactionsd (Speed 26, on demand): Siri's speech capture,
+# speech synthesis, inference, knowledge and actions services, which a Mac's simulator has on demand. Without corespeechd
+# assistantd's recording failed at once ("Unable to prepareAudioProvider", kAFAssistantErrorDomain 221).
 UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
 	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd
-	com.apple.StatusKitAgent"
+	com.apple.StatusKitAgent com.apple.mobileassetd com.apple.assetsubscriptiond com.apple.corespeechd com.apple.sirittsd
+	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"
@@ -301,6 +308,8 @@ stop_prefix
 # X86SIM_JETSAM=0: off. Scoped to this prefix's container (jetsam.container_ns).
 [ -f "$ST/jetsam.pid" ] && kill "$(cat "$ST/jetsam.pid")" 2>/dev/null
 rm -f "$ST/jetsam.pid"
+[ -f "$ST/mdns.pid" ] && kill "$(cat "$ST/mdns.pid")" 2>/dev/null
+rm -f "$ST/mdns.pid" "$ST/mDNSResponder"
 [ "${A64_STOP_ONLY:-0}" = 1 ] && exit 0  # Speed 10: stop this device's container only
 # the marks of the last boot (Darling pids are reused)
 rm -rf "$DPREFIX/private/var/run/x86code-suspended"
@@ -320,8 +329,18 @@ H="/Volumes/SystemRoot$X/host/simhost/simhost"
 # Payload for `darling shell sh -c` — raw text so $ENVS quote tokens are only parsed by that inner sh.
 A64_TIMEOUT=$([ "${A64_KEEP:-0}" = 1 ] && echo 86400 || echo $((SECS + 5)))
 CMDFILE=$ST/simhost.cmd
+# Speed 26: DNS. On a Mac the simulator's libsystem_dnssd talks to the host's mDNSResponder at /var/run/mDNSResponder;
+# rundev.sh (x86_64) runs linux/mdnsd/mdnsresponder.py for that, this boot had none: every lookup failed with -1003
+# (mobileassetd could not fetch Siri's assets, News/Spotlight/Settings search had no network). Own server per boot
+# ($ST/mDNSResponder), linked into this container's /var/run. X86CODE_MDNS=0: none.
+MDNS_LINK=
+if [ "${X86CODE_MDNS:-1}" != 0 ]; then
+	setsid python3 -I "$X/linux/mdnsd/mdnsresponder.py" "$ST/mDNSResponder" > "$ST/mdnsresponder.log" 2>&1 < /dev/null &
+	echo $! > "$ST/mdns.pid"
+	MDNS_LINK="ln -sf '/Volumes/SystemRoot$ST/mDNSResponder' /var/run/mDNSResponder;"
+fi
 cat > "$CMDFILE" <<CMDEOF
-exec "$H" /usr/bin/env $ENVS "$R/sbin/launchd_sim" "/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist"
+$MDNS_LINK exec "$H" /usr/bin/env $ENVS "$R/sbin/launchd_sim" "/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist"
 CMDEOF
 
 # Speed 14: fixed placement of non-cache Mach-Os (libarm64jit; mkplacement.py): the jitcache dir gets the committed

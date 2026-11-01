@@ -8,6 +8,7 @@
 #include "a64.h"
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace a64 {
 
@@ -128,7 +129,30 @@ bool op2(GuestThread &t, int U, int a, int opc, uint16_t x, uint16_t &r) {
 }  // namespace
 
 // Executes the FP16 SIMD instruction insn (at pc) on t's guest state. False if it isn't one we know.
+// FJCVTZS Wd, Dn (FEAT_JSCVT, Speed 26): JavaScript ToInt32 of a double (round toward zero, modulo 2^32), PSTATE.Z
+// set when the conversion is exact (no fraction, in int32 range, not NaN/inf), N C V cleared. JavaScriptCore emits it
+// (WebContent aborted on 0x1e7e000a in JSC). dynarmic doesn't decode it.
+static bool fjcvtzs(GuestThread &t, u32 insn) {
+    if ((insn & 0xFFFFFC00u) != 0x1E7E0000u) return false;
+    auto &j = *t.jit;
+    const int Rd = insn & 31, Rn = (insn >> 5) & 31;
+    double v; const u64 bits = j.GetVector(Rn)[0]; memcpy(&v, &bits, 8);
+    u32 r = 0; bool exact = false;
+    if (std::isfinite(v)) {
+        const double tz = std::trunc(v);
+        // trunc(v) mod 2^32 exactly: |tz| < 2^1024; fmod is exact
+        double m = std::fmod(tz, 4294967296.0);
+        if (m < 0) m += 4294967296.0;
+        r = (u32)(u64)m;
+        exact = tz == v && tz >= -2147483648.0 && tz <= 2147483647.0 && !(v == 0 && std::signbit(v));
+    }
+    if (Rd != 31) j.SetRegister(Rd, r);
+    j.SetPstate((j.GetPstate() & 0x0FFFFFFFu) | (exact ? 0x40000000u : 0));
+    return true;
+}
+
 bool fp16_interpret(GuestThread &t, u32 insn) {
+    if (fjcvtzs(t, insn)) return true;
     auto &j = *t.jit;
     const int Rd = insn & 31, Rn = (insn >> 5) & 31, Rm = (insn >> 16) & 31;
     const int Q = (insn >> 30) & 1, U = (insn >> 29) & 1;
