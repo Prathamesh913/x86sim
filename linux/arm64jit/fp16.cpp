@@ -151,8 +151,18 @@ static bool fjcvtzs(GuestThread &t, u32 insn) {
     return true;
 }
 
+// MRS Xt, CNTVCT_EL0 / CNTPCTSS_EL0 / CNTVCTSS_EL0 (Speed 26): dynarmic translates them now (as CNTPCT_EL0); blocks
+// translated before (an AOT image built with the same codegen) still end in the fallback here: same value.
+static bool mrs_counter(GuestThread &t, u32 insn) {
+    const u32 enc = insn & 0xFFFFFFE0u;
+    if (enc != 0xD53BE040u && enc != 0xD53BE0A0u && enc != 0xD53BE0C0u) return false;
+    const int Rt = insn & 31;
+    if (Rt != 31) t.jit->SetRegister(Rt, t.GetCNTPCT());
+    return true;
+}
+
 bool fp16_interpret(GuestThread &t, u32 insn) {
-    if (fjcvtzs(t, insn)) return true;
+    if (fjcvtzs(t, insn) || mrs_counter(t, insn)) return true;
     auto &j = *t.jit;
     const int Rd = insn & 31, Rn = (insn >> 5) & 31, Rm = (insn >> 16) & 31;
     const int Q = (insn >> 30) & 1, U = (insn >> 29) & 1;
