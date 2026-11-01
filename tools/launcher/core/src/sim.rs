@@ -2,7 +2,7 @@
 //! status (booted, home reached, CPU, PSS) read from /proc. Processes are found by exact checks (the darlingserver
 //! of the sim's prefix and its descendants), never by pattern kills.
 use crate::aot::{repo_root, scratch};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -124,39 +124,17 @@ pub fn booted_device() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-fn boot_script() -> PathBuf {
-    repo_root().join("cli/libexec/arm64/boot-a64.sh")
-}
-
-/// Boots a device; boot-a64.sh takes its iOS version (runtime) and that runtime's cache dir from the device
+/// Boots a device in its own prefix / state dir / ring (crate::instance); the default device keeps the default dirs
 pub fn start(device: &Path) -> Result<u32> {
-    let log = std::fs::File::create(scratch().join("launcher-boot.log"))?;
-    let mut cmd = Command::new("setsid");
-    cmd.arg(boot_script())
-        .current_dir(repo_root())
-        .env("A64_KEEP", "1")
-        .env("X86CODE_METAL", "all")
-        .env("SECS", "20")
-        .env("A64_DEVICE", device)
-        .env_remove("A64_RUNTIME")
-        .env_remove("X86CODE_A64_JITCACHE_DIR")
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    Ok(cmd.spawn().context("starting boot-a64.sh")?.id())
+    let inst = crate::instance::load(device);
+    let others = crate::instance::Monitor::default().poll(&crate::instance::list());
+    crate::instance::start(&inst, &others)
 }
 
 pub fn stop(device: &Path) -> Result<()> {
-    let st = Command::new(boot_script())
-        .current_dir(repo_root())
-        .env("A64_STOP_ONLY", "1")
-        .env("A64_DEVICE", device)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    anyhow::ensure!(st.success(), "boot-a64.sh A64_STOP_ONLY=1 failed");
-    Ok(())
+    let inst = crate::instance::load(device);
+    let sts = crate::instance::Monitor::default().poll(&[inst.clone()]);
+    crate::instance::stop(&inst, sts.first())
 }
 
 pub fn simview_running() -> bool {
