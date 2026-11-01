@@ -26,6 +26,8 @@ Simulator
   device models|list   arm64 phone models / devices (var/device-a64*)
   device create --model "iPhone 17 Pro" [name]
                        new arm64 device of that model (var/device-a64-<name>); boot it with A64_DEVICE=<dir>
+  runtime list|url B|fetch B
+                       iOS 27.x simulator runtimes from Apple (no Mac / Apple ID): fetch downloads build B into runtimes/
   mkdevice [job ...]   only (re)write the device's launchd configuration (mksimdevice.py)
   run <binary> [args]  run one iOS-simulator binary under Darling with dyld_sim (run-sim.sh)
   logs [label]         list the device's job logs, or tail one (<device>/data/var/log/<label>.log)
@@ -254,6 +256,7 @@ case $c in
 	wait) exec python3 "$L/framecheck.py" wait "${1:-home}" "${2:-300}" ;;
 	mkdevice) exec python3 "$L/mksimdevice.py" "$X86SIM_DEVICE" "$@" ;;
 	device) exec python3 "$L/arm64/device-a64.py" "$@" ;;
+	runtime) exec python3 "$L/arm64/runtime-fetch.py" "$@" ;;
 	run) exec "$L/run-sim.sh" "$@" ;;
 	logs) cmd_logs "$@" ;;
 	view) cmd_view "$@" ;;

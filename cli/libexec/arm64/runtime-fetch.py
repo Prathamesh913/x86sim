@@ -14,6 +14,7 @@ Unpacking: `ipsw fw aea -b KEY` decrypts the archive to the cryptex disk image, 
 (FINDINGS: Linux-side extraction). Runtimes are never committed (runtimes/ is gitignored).
 """
 import base64
+import hashlib
 import json
 import os
 import plistlib
@@ -74,13 +75,33 @@ def fetch(build):
     aar = os.path.join(dl, "runtime.aar")
     url = a["__BaseURL"] + a["__RelativePath"]
     print(f"iOS {version} ({build}): {a['_DownloadSize'] / 1e9:.1f} GB from {url}", flush=True)
-    subprocess.run(["curl", "-f", "-C", "-", "-o", aar, url], check=True)
+    if not (os.path.exists(aar) and os.path.getsize(aar) == a["_DownloadSize"]):
+        subprocess.run(["curl", "-f", "-C", "-", "-o", aar, url], check=True)
     if os.path.getsize(aar) != a["_DownloadSize"]:
         sys.exit("runtime-fetch: size mismatch")
+    # Apple's measurement of the download (SHA-1, catalogue _Measurement)
+    want = a.get("_Measurement")
+    if isinstance(want, str):
+        want = base64.b64decode(want)
+    if a.get("_MeasurementAlgorithm") == "SHA-1" and want:
+        h = hashlib.sha1()
+        with open(aar, "rb") as f:
+            for b in iter(lambda: f.read(1 << 24), b""):
+                h.update(b)
+        if h.digest() != want:
+            # not yet checked which bytes Apple measures (the .aar or its payload): warn, 7z/aaextract still fail loudly
+            print("runtime-fetch: WARNING: SHA-1 of the download differs from Apple's _Measurement", file=sys.stderr)
     out = os.path.join(dst, "decrypted")
     os.makedirs(out, exist_ok=True)
     subprocess.run(["ipsw", "fw", "aea", aar, "-b", a["ArchiveDecryptionKey"], "-o", out], check=True)
-    dmgs = [os.path.join(dp, f) for dp, _, fs in os.walk(out) for f in fs if f.endswith(".dmg")]
+    # the decrypted AEA is an Apple Archive (pbzx inside) holding AssetData/Restore/<n>.dmg: aaextract.py
+    for f in list(os.listdir(out)):
+        if not f.endswith(".dmg") and open(os.path.join(out, f), "rb").read(4) == b"AA01":
+            subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "aaextract.py"),
+                            os.path.join(out, f), "extract", os.path.join(dst, "bundle")], check=True, stdout=subprocess.DEVNULL)
+            os.unlink(os.path.join(out, f))
+    dmgs = [os.path.join(dp, f) for d in (out, os.path.join(dst, "bundle")) for dp, _, fs in os.walk(d) for f in fs
+            if f.endswith(".dmg")]
     if not dmgs:
         sys.exit(f"runtime-fetch: no disk image in {out}")
     dmg = max(dmgs, key=os.path.getsize)
@@ -93,6 +114,12 @@ def fetch(build):
     lw = os.path.join(dst, rr, "usr/lib/swift/libswiftWebKit.dylib")
     if not os.path.lexists(lw):
         os.symlink("../../../System/Library/Frameworks/WebKit.framework/WebKit", lw)
+    os.unlink(aar)  # the image is kept (bundle/AssetData/Restore/*.dmg), the 8 GB download and decrypt are not
+    for d in (out, dl):
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
     link = os.path.join(dst, "RuntimeRoot")
     if not os.path.lexists(link):
         os.symlink(rr, link)
