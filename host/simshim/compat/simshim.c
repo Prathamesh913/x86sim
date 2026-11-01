@@ -139,10 +139,60 @@ typedef uint64_t os_state_handle_t;
 extern os_state_handle_t os_state_add_handler(dispatch_queue_t queue, void* block);
 extern void os_state_remove_handler(os_state_handle_t handle);
 #define SHIM_STATE_HANDLE_BASE 0x7a000000ULL
+// x86Code (Speed 24, diagnostics): X86CODE_STATEDUMP=<dir> in a job's environment (X86SIM_JOBENV) keeps its
+// state-capture handlers (what sysdiagnose collects: RunningBoard's assertions and process states, ...); creating
+// <dir>/req runs them all (every 5 s while it exists) and writes each one's title and data (a binary plist holding a
+// description string; `strings` reads it) to <dir>/<pid>.<n>. <dir> must not be in the prefix overlay (the guest
+// caches the miss): use a guest path into the device data, e.g. /Volumes/SystemRoot<data>/tmp/x86code-state.
+#include <Block.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+struct shim_state_hints { uint32_t version; const char* requestor; uint32_t api; uint32_t reason; };
+struct shim_state_data { uint32_t type; uint32_t size; char decoder[96]; char title[64]; uint8_t data[]; };
+typedef struct shim_state_data* (^shim_state_block)(struct shim_state_hints*);
+static struct { dispatch_queue_t q; shim_state_block b; } shim_state[64];
+static int shim_nstate;
+static void shim_state_run(void* ctx)
+{
+	char req[512];
+	snprintf(req, sizeof req, "%s/req", (const char*) ctx);
+	if (access(req, F_OK))
+		return;
+	for (int i = 0; i < shim_nstate; i++)
+		dispatch_async(shim_state[i].q ? shim_state[i].q : dispatch_get_global_queue(0, 0), ^{
+			struct shim_state_hints h = { 1, "x86code", 1, 1 };
+			struct shim_state_data* d = shim_state[i].b(&h);
+			if (!d)
+				return;
+			char p[512];
+			snprintf(p, sizeof p, "%s/%d.%d", (const char*) ctx, getpid(), i);
+			int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (fd >= 0) { dprintf(fd, "%.64s\n", d->title); write(fd, d->data, d->size); close(fd); }
+			free(d);
+		});
+}
+static void shim_state_keep(dispatch_queue_t queue, void* block)
+{
+	static dispatch_source_t timer;
+	const char* dir = getenv("X86CODE_STATEDUMP");
+	if (!dir || shim_nstate >= 64)
+		return;
+	shim_state[shim_nstate].q = queue;
+	shim_state[shim_nstate].b = Block_copy((shim_state_block) block);
+	shim_nstate++;
+	if (!timer) {
+		timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(0, 0));
+		dispatch_set_context(timer, strdup(dir));
+		dispatch_source_set_event_handler_f(timer, shim_state_run);
+		dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC);
+		dispatch_resume(timer);
+	}
+}
 static os_state_handle_t shim_os_state_add_handler(dispatch_queue_t queue, void* block)
 {
 	static uint64_t next = SHIM_STATE_HANDLE_BASE;
 	os_state_handle_t h = os_state_add_handler(queue, block);
+	shim_state_keep(queue, block);
 	return h ? h : __atomic_add_fetch(&next, 1, __ATOMIC_RELAXED);
 }
 DYLD_INTERPOSE(shim_os_state_add_handler, os_state_add_handler)
@@ -319,6 +369,86 @@ __attribute__((constructor)) static void shim_owner_init(void)
 {
 	if (!strcmp(getprogname(), "iconservicesagent"))
 		_dyld_register_func_for_add_image(shim_owner_added);
+}
+
+// x86Code (arm64, Speed 24): the simulator build of RunningBoard never suspends an app whose Info.plist lists the
+// "audio" background mode (-[RBProcess _lock_suspend]: "Ignoring suspend because this process is simulated and has
+// background audio capabilities"; a device suspends it unless it holds a running assertion, e.g. while it plays).
+// Maps and Health stayed running in the background after every use (~1 GB each; jetsam.py only reclaims suspended
+// processes). _lock_suspend is objc_direct (not swizzlable): -supportsBackgroundAudio answers NO when called from
+// that one site, found by its log string in RunningBoard's __TEXT (the bl right before the cbz w0 that skips the
+// message), so it holds for any runtime's build. The audio domain checks (RBPropertyDomainRestriction) see the
+// real value.
+#include <mach-o/getsect.h>
+static uintptr_t shim_rb_site;   // return address of _lock_suspend's [props supportsBackgroundAudio]
+static IMP shim_rb_audio_orig[2];
+static BOOL shim_rb_audio(id self, SEL sel, int k, uintptr_t ret)
+{
+	BOOL r = ((BOOL (*)(id, SEL)) shim_rb_audio_orig[k])(self, sel);
+	if (ret != shim_rb_site)
+		return r;
+	static int n;
+	if (r && n++ < 20)
+		write(2, "simshim: RunningBoard suspends a background-audio app\n", 54);
+	return NO;
+}
+__attribute__((noinline)) static BOOL shim_rb_audio0(id self, SEL sel) { return shim_rb_audio(self, sel, 0, (uintptr_t) __builtin_return_address(0)); }
+__attribute__((noinline)) static BOOL shim_rb_audio1(id self, SEL sel) { return shim_rb_audio(self, sel, 1, (uintptr_t) __builtin_return_address(0)); }
+static uintptr_t shim_rb_find_site(const struct mach_header* mh)
+{
+	unsigned long size = 0;
+	const uint8_t* text = getsegmentdata((const struct mach_header_64*) mh, "__TEXT", &size);
+	static const char msg[] = "Ignoring suspend because this process is simulated and has background audio";
+	const uint8_t* str = text ? memmem(text, size, msg, sizeof msg - 1) : NULL;
+	if (!str)
+		return 0;
+	while (str > text && str[-1])
+		str--;   // the format string starts with "%{public}@ "
+	const uint32_t* code = (const uint32_t*) text;
+	for (unsigned long i = 1; i < size / 4; i++) {
+		uint32_t add = code[i], adrp = code[i - 1];
+		if ((add & 0xffc00000) != 0x91000000 || (adrp & 0x9f000000) != 0x90000000)
+			continue;
+		int64_t pg = ((int64_t) ((((adrp >> 5) & 0x7ffff) << 2) | ((adrp >> 29) & 3)) << 43) >> 31;
+		uintptr_t target = (((uintptr_t) &code[i - 1]) & ~(uintptr_t) 0xfff) + pg + ((add >> 10) & 0xfff);
+		if (target != (uintptr_t) str)
+			continue;
+		// back to "bl objc_msgSend; cbz w0" (the log-enabled checks are "bl; bl _OUTLINED; cbz w0")
+		for (unsigned long j = i - 1; j > 1 && j + 24 > i; j--)
+			if ((code[j] & 0xff00001f) == 0x34000000 && (code[j - 1] & 0xfc000000) == 0x94000000 &&
+			    (code[j - 2] & 0xfc000000) != 0x94000000)
+				return (uintptr_t) &code[j];
+	}
+	return 0;
+}
+static void shim_rb_added(const struct mach_header* mh, intptr_t slide)
+{
+	Dl_info di;
+	if (shim_rb_site || !dladdr(mh, &di) || !strstr(di.dli_fname, "RunningBoard.framework/RunningBoard"))
+		return;
+	shim_rb_site = shim_rb_find_site(mh);
+	if (!shim_rb_site) {
+		write(2, "simshim: RunningBoard suspend site not found\n", 45);
+		return;
+	}
+	static const char* cls[2] = { "RBBundleProperties", "RBLSBundleProperties" };
+	static const IMP imp[2] = { (IMP) shim_rb_audio0, (IMP) shim_rb_audio1 };
+	SEL sel = sel_registerName("supportsBackgroundAudio");
+	for (int k = 0; k < 2; k++) {
+		Class c = objc_getClass(cls[k]);
+		unsigned n = 0;
+		Method* ms = c ? class_copyMethodList(c, &n) : NULL;
+		for (unsigned i = 0; i < n; i++)
+			if (method_getName(ms[i]) == sel)
+				shim_rb_audio_orig[k] = method_setImplementation(ms[i], imp[k]);
+		free(ms);
+	}
+	char b[96]; int l = snprintf(b, sizeof b, "simshim: RunningBoard suspend site +0x%lx\n", (unsigned long) (shim_rb_site - (uintptr_t) mh)); write(2, b, l);
+}
+__attribute__((constructor)) static void shim_rb_init(void)
+{
+	if (!strcmp(getprogname(), "runningboardd"))
+		_dyld_register_func_for_add_image(shim_rb_added);
 }
 #endif
 
