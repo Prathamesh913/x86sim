@@ -15,6 +15,8 @@ pub struct Hot {
     /// They rank first in their chunk (LIVE_RANK added to their profile count) so a slot that is too small drops
     /// colder training blocks instead.
     pub live: Vec<u64>,
+    /// Speed 33: distinct sampled PCs (.cnt files) that weighed into the counts
+    pub sampled: usize,
 }
 
 pub const LIVE_RANK: u32 = 1 << 20;
@@ -87,8 +89,45 @@ fn live_descs(dirs: &[PathBuf], uuid: &str) -> Vec<u64> {
     v
 }
 
+/// Speed 33: sampled execution counts (libarm64jit X86CODE_A64_COUNT=1: `<uuid>-<build>.<exe>.cnt`, "A64CNT1\0",
+/// u64 n, n x {u64 pc, u32 hits, u32 0}), summed by guest PC over every file.
+fn sample_counts(dirs: &[PathBuf], uuid: &str) -> HashMap<u64, u64> {
+    let mut m: HashMap<u64, u64> = HashMap::new();
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if !(n.starts_with(uuid) && n.ends_with(".cnt")) {
+                continue;
+            }
+            let Ok(b) = std::fs::read(e.path()) else { continue };
+            if b.len() < 16 || &b[..8] != b"A64CNT1\0" {
+                continue;
+            }
+            for r in b[16..].chunks_exact(16) {
+                let pc = u64::from_le_bytes(r[..8].try_into().unwrap());
+                *m.entry(pc).or_default() += u32::from_le_bytes(r[8..12].try_into().unwrap()) as u64;
+            }
+        }
+    }
+    m
+}
+
+/// Weight of one sampled hit next to one training profile: a block seen in a sample at all ranks above every block
+/// that was merely translated in more profiles (profile counts stay far below this).
+pub const SAMPLE_W: u32 = 1 << 10;
+
 pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>) -> Result<Hot> {
     let mut hot = load_bins(dirs, uuid, cache_file, until)?;
+    let cnt = sample_counts(dirs, uuid);
+    if !cnt.is_empty() {
+        for (d, c) in hot.blocks.iter_mut() {
+            if let Some(&h) = cnt.get(&(*d & PC_MASK)) {
+                *c = c.saturating_add((h.min(((LIVE_RANK - 1) / SAMPLE_W) as u64) as u32) * SAMPLE_W).min(LIVE_RANK - 1);
+            }
+        }
+        hot.sampled = cnt.len();
+    }
     hot.live = live_descs(dirs, uuid);
     if !hot.live.is_empty() {
         let mut m: HashMap<u64, u32> = hot.blocks.drain(..).collect();
@@ -114,7 +153,7 @@ fn load_bins(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>
                         (u64::from_le_bytes(b[o..o + 8].try_into().unwrap()), u32::from_le_bytes(b[o + 8..o + 12].try_into().unwrap()))
                     })
                     .collect();
-                return Ok(Hot { blocks, files: files.len(), live: vec![] });
+                return Ok(Hot { blocks, files: files.len(), live: vec![], sampled: 0 });
             }
         }
     }
@@ -139,7 +178,7 @@ fn load_bins(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>
         std::fs::create_dir_all(p)?;
     }
     std::fs::write(cache_file, out)?;
-    Ok(Hot { blocks, files: files.len(), live: vec![] })
+    Ok(Hot { blocks, files: files.len(), live: vec![], sampled: 0 })
 }
 
 impl Hot {

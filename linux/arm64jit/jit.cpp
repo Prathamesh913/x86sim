@@ -79,16 +79,77 @@ static void destroy_guest_thread(void *p) {
 static std::mutex g_gs_mu;
 static std::vector<GuestThread *> g_gs_threads;
 static int g_gs_all;  // 1: threads in guest code; 2: every thread (also blocked in a thunk: lock holders)
+// Speed 33: sampled execution counts for AOT training (X86CODE_A64_COUNT=1). A host thread looks at every guest thread
+// of the process every 4 ms; one running guest code (not in a native thunk) adds a hit to its current block PC. The
+// totals go to <key>.<exe>.cnt next to the jitcache .bin every 20 s ("A64CNT1\0", u64 n, n x {u64 pc, u32 hits,
+// u32 0}; merged with what the file held when this process started). tools/launcher's hot set weighs blocks by these
+// hits (hot::load), so the image keeps the truly hot code first and hot_split_pct can separate hot from cold.
+static bool cnt_on() {
+    static const bool on = [] { const char *e = getenv("X86CODE_A64_COUNT"); return e && atoi(e) == 1; }();
+    return on;
+}
+std::string jitcache_path();
+static void count_start() {
+    if (!cnt_on()) return;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        sigset_t all, old;
+        sigfillset(&all);
+        pthread_sigmask(SIG_SETMASK, &all, &old);
+        std::thread([] {
+            g_non_darling_thread = true;
+            std::unordered_map<u64, u32> mine, base;
+            std::string path;
+            bool loaded = false, dirty = false;
+            u64 ticks = 0;
+            for (;;) {
+                usleep(4000);
+                {
+                    std::lock_guard l(g_gs_mu);
+                    for (GuestThread *c : g_gs_threads)
+                        if (c->jit && c->in_thunk < 0) { const u64 pc = c->jit->GetPC(); if (pc) { mine[pc]++; dirty = true; } }
+                }
+                if (++ticks % 5000 || !dirty) continue;
+                if (path.empty()) {
+                    const std::string b = jitcache_path();
+                    if (b.size() < 5) continue;
+                    path = b.substr(0, b.size() - 4) + ".cnt";
+                }
+                if (!loaded) {
+                    loaded = true;
+                    if (FILE *f = fopen(path.c_str(), "rb")) {
+                        char h[16]; u64 n = 0;
+                        if (fread(h, 1, 16, f) == 16 && !memcmp(h, "A64CNT1", 8) && (memcpy(&n, h + 8, 8), n < (1u << 26)))
+                            for (u64 i = 0; i < n; i++) { u64 e[2]; if (fread(e, 1, 16, f) != 16) break; base[e[0]] += (u32)e[1]; }
+                        fclose(f);
+                    }
+                }
+                dirty = false;
+                std::unordered_map<u64, u32> all = base;
+                for (auto &[pc, h] : mine) all[pc] += h;
+                const std::string tmp = path + ".tmp." + std::to_string(getpid());
+                FILE *f = fopen(tmp.c_str(), "wb");
+                if (!f) continue;
+                char h[16]{}; memcpy(h, "A64CNT1", 8); const u64 n = all.size(); memcpy(h + 8, &n, 8);
+                fwrite(h, 1, 16, f);
+                for (auto &[pc, k] : all) { u64 e[2]{pc, k}; fwrite(e, 1, 16, f); }
+                if (fclose(f) != 0 || rename(tmp.c_str(), path.c_str()) != 0) unlink(tmp.c_str());
+            }
+        }).detach();
+        pthread_sigmask(SIG_SETMASK, &old, nullptr);
+    });
+}
 static void gsample_register(GuestThread *t) {
-    if (!g_gs_all) return;
+    if (!g_gs_all && !cnt_on()) return;
     std::lock_guard l(g_gs_mu); g_gs_threads.push_back(t);
 }
 void gsample_forget(GuestThread *t) {
-    if (!g_gs_all) return;
+    if (!g_gs_all && !cnt_on()) return;
     std::lock_guard l(g_gs_mu);
     g_gs_threads.erase(std::remove(g_gs_threads.begin(), g_gs_threads.end(), t), g_gs_threads.end());
 }
 void gsample_start(GuestThread *t) {
+    if (cnt_on()) { gsample_register(t); count_start(); }
     const char *want = getenv("X86CODE_A64_GSAMPLE"), *exe = getenv("X86CODE_A64_EXE");
     if (!want || !exe) return;
     const char *b = strrchr(exe, '/');
@@ -97,7 +158,7 @@ void gsample_start(GuestThread *t) {
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &old);
     g_gs_all = getenv("X86CODE_A64_GSAMPLE_ALL") ? atoi(getenv("X86CODE_A64_GSAMPLE_ALL")) : 0;
-    if (g_gs_all) gsample_register(t);
+    if (g_gs_all && !cnt_on()) gsample_register(t);
     std::thread([t]() mutable {
         g_non_darling_thread = true;
         auto rd = [](u64 a) -> u64 {
@@ -110,7 +171,8 @@ void gsample_start(GuestThread *t) {
         u32 n = 0;
         const u32 period = getenv("X86CODE_A64_GSAMPLE_PERIOD") ? atoi(getenv("X86CODE_A64_GSAMPLE_PERIOD")) : 2000;
         const char *sk = getenv("X86CODE_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
-        const u64 skip = sk ? strtoull(sk, nullptr, 16) : 0;
+        const bool skip_stubs = sk && !strcmp(sk, "stubs");  // Speed 33: every thread parked in the stub area
+        const u64 skip = sk && !skip_stubs ? strtoull(sk, nullptr, 16) : 0;
         const bool trace = getenv("X86CODE_A64_GSAMPLE_TRACE") != nullptr;
         const int depth = getenv("X86CODE_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86CODE_A64_GSAMPLE_DEPTH")) : 6;
         // logf skips the per-process log on this (non-Darling) thread: X86CODE_A64_GSAMPLE_OUT=<Linux path> writes
@@ -134,7 +196,9 @@ void gsample_start(GuestThread *t) {
                 const size_t m = g_gs_threads.size();
                 for (size_t k = 0, r = m ? (size_t)random() % m : 0; k < m && !pick; k++) {
                     GuestThread *c = g_gs_threads[(r + k) % m];
-                    if (c->jit && (c->in_thunk < 0 || g_gs_all == 2)) pick = c;
+                    // Speed 33: X86CODE_A64_GSAMPLE_SKIP also passes over a thread parked at that guest PC
+                    if (c->jit && (c->in_thunk < 0 || g_gs_all == 2) && !(skip && c->jit->GetPC() == skip) &&
+                        !(skip_stubs && c->jit->GetPC() >= 0x7f0000000000ull)) pick = c;
                 }
                 if (!pick) continue;
                 t = pick;
@@ -162,7 +226,7 @@ void gsample_start(GuestThread *t) {
                     else o += snprintf(line + o, sizeof line - o > 0 ? sizeof line - o : 0, " %#lx", (unsigned long)a);
                     if (o >= (int)sizeof line) break;
                 }
-                if (out) { fputs(line, out); fputc('\n', out); }
+                if (out) { fputs(line, out); fputc('\n', out); if (n % 200 == 0) fflush(out); }  // Speed 33: survives a kill
             }
             counts[st]++;
             for (size_t i = 0; i < st.size(); i++)
@@ -1026,5 +1090,14 @@ void agout_dump(u32 attr) {
         }
     }
     logf("agout dump: %d events for attr %#x in the last %llu", shown, attr, (unsigned long long)(n - lo));
+    // Speed 33: the same node now (at the abort), next to the after-set state above: flags word +4, value offset +8,
+    // the value's first words, and the table base (a remap moves base: then the node read here is the new copy)
+    u32 w[8];
+    agout_node(attr, w);
+    const u64 base = GuestThread::rd<u64>(kAgTableVar);
+    u64 v0 = 0, v1 = 0;
+    if (base && w[2]) { v0 = GuestThread::rd<u64>(base + w[2]); v1 = GuestThread::rd<u64>(base + w[2] + 8); }
+    logf("agout dump: node at abort: %08x %08x %08x %08x %08x %08x %08x %08x (flags word +4 %#x, value offset +8 %#x), value %016lx %016lx, table %#lx",
+         w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[1], w[2], (unsigned long)v0, (unsigned long)v1, (unsigned long)base);
 }
 }  // namespace a64

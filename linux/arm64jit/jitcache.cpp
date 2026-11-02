@@ -290,7 +290,8 @@ std::atomic<u64> g_saved_blocks{0};
 // (header like an A64JC06 file, descriptor count at +40, 24-byte entries from +160, no code). tools/launcher's hot set
 // reads them like training .bins, so `x86code-aot update` moves those blocks into their library's chunk.
 static bool live_env() {
-    static const bool on = [] { const char *e = getenv("X86CODE_A64_AOT_LIVE"); return e && atoi(e) == 1; }();
+    // Speed 33: default on (=0 off) now that feedback rebuilds stay in their slots (x86code-aot)
+    static const bool on = [] { const char *e = getenv("X86CODE_A64_AOT_LIVE"); return !e || atoi(e) != 0; }();
     return on;
 }
 static bool live_on() {
@@ -614,5 +615,6 @@ void jitcache_save_if_shared() {
 }
 
 const std::string &jitcache_cache_file() { return g_cache_file; }
+std::string jitcache_path() { return g_path; }
 
 }  // namespace a64

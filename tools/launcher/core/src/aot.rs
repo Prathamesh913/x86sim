@@ -118,6 +118,10 @@ pub struct ChunkRec {
     pub secs: f64,
     pub pool: u64,
     pub built_at: u64,
+    /// Speed 33: .live blocks in this chunk's ranges when it was built (bounds feedback rebuilds: only new live
+    /// blocks since then make it stale, so a chunk whose slot cannot hold them all is not rebuilt on every update)
+    #[serde(default)]
+    pub live_seen: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -496,7 +500,7 @@ fn chunk_state(p: &Paths, m: &Manifest, c: &PlanChunk) -> (String, Vec<String>) 
         // rebuild it into its slot (they rank first, see hot::LIVE_RANK). Other training growth does not make a
         // chunk stale (that would grow the image past what each process needs free for its own code).
         let live: Vec<u64> = c.hot.iter().filter(|h| h.1 >= hot::LIVE_RANK).map(|h| h.0).collect();
-        if live.len() >= 32 {
+        if live.len() as u64 >= r.live_seen + 32 {
             if let Some(f) = r.file.as_ref() {
                 let have: HashSet<u64> = hot::read_descs(&p.chunks().join(f)).unwrap_or_default().into_iter().collect();
                 let miss = live.iter().filter(|d| !have.contains(d)).count();
@@ -641,24 +645,100 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work)?;
 
-    // slots: keep assigned ones (incremental), give new chunks room after the last slot
-    let mut end = man.chunks.values().map(|r| r.slot_off + r.slot_size).max().unwrap_or(0);
+    // slots: keep assigned ones (incremental). Speed 33: a chunk whose key did not change (only training feedback,
+    // e.g. .live blocks) is rebuilt in its own slot even when it was truncated (hottest first, so the slot drops the
+    // coldest blocks) instead of being re-slotted at the end: feedback rebuilds no longer grow the slab. New chunks
+    // go into the first free gap (slots of dropped / re-keyed chunks), then after the last slot; when the slab is
+    // full the coldest library chunks (fewest profile hits per slot byte) are evicted: their record stays (same
+    // key, no file: up to date, not in the image; their processes translate that library live).
+    let reslot = |c: &PlanChunk, r: Option<&ChunkRec>| -> bool {
+        match r {
+            Some(r) if r.slot_size >= c.want && r.slot_size > 0 => false,
+            Some(r) if r.slot_size > 0 && r.state != "truncated" => false,
+            Some(r) if r.slot_size > 0 && r.key == c.key && c.src.kind != Kind::App => false,
+            _ => true,
+        }
+    };
     let mut slots: HashMap<String, (u64, u64)> = HashMap::new();
-    for c in &todo {
-        if opts.measure {
-            slots.insert(c.src.name.clone(), (0, slab - (8 << 20)));
-            continue;
+    let mut evicted: Vec<String> = vec![];
+    let limit = slab - (8 << 20);
+    if opts.measure {
+        for c in &todo {
+            slots.insert(c.src.name.clone(), (0, limit));
         }
-        if let Some(r) = man.chunks.get(&c.src.name).filter(|r| r.slot_size > 0 && r.state != "truncated" || r.slot_size >= c.want) {
-            slots.insert(c.src.name.clone(), (r.slot_off, r.slot_size));
-        } else {
-            let size = c.want;
-            if end + size > slab - (8 << 20) {
-                bail!("the slab is full ({} MB used): run a full rebuild (x86code-aot build --full) to compact it", end >> 20);
+    } else {
+        let live_names: HashMap<&str, &PlanChunk> = plan.chunks.iter().filter(|c| c.want > 0).map(|c| (c.src.name.as_str(), c)).collect();
+        let todo_names: HashSet<&str> = todo.iter().map(|c| c.src.name.as_str()).collect();
+        // occupied: slots of chunks in this plan that stay (or are rebuilt in place)
+        let mut occ: Vec<(u64, u64, String)> = vec![];
+        for (n, r) in &man.chunks {
+            if r.slot_size == 0 || !live_names.contains_key(n.as_str()) {
+                continue;
             }
-            slots.insert(c.src.name.clone(), (end, size));
-            end += size;
+            let c = live_names[n.as_str()];
+            if todo_names.contains(n.as_str()) {
+                if !reslot(c, Some(r)) {
+                    slots.insert(n.clone(), (r.slot_off, r.slot_size));
+                    occ.push((r.slot_off, r.slot_size, n.clone()));
+                }
+            } else if r.key == c.key && r.file.is_some() {
+                occ.push((r.slot_off, r.slot_size, n.clone()));
+            }
         }
+        let heat = |n: &str, size: u64| -> f64 {
+            let h: u64 = live_names.get(n).map(|c| c.hot.iter().map(|h| h.1 as u64).sum()).unwrap_or(0);
+            h as f64 / size.max(1) as f64
+        };
+        let fit = |occ: &mut Vec<(u64, u64, String)>, size: u64| -> Option<u64> {
+            occ.sort_by_key(|o| o.0);
+            let mut at = 0u64;
+            for o in occ.iter() {
+                if o.0 >= at + size {
+                    return Some(at);
+                }
+                at = at.max(o.0 + o.1);
+            }
+            (at + size <= limit).then_some(at)
+        };
+        let mut need: Vec<&&PlanChunk> = todo.iter().filter(|c| !slots.contains_key(&c.src.name)).collect();
+        need.sort_by_key(|c| std::cmp::Reverse(c.want));
+        for c in need {
+            let size = c.want;
+            loop {
+                if let Some(at) = fit(&mut occ, size) {
+                    slots.insert(c.src.name.clone(), (at, size));
+                    occ.push((at, size, c.src.name.clone()));
+                    break;
+                }
+                // evict the coldest library chunk that is not being built now
+                let victim = occ
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| !todo_names.contains(o.2.as_str()) && live_names.get(o.2.as_str()).is_some_and(|c| c.src.kind != Kind::App))
+                    .min_by(|a, b| heat(&a.1 .2, a.1 .1).total_cmp(&heat(&b.1 .2, b.1 .1)))
+                    .map(|(i, _)| i);
+                let Some(i) = victim else {
+                    bail!("the slab is full ({} MB used) and nothing is left to evict: run a full rebuild (x86code-aot build --full)", limit >> 20);
+                };
+                let (_, _, n) = occ.remove(i);
+                evicted.push(n);
+            }
+        }
+    }
+    if !evicted.is_empty() {
+        let dir = p.aot.join("evicted");
+        std::fs::create_dir_all(&dir)?;
+        for n in &evicted {
+            if let Some(r) = man.chunks.get_mut(n) {
+                if let Some(f) = r.file.take() {
+                    let _ = std::fs::rename(p.chunks().join(&f), dir.join(&f));
+                }
+                r.slot_size = 0;
+                r.state = "evicted".into();
+            }
+        }
+        eprintln!("x86code-aot: slab full, evicted {} coldest chunks: {}", evicted.len(), evicted.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+        write_json(&p.manifest(), &man)?;
     }
 
     // balance the chunks over the workers by slot size
@@ -856,6 +936,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                                     secs: v["secs"].as_f64().unwrap_or(0.0),
                                     pool: v["pool"].as_u64().unwrap_or(0),
                                     built_at: now(),
+                                    live_seen: c.hot.iter().filter(|h| h.1 >= hot::LIVE_RANK).count() as u64,
                                 },
                             );
                             write_json(&p.manifest(), &man)?; // resumable: every finished chunk is recorded

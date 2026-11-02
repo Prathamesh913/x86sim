@@ -32,16 +32,30 @@ install)
 	S=$D/tmp/x86code-install; mkdir -p "$S"; rm -rf "$S/$(basename "$app")"
 	cp -a "$app" "$S/" || exit 1
 	request "install tmp/x86code-install/$(basename "$app")" "^install .*$(basename "$app")" 120 || exit 1
-	# Speed 31 (opt-in, X86SIM_APP_AOT=1; Speed 32: not default, a full slab left placement and image apart): translate the app ahead of time. Its Mach-Os get placement slots
+	# Speed 31 (X86SIM_APP_AOT; Speed 32: opt-in after a full slab left placement and image apart; Speed 33: transactional): translate the app ahead of time. Its Mach-Os get placement slots
 	# (placeapp.py: existing slots never move) and the AOT image gets their chunks (x86code-aot update: the app's
 	# chunks only, plus any library chunk with new .live training). Processes started from now on use them; until
 	# the update has finished, new processes find no image for the new key and translate live.
-	if [ "${X86SIM_APP_AOT:-0}" = 1 ]; then
+	if [ "${X86SIM_APP_AOT:-1}" = 1 ]; then
 		J=$(sed -n 's/^X86CODE_A64_JITCACHE_DIR=//p' "$X86SIM_DEVICE/sim.env")
 		inst=$(ls -td "$D"/Containers/Bundle/Application/*/"$(basename "$app")" 2>/dev/null | head -1)
 		if [ -n "$J" ] && [ -n "$inst" ]; then
-			python3 "$X86SIM_ROOT/cli/libexec/arm64/placeapp.py" "$J" "$inst" &&
-			"$X86SIM_ROOT/tools/launcher/target/release/x86code-aot" --jc "$J" --device "$X86SIM_DEVICE" update | tail -1
+			# Speed 33: transactional. placement.txt is the image key, so it is committed only together with an image
+			# built for it: on any failure the previous placement comes back (the previous image still matches it).
+			# Only this app's chunks are built here (--only: its container UUID); library feedback (.live) rebuilds
+			# stay with the boot-time update, so an install costs its own app only. A full slab evicts the coldest
+			# library chunks instead of failing (x86code-aot).
+			P=$J/placement.txt; B=$J/placement.txt.pre-install
+			cp -p "$P" "$B" 2>/dev/null
+			u=$(basename "$(dirname "$inst")")
+			if python3 "$X86SIM_ROOT/cli/libexec/arm64/placeapp.py" "$J" "$inst" &&
+				{ cmp -s "$P" "$B" || "$X86SIM_ROOT/tools/launcher/target/release/x86code-aot" --jc "$J" --device "$X86SIM_DEVICE" update --only "$u" | tail -1; } &&
+				[ "${PIPESTATUS[0]}" = 0 ]; then
+				:
+			else
+				echo "appinstall: AOT update failed; placement restored, $(basename "$app") runs live" >&2
+				[ -f "$B" ] && cp -p "$B" "$P"
+			fi
 		fi
 	fi ;;
 uninstall)
