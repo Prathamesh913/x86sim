@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 33: install hook made safe (placement restored on failure, --only the app, slab-full evicts coldest chunks, feedback rebuilds in place and bounded) and AOT_LIVE / APP_AOT default after 3 clean gates + tests/apps PASS; feedback update kept code space at 1225 MB (4.16M -> 4.21M blocks). Aged-SpringBoard tap cost (+70-90 ms) is system state, not SpringBoard age: more guest work (snapshot ASTC/vImage, an FPRoundInt fallback loop) and dispatcher re-entries. Sampled execution counts (X86CODE_A64_COUNT=1) feed the hot set. Maps: node unchanged at the abort; set returns 0x98.",
+ "now": "Speed 34: the aged-SpringBoard tap (+90 ms) was UIKit's focus system while simhid's on-demand keyboard stayed attached; simhid detaches it after 30 s idle (aged 540-600 ms vs fresh 530-580). FRINTA/FRINTX/FCVTAS/FCVTAU inline in dynarmic's x64 backend (1.2M-case exact test). Maps 0x98 lead closed (AGGraphSetOutputValue is void). Evicted chunks re-admitted, stale container rows pruned, aged-gate STALL was gate logic. Gate s34i1-3 clean, tests/apps PASS. Split image not done.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -881,6 +881,26 @@
     3.42,
     3.9
    ]
+  }
+ },
+ "speed34": {
+  "date": "2026-11-02",
+  "notes": "docs/notebook/rounds/speed34.md",
+  "gate": "s34i1-3 clean, tests/apps PASS",
+  "defaults": [
+   "inline FRINTA/FRINTX/FCVTAS/FCVTAU",
+   "simhid keyboard idle detach (SIMHID_KB_IDLE_S=30)"
+  ],
+  "opt_in": [
+   "X86CODE_A64_AOT_HUGE_BG",
+   "X86CODE_A64_COUNT",
+   "hot_split_pct",
+   "X86CODE_A64_AGOUT"
+  ],
+  "taps_ms_per_tap": {
+   "fresh": "530-580",
+   "aged_before": "630-720",
+   "aged_after": "540-600"
   }
  }
 }

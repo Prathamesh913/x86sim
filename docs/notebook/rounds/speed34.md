@@ -47,7 +47,9 @@ cleared after use). Scratch: $SCRATCH/s34.
 - After the detach: 540-580 ms, the same as fresh (target "aged within 5% of fresh": met once the keyboard is idle).
 
 ## 3. Count-trained split image
-NUMBERS_SPLIT
+Not done. The time went to sections 1, 2 and the gate reruns. Needed: a training boot with X86CODE_A64_COUNT=1, a
+full build of a hot_split_pct image in a reflinked copy of the jitcache dir (X86CODE_A64_JITCACHE_DIR), and an A/B with
+perfopen.sh + openm.sh. Counting stays opt-in (training only).
 
 ## 4. Maps route: the 0x98 was not a return value
 - `AGGraphSetOutputValue` (AttributeGraph 0x1c952c490) is `void`. Its last path is `bl <inner>; tbz w0, #0, ...; ret`,
@@ -75,7 +77,23 @@ NUMBERS_SPLIT
   SKIPBOOT gate (age-gate1) passed: 0 failed.
 
 ## Gate
-GATE_RESULT
+- s34g1: backboardd crashed in simhid v_close after the first idle detach (NULL target), so the callbacks were made
+  NULL-safe. s34h1, s34h2 clean; s34h3: the switcher check missed its card label in OCR although the switcher shows
+  (screenshot: "Settings" card at y~325, inside the band), so a gate flake, no crash in any log.
+- **s34i1, s34i2, s34i3: 0 failed each, 3 consecutive clean** (cold boots, default config). tests/apps/run.sh
+  **PASS** afterwards. placement.txt then held only the 4 live containers: the pruning ran on the 3 reinstalls.
+- Aged SKIPBOOT gate before the fixes (age-gate1): 0 failed.
+
+## Numbers (after: the post-gate system, 3 gates + tests/apps, keyboard idle-detached)
+| | before | after |
+|---|---|---|
+| warm tap SpringBoard CPU, fresh | 530-550 ms | 530-580 ms |
+| warm tap, aged (after a gate) | 630-720 ms (keyboard attached) | 540-600 ms |
+| warm tap response, aged | 0.49-0.53 s | 0.42-0.48 s |
+| Settings cold / warm (2 rounds) | 3.42 / 3.90 s (Speed 33) | 3.88 / 3.44 s, warm 0.76-0.79 |
+| x86ui cold | 1.82 / 1.73 | 1.76 / 1.65 |
+| Cadence cold | 2.09 | 2.80 / 1.84 |
+| FPRoundInt/Base in SpringBoard | 0.62% of cycles | 0 |
 
 ## Defaults / opt-ins
 - New defaults (gated): inline FRINT/FCVTA (no flag: exact-match tested), simhid keyboard idle detach (SIMHID_KB_IDLE_S).
