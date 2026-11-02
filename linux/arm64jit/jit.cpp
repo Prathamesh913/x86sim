@@ -247,6 +247,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
     std::optional<uint32_t> MemoryReadCode(u64 a) override {
         if (auto w = swiftconf_read_code(a)) return w;
+        if (auto w = dyld_scan_read_code(a)) return w;
         if (auto w = swifttype_read_code(a)) return w;
         if (auto w = swift_timebase_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
@@ -536,6 +537,7 @@ void GuestThread::CallSVC(uint32_t swi) {
     const u64 pc0 = jit->GetPC();  // svc+4
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kSwiftConfSvc) { swiftconf_step(*this); return; }
+    if (swi == kDyldScanSvcA || swi == kDyldScanSvcB) { dyld_scan_step(*this, swi == kDyldScanSvcB); return; }
     if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
         set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));

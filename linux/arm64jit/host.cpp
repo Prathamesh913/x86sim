@@ -438,6 +438,18 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
              (unsigned long)t->x(19), (unsigned long)t->x(20), (unsigned long)t->x(21), (unsigned long)t->x(22),
              (unsigned long long)ctx->uc_mcontext.gregs[REG_R12],
              (unsigned long long)ctx->uc_mcontext.gregs[REG_R13]);
+        // Speed 28: every register and the guest code from the block's PC (JIT-written code is gone with the process)
+        {
+            char b[1024];
+            int n = 0;
+            for (int i = 0; i < 31; i++) n += snprintf(b + n, sizeof b - n, "%sx%d %#lx", i % 8 ? " " : "", i, (unsigned long)t->x(i)),
+                                         (i % 8 == 7 || i == 30) ? (logf("  %s", b), n = 0) : 0;
+            u32 w[48]{};
+            struct iovec lo{w, sizeof w}, re{reinterpret_cast<void*>(t->jit->GetPC() & ~3ull), sizeof w};
+            if (syscall(SYS_process_vm_readv, getpid(), &lo, 1, &re, 1, 0) == (ssize_t)sizeof w)
+                for (int i = 0; i < 48; i += 8)
+                    logf("  code +%#x: %08x %08x %08x %08x %08x %08x %08x %08x", i * 4, w[i], w[i + 1], w[i + 2], w[i + 3], w[i + 4], w[i + 5], w[i + 6], w[i + 7]);
+        }
         // Hash-table probe diagnostics: count at [x20+0xc] and whether bucket math matches x22.
         const u64 x20 = t->x(20), x21 = t->x(21), x0 = t->x(0);
         if (x20) {
@@ -720,6 +732,8 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     for (char **e = envp; *e; e++) {
         std::string s = *e;
         if (!s.compare(0, 17, "X86CODE_A64_DYLD_")) s = s.substr(12);
+        // Speed 28 (debug): X86CODE_A64_GENV_<NAME>=v reaches the guest as NAME=v (launchd jobs only get X86CODE_A64_*)
+        else if (!s.compare(0, 17, "X86CODE_A64_GENV_")) s = s.substr(17);
         else if (!s.compare(0, 16, "X86CODE_A64_EXE=") || !s.compare(0, 16, "X86CODE_A64_JIT=")) continue;
         if (!s.compare(0, 15, "DYLD_ROOT_PATH=")) root = s.substr(15);
         if (!s.compare(0, 22, "DYLD_SHARED_CACHE_DIR=")) cache_dir = s.substr(22);

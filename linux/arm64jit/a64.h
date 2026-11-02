@@ -126,6 +126,9 @@ constexpr u32 kLinuxSvc = 0xfffe;
 constexpr u32 kSwiftConfSvc = 0xfffd;
 // "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
 constexpr u32 kSwiftTypeSvc = 0xfffc;
+// "svc #0xfffb" / "#0xfffa": dyld_sim's loaded-loader scans (dyldsim.cpp), substituted by MemoryReadCode.
+constexpr u32 kDyldScanSvcA = 0xfffb, kDyldScanSvcB = 0xfffa;
+std::optional<u32> dyld_scan_read_code(u64 a);
 extern u64 g_exit_stub;  // "svc #0xffff": LR of every native->guest call
 
 u32 add_thunk(const std::string &name, Handler fn, const void *native = nullptr, int nfixed = 0);
@@ -133,6 +136,8 @@ u64 stub_code(u32 index);              // guest address of thunk i's "svc #i; re
 void emit_stub(uint32_t *at, u32 index);  // writes "svc #index; ret" at a guest address
 void boundary_init();
 void dyld_sim_patches(u64 slide);
+struct GuestThread;
+void dyld_scan_step(GuestThread &t, bool loop_b);
 std::optional<u32> swiftconf_read_code(u64 a);  // swiftconf.cpp: svc substituted at the Swift conformance step
 void swiftconf_step(GuestThread &t);
 std::optional<u32> swifttype_read_code(u64 a);  // swiftscan.cpp: svc at the type-by-name conformance walk

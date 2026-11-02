@@ -108,6 +108,9 @@ bool aot_eligible(const std::string &exe) {
     if (const char *a = getenv("X86CODE_A64_AOT"); a && atoi(a) == 0) return false;
     const char *b = strrchr(exe.c_str(), '/');
     std::string base = b ? b + 1 : exe;
+    // Speed 28 (debug): X86CODE_A64_AOT_EXCLUDE=name,name keeps those processes off the image (bisecting)
+    if (const char *x = getenv("X86CODE_A64_AOT_EXCLUDE"); x && (std::string(",") + x + ",").find("," + base + ",") != std::string::npos)
+        return false;
     if (const char *l = getenv("X86CODE_A64_AOT_PROCS")) {
         std::string list = std::string(",") + l + ",";
         // Speed 7: "all" only where the image can be mapped shared (ASLR off: launchd_sim's children); elsewhere it
@@ -216,6 +219,20 @@ u64 jitcache_image_code_bytes() {
 
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
     if (!g_uuid_ok) return;
+    // Speed 28 (debug): X86CODE_A64_LIVE_ONLY=name,name: no image and no .bin (every block translated live)
+    if (const char *x = getenv("X86CODE_A64_LIVE_ONLY")) {
+        const size_t sl = g_path.rfind('/');
+        const std::string f = g_path.substr(sl + 1);  // <key>.<exe>.bin
+        for (std::string l = std::string(x) + ","; !l.empty();) {
+            const std::string n = l.substr(0, l.find(','));
+            l = l.substr(l.find(',') + 1);
+            if (!n.empty() && f.size() > n.size() + 5 && f.compare(f.size() - n.size() - 5, n.size() + 5, "." + n + ".bin") == 0) {
+                logf("jitcache: live only (X86CODE_A64_LIVE_ONLY)");
+                g_uuid_ok = false;  // no save either
+                return;
+            }
+        }
+    }
     // Default on. X86CODE_A64_JITCACHE=0 disables load/save.
     if (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) return;
     struct stat st;

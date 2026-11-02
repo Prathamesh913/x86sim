@@ -207,6 +207,9 @@ X86CODE_NODT=${X86CODE_NODT-all} X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevic
 # tmpfs over the host's /dev/shm, and two devices' shm objects stay apart. The frame ring is written to
 # /run/user/<uid> (sim.env SIMFB_RING); $SIMFB_RING_LINUX (default /dev/shm/x86code-a64-simfb.ring) links to it.
 export X86CODE_PRIVATE_SHM=1
+# Speed 28: the AOT image's huge-page copy (libarm64jit, /tmp/x86code-a64-img): a boot retries a copy the last one
+# dropped for lack of 2 MB pages.
+rm -f /tmp/x86code-a64-img/*.small 2>/dev/null
 RING=$(sed -n 's#^SIMFB_RING=/Volumes/SystemRoot##p' "$D/sim.env")
 if [ -n "$RING" ] && [ -n "${SIMFB_RING_LINUX:-}" ] && [ "$RING" != "$SIMFB_RING_LINUX" ]; then
 	ln -sfn "$RING" "$SIMFB_RING_LINUX"

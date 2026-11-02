@@ -574,6 +574,28 @@ bool special_needs_native(const std::string &n) {
     for (const char *o : own) if (n == o) return false;
     return true;
 }
+// Speed 28: the simulator's libsystem_platform re-exports the host's, so sys_icache_invalidate / sys_cache_control
+// reached Darling's x86_64 libplatform, where they do nothing: no guest IC IVAU ever ran, and code a process writes
+// at an address it ran before (JavaScriptCore's JIT reusing freed executable memory) kept its stale translation.
+// WebContent then ran old code over new data (NULL reads in JIT code on en.wikipedia.org; with the AOT image JSC is
+// fast enough to tier up and recycle code). They now invalidate the range in the JIT, as an arm64 IC IVAU loop would.
+// X86CODE_A64_ICACHE_NATIVE=0: the old no-op (debug).
+static void icache_invalidate(GuestThread &t, u64 a, u64 n) {
+    static const bool off = getenv("X86CODE_A64_ICACHE_NATIVE") && atoi(getenv("X86CODE_A64_ICACHE_NATIVE")) == 0;
+    if (!n || !t.jit || off) return;
+    const u64 lo = a & ~u64(63), hi = (a + n + 63) & ~u64(63);
+    if (getenv("X86CODE_A64_ICLOG")) logf("sys_icache_invalidate %#lx +%#lx", (unsigned long)a, (unsigned long)n);
+    t.jit->InvalidateCacheRange(lo, hi - lo);
+}
+static void h_icache_invalidate(GuestThread &t, u32) { icache_invalidate(t, t.x(0), t.x(1)); }
+static void h_cache_control(GuestThread &t, u32) {
+    // int sys_cache_control(int function, void *start, size_t len): 1 = kCacheFunctionPrepareForExecution,
+    // 2 = kCacheFunctionFlushDcache (nothing to do here), other functions: ENOTSUP
+    const u64 fn = t.x(0) & 0xffffffffu;
+    if (fn == 1) icache_invalidate(t, t.x(1), t.x(2));
+    t.set_x(0, fn == 1 || fn == 2 ? 0 : 45);
+}
+
 Handler special_handler(const std::string &n, int *nfixed, const char **native_name) {
     static const std::map<std::string, int> variadic = {
         {"_open", 2}, {"_open$NOCANCEL", 2}, {"_openat", 3}, {"_openat$NOCANCEL", 3}, {"_fcntl", 2}, {"_fcntl$NOCANCEL", 2},
@@ -600,6 +622,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
     if (auto it = renamed.find(n); it != renamed.end()) { *native_name = it->second; return h_generic; }
     static const std::map<std::string, Handler> special = {
         {"____chkstk_darwin", h_noop}, {"_thread_chkstk_darwin", h_noop},
+        {"_sys_icache_invalidate", h_icache_invalidate}, {"_sys_cache_control", h_cache_control}, {"_sys_dcache_flush", h_noop},
         {"___libkernel_init", h_libkernel_init}, {"___libkernel_platform_init", h_zero}, {"___libkernel_voucher_init", h_zero},
         {"___libkernel_init_after_boot_tasks", h_zero}, {"___libplatform_init", h_zero}, {"___pthread_init", h_zero},
         {"___pthread_late_init", h_zero}, {"_mach_init", h_zero}, {"__pthread_yield_to_enqueuer_4dispatch", h_zero},
