@@ -33,6 +33,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// each process's own translations.
 pub const SLAB_MB: u64 = 1344;
 pub const DEFAULT_BUDGET_MB: u64 = SLAB_MB - 384;
+/// Speed 35: slab space a full build leaves for each process's live translations
+pub const FULL_LIVE_ROOM_MB: u64 = 128;
 const HOT_BYTES_PER_BLOCK: f64 = 260.0;
 /// x86 bytes per arm64 code byte for full static coverage (default until a measurement sets it in the manifest)
 const DEFAULT_STATIC_RATIO: f64 = 3.0;
@@ -656,12 +658,60 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
             Some(r) if r.slot_size >= c.want && r.slot_size > 0 => false,
             Some(r) if r.slot_size > 0 && r.state != "truncated" => false,
             Some(r) if r.slot_size > 0 && r.key == c.key && c.src.kind != Kind::App => false,
+            // Speed 35: the same library at the same address (only the translator / code-shaping flags changed, e.g. a
+            // codegen bump) is rebuilt in its own slot too: a codegen bump keeps the image's layout and coverage
+            Some(r) if r.slot_size > 0 && r.ident == c.src.ident && r.addr == c.src.addr && c.src.kind != Kind::App => false,
             _ => true,
         }
     };
     let mut slots: HashMap<String, (u64, u64)> = HashMap::new();
     let mut evicted: Vec<String> = vec![];
     let limit = slab - (8 << 20);
+    // Speed 35: a full build whose training set outgrew the slab (every chunk is in todo, so nothing could be
+    // evicted) leaves out the coldest library chunks (profile hits per slot byte) until the rest fits; they are
+    // recorded as evicted (same key, no file), so a later update re-admits them when space frees. It leaves
+    // FULL_LIVE_ROOM_MB of the slab free: the per-process code cache is min(image + 384, 1344) MB, and a slab packed
+    // to 1336 MB left 8 MB for live translation (SpringBoard aborted "shared code cache full" in a loop).
+    if opts.full && !opts.measure {
+        let total: u64 = todo.iter().map(|c| c.want).sum();
+        let limit = slab - (FULL_LIVE_ROOM_MB << 20);
+        if total > limit {
+            let heat_of = |c: &PlanChunk| c.hot.iter().map(|h| h.1 as u64).sum::<u64>() as f64 / c.want.max(1) as f64;
+            let mut libs: Vec<usize> = (0..todo.len()).filter(|&i| todo[i].src.kind != Kind::App).collect();
+            libs.sort_by(|&a, &b| heat_of(todo[a]).total_cmp(&heat_of(todo[b])));
+            let mut over = total - limit;
+            let mut drop: HashSet<usize> = HashSet::new();
+            for i in libs {
+                if over == 0 {
+                    break;
+                }
+                over = over.saturating_sub(todo[i].want);
+                drop.insert(i);
+            }
+            for &i in &drop {
+                let c = todo[i];
+                man.chunks.insert(
+                    c.src.name.clone(),
+                    ChunkRec {
+                        name: c.src.name.clone(),
+                        kind: Some(c.src.kind.clone()),
+                        key: c.key.clone(),
+                        ident: c.src.ident.clone(),
+                        addr: c.src.addr,
+                        codegen: key::codegen(),
+                        hot: c.hot.len() as u64,
+                        state: "evicted".into(),
+                        built_at: now(),
+                        ..Default::default()
+                    },
+                );
+            }
+            eprintln!("x86code-aot: full build wants {} MB, slab holds {} MB: left out {} coldest library chunks", total >> 20, limit >> 20, drop.len());
+            todo = todo.into_iter().enumerate().filter(|(i, _)| !drop.contains(i)).map(|(_, c)| c).collect();
+            prog.chunks_total = todo.len();
+            write_json(&p.manifest(), &man)?;
+        }
+    }
     if opts.measure {
         for c in &todo {
             slots.insert(c.src.name.clone(), (0, limit));
@@ -727,7 +777,9 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
         // Speed 34: chunks evicted by an earlier update come back when space has freed (dropped / pruned /
         // re-keyed chunks left gaps): hottest per byte first, only into free space (never evicting for them), not
         // during an --only (app install) update.
-        if opts.only.is_none() && evicted.is_empty() {
+        // Speed 35: not after a full build's trim, and never past FULL_LIVE_ROOM_MB below the slab end (re-admitted
+        // chunks filled a trimmed full build back to 1336 MB).
+        if opts.only.is_none() && evicted.is_empty() && !opts.full {
             let mut back: Vec<&PlanChunk> = plan
                 .chunks
                 .iter()
@@ -737,7 +789,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
             back.sort_by(|a, b| heat(&b.src.name, b.want).total_cmp(&heat(&a.src.name, a.want)));
             let mut n_back = 0;
             for c in back {
-                if let Some(at) = fit(&mut occ, c.want) {
+                if let Some(at) = fit(&mut occ, c.want).filter(|&at| at + c.want <= slab - (FULL_LIVE_ROOM_MB << 20)) {
                     slots.insert(c.src.name.clone(), (at, c.want));
                     occ.push((at, c.want, c.src.name.clone()));
                     todo.push(c);
@@ -802,12 +854,21 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
 
     // constant pool: the union of every kept chunk's pool; new constants from the largest pool end on, a disjoint
     // region per worker
+    // Speed 35: chunks no longer in the plan (an uninstalled / replaced app's container) are not in the image
+    let in_plan = |n: &str| plan.chunks.iter().any(|c| c.want > 0 && c.src.name == n);
     let kept: Vec<PathBuf> = if opts.full || opts.measure {
         vec![]
     } else {
-        man.chunks.values().filter(|r| !todo.iter().any(|c| c.src.name == r.name)).filter_map(|r| r.file.as_ref().map(|f| p.chunks().join(f))).collect()
+        man.chunks.values().filter(|r| in_plan(&r.name) && !todo.iter().any(|c| c.src.name == r.name)).filter_map(|r| r.file.as_ref().map(|f| p.chunks().join(f))).collect()
     };
-    let pool_base = if opts.full || opts.measure { 0 } else { man.chunks.values().map(|r| r.pool).max().unwrap_or(0) }.div_ceil(16) * 16;
+    // Speed 35: the end of the kept chunks' pools only (a codegen bump rebuilds every chunk in place: none kept)
+    let pool_base = if opts.full || opts.measure {
+        0
+    } else {
+        man.chunks.values().filter(|r| r.file.is_some() && in_plan(&r.name) && !todo.iter().any(|c| c.src.name == r.name)).map(|r| r.pool).max().unwrap_or(0)
+    }
+    .div_ceil(16)
+        * 16;
     if pool_base + POOL_REGION * w as u64 > POOL_TOTAL - (64 << 10) {
         bail!("the constant pool is nearly full: run a full rebuild (x86code-aot build --full)");
     }

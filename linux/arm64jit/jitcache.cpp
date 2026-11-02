@@ -55,7 +55,7 @@ constexpr u64 kCacheHi = 0x2c0000000ull;
 // the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
 // alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
 // Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
-constexpr u64 kCodegenVersion = 0x00000019ull;  // Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
+constexpr u64 kCodegenVersion = 0x0000001aull;  // Speed 35: inline FRINTA/FRINTX, FCVTAS/FCVTAU in image chunks (0x19: Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
 // kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kCodegenVersion;

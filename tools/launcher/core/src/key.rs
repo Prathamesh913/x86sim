@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// Fallback only: kCodegenVersion when neither the installed libarm64jit.so nor jitcache.cpp can be read. Everything
 /// asks `codegen()`, which reads the value from the translator itself, so a launcher built against an older value can't
 /// disagree with the builder (it once showed 0x16 parts as stale while the builder and the image were 0x17).
-pub const CODEGEN_VERSION: u64 = 0x19;
+pub const CODEGEN_VERSION: u64 = 0x1a;
 /// inline objc (bit 17) and the Apple timebase (bit 18), the defaults; fuse_svc (bit 16) and the strict exclusive
 /// monitor (bit 19) are off.
 pub const FLAGS: u64 = 0x6 << 16;
