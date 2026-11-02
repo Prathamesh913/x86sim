@@ -126,6 +126,8 @@ constexpr u32 kLinuxSvc = 0xfffe;
 constexpr u32 kSwiftConfSvc = 0xfffd;
 // "svc #0xfff9": Speed 29 verify mode of the conformance filter (X86CODE_A64_SWIFT_CONF_VERIFY), at the match sites.
 constexpr u32 kSwiftConfVerifySvc = 0xfff9;
+// Speed 30 debug (X86CODE_A64_AGDL=1, iOS 27.2 24B8117 only): AttributeGraph deadline probes, jit.cpp
+constexpr u32 kAgDlSetSvc = 0xfff1, kAgDlPassedSvc = 0xfff2, kAgDlCancelSvc = 0xfff3;
 // "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
 constexpr u32 kSwiftTypeSvc = 0xfffc;
 // "svc #0xfffb" / "#0xfffa": dyld_sim's loaded-loader scans (dyldsim.cpp), substituted by MemoryReadCode.

@@ -290,11 +290,61 @@ static void h_vm_map(GuestThread &t, u32 i) {
     vm_map_like(t, i, ints, 1, 2, 3, 4);
 }
 // (mach_)vm_remap[_new](task, addr*, size, mask, flags, src_task, src_addr, copy | cur*, max*, uint inherit)
+//
+// Speed 30: a shared (copy = FALSE) remap within the task. Darling (darlingserver dtape_share_region) shares private
+// memory by copying it into a memfd and then mapping the memfd over the source: stores other threads make between
+// the copy and the remap were lost. AttributeGraph grows its process-wide node table that way (data::table::
+// grow_region: vm_remap of the old table into a 4x larger region), so a concurrent update's writes (a node's value,
+// its flags) vanished: Maps' route card aborted with "attribute failed to set an initial value" (varying
+// attributes). Now the source is made read-only first; a thread that writes to it meanwhile faults, waits in
+// remap_fault_wait (host.cpp on_fault) until the protection is back, and retries its store on the shared pages.
+// Opt-in (X86CODE_A64_REMAP_FREEZE=1): it did not fix the Maps abort (one 1 MB remap there, still aborted), and nothing
+// becomes default without three clean gate boots.
+std::atomic<u64> g_remap_lo{0}, g_remap_hi{0};
+static bool remap_prot_of(u64 a, int *prot, bool *priv) {  // the /proc/self/maps entry holding a
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) return false;
+    char line[512]; bool found = false;
+    while (fgets(line, sizeof line, m)) {
+        unsigned long lo, hi; char p[5];
+        if (sscanf(line, "%lx-%lx %4s", &lo, &hi, p) != 3) continue;
+        if (a >= lo && a < hi) {
+            *prot = (p[0] == 'r' ? PROT_READ : 0) | (p[1] == 'w' ? PROT_WRITE : 0) | (p[2] == 'x' ? PROT_EXEC : 0);
+            *priv = p[3] == 'p';
+            found = true;
+            break;
+        }
+    }
+    fclose(m);
+    return found;
+}
 static void h_vm_remap(GuestThread &t, u32 i) {
     u64 ints[16]; load_regs(t, ints);
     u64 sp = t.sp();
     ints[8] = GuestThread::rd<u64>(sp); ints[9] = GuestThread::rd<u64>(sp + 8); ints[10] = GuestThread::rd<uint32_t>(sp + 16);
+    static const bool freeze = [] { const char *e = getenv("X86CODE_A64_REMAP_FREEZE"); return e && *e == '1'; }();
+    const u64 src = ints[6] & ~0x3fffull, len = ((ints[6] + ints[2] + 0x3fff) & ~0x3fffull) - src;
+    int prot = 0; bool priv = false;
+    if (!freeze || (u32)ints[7] != 0 || ints[0] != ints[5] || !ints[2] || !remap_prot_of(src, &prot, &priv) || !priv ||
+        prot != (PROT_READ | PROT_WRITE)) {
+        vm_map_like(t, i, ints, 1, 2, 3, 4);
+        return;
+    }
+    static std::mutex mu;  // one frozen range at a time
+    std::lock_guard<std::mutex> g(mu);
+    g_remap_lo.store(src); g_remap_hi.store(src + len);
+    mprotect((void *)src, len, PROT_READ);
     vm_map_like(t, i, ints, 1, 2, 3, 4);
+    const bool ok = (u32)t.x(0) == 0;
+    mprotect((void *)src, len, prot);
+    if (ok && ints[1]) {
+        const u64 dst = *(u64 *)ints[1] & ~0xfffull;
+        mprotect((void *)dst, ((*(u64 *)ints[1] + ints[2] + 0xfff) & ~0xfffull) - dst, prot);
+        if (ints[8]) *(int32_t *)ints[8] = 3;  // VM_PROT_READ | VM_PROT_WRITE
+    }
+    g_remap_hi.store(0); g_remap_lo.store(0);
+    static std::atomic<int> n{0};
+    if (n++ < 4) logf("vm_remap shared %#lx+%#lx (frozen, %s)", (unsigned long)src, (unsigned long)len, ok ? "ok" : "failed");
 }
 // (mach_)vm_allocate(task, addr*, size, flags)
 static void h_vm_allocate(GuestThread &t, u32 i) {
@@ -445,6 +495,35 @@ static void h_kill_like(GuestThread &t, u32 i) {
                 if (const char *m = *(const char *const *)a) logf("abort message at %#llx: %.2000s", (unsigned long long)a, m);
                 q = *end == ',' ? end + 1 : end;
             }
+        // Speed 30 debug: X86CODE_A64_ABORT_TSD=<hex address of a pthread key variable>: that key's value on the
+        // aborting thread (guest TSD) and the 0x80 bytes it points to (low bit cleared), plus the frame words of an
+        // AttributeGraph UpdateStack chain (count +104, buffer +96 or inline +32, previous link scanned from the dump)
+        if (const char *e = getenv("X86CODE_A64_ABORT_TSD")) {
+            auto rdv = [](u64 a, void *buf, size_t n) {
+                iovec l{buf, n}, r{(void *)a, n};
+                return process_vm_readv(getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
+            };
+            u64 key = 0, ka = strtoull(e, nullptr, 16);
+            rdv(ka, &key, 8);
+            u64 v = key < GuestThread::kGuestTsdSlots ? t.tsd[key] : 0;
+            logf("abort tsd: key %llu value %#llx (tpidrro %#llx)", (unsigned long long)key, (unsigned long long)v,
+                 (unsigned long long)(u64)t.tsd);
+            for (int depth = 0; depth < 6 && (v & ~1ull); depth++) {
+                u64 st = v & ~1ull, w[16] = {};
+                if (!rdv(st, w, sizeof w)) break;
+                char line[600]; int n = 0;
+                for (int k = 0; k < 16; k++) n += snprintf(line + n, sizeof line - n, " %llx", (unsigned long long)w[k]);
+                logf("abort tsd: stack %d @%#llx:%s", depth, (unsigned long long)st, line);
+                u64 cnt = w[13], buf = w[12] ? w[12] : st + 32;
+                n = 0;
+                for (u64 k = 0; k < cnt && k < 40; k++) {
+                    u64 fr = 0; rdv(buf + 8 * k, &fr, 8);
+                    n += snprintf(line + n, sizeof line - n, " %x/%x", (unsigned)fr, (unsigned)(fr >> 32));
+                }
+                logf("abort tsd: stack %d frames(%llu):%s", depth, (unsigned long long)cnt, line);
+                v = w[1];  // guess: previous UpdateStack (checked by the dump shape)
+            }
+        }
         // X86CODE_A64_ABORT_STRINGS=1: C strings pointed to from the aborting thread's stack (the formatted abort
         // message usually sits in a caller's frame); memory is read with process_vm_readv, so bad pointers are skipped
         if (getenv("X86CODE_A64_ABORT_STRINGS")) {

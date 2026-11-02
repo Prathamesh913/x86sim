@@ -9,6 +9,7 @@
 #include <atomic>
 #include <algorithm>
 #include <mutex>
+#include <unordered_map>
 #include <map>
 #include <thread>
 #include <vector>
@@ -243,6 +244,30 @@ std::optional<uint32_t> swift_timebase_read_code(u64 a) {
     return a == kSwiftDeadlineConv ? 0xaa0803f5u /* mov x21, x8 */ : 0x17ffffc3u /* b 0x1c156d3bc */;
 }
 
+// Speed 30 debug: X86CODE_A64_AGDL=1 (27.2 24B8117 cache addresses; needs X86CODE_A64_LIVE_ONLY=1 for the process,
+// the image holds these blocks translated): AG::Graph::Context::set_deadline(ctx, deadline) logs the deadline relative
+// to now; passed_deadline_slow's "passed" exit logs the overshoot. The replaced words are emulated in the handler.
+constexpr u64 kAgSetDeadline = 0x1c95106b4, kAgPassed = 0x1c95111f4, kAgPassed2 = 0x1c9511208;
+constexpr u64 kAgCancel = 0x1c950c654, kAgCancelApi = 0x1c952c850;  // UpdateStack::cancel, AGGraphCancelUpdate
+std::optional<uint32_t> agdl_read_code(u64 a) {
+    if (a == kAgCancel || a == kAgCancelApi) {
+        static const bool on = getenv("X86CODE_A64_AGDL") && GuestThread::rd<uint32_t>(kAgCancel) == 0xa9bf7bfdu &&
+                               GuestThread::rd<uint32_t>(kAgCancelApi) == 0xa9bf7bfdu;
+        if (!on) return std::nullopt;
+        return 0xD4000001u | (kAgDlCancelSvc << 5);
+    }
+    if (a == kAgPassed2) {
+        static const bool on = getenv("X86CODE_A64_AGDL") && GuestThread::rd<uint32_t>(kAgPassed2) == 0x52800020u;
+        if (!on) return std::nullopt;
+        return 0xD4000001u | (kAgDlPassedSvc << 5);
+    }
+    if (a != kAgSetDeadline && a != kAgPassed) return std::nullopt;
+    static const bool on = getenv("X86CODE_A64_AGDL") && GuestThread::rd<uint32_t>(kAgSetDeadline) == 0xf9401c08u &&
+                           GuestThread::rd<uint32_t>(kAgPassed) == 0x52800020u;
+    if (!on) return std::nullopt;
+    return 0xD4000001u | ((a == kAgSetDeadline ? kAgDlSetSvc : kAgDlPassedSvc) << 5);
+}
+
 struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
     std::optional<uint32_t> MemoryReadCode(u64 a) override {
@@ -250,6 +275,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
         if (auto w = dyld_scan_read_code(a)) return w;
         if (auto w = swifttype_read_code(a)) return w;
         if (auto w = swift_timebase_read_code(a)) return w;
+        if (auto w = agdl_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
     uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
@@ -544,6 +570,40 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kSwiftConfVerifySvc) { swiftconf_verify(*this); return; }
     if (swi == kDyldScanSvcA || swi == kDyldScanSvcB) { dyld_scan_step(*this, swi == kDyldScanSvcB); return; }
     if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
+    if (swi == kAgDlCancelSvc) {  // stp x29, x30, [sp, #-16]!
+        const u64 nsp = sp() - 16;
+        *(u64 *)nsp = x(29); *(u64 *)(nsp + 8) = x(30);
+        jit->SetSP(nsp);
+        static std::atomic<int> n{0};
+        if (n++ < 200) {
+            u64 fp = x(29), lrs[6] = {};
+            for (int k = 0; k < 6 && fp > 0x1000 && fp < 0x800000000000ull; k++) { lrs[k] = *(u64 *)(fp + 8); fp = *(u64 *)fp; }
+            logf("agdl: %s from lr %#lx; callers %#lx %#lx %#lx %#lx %#lx %#lx", pc0 - 4 == 0x1c950c654 ? "UpdateStack::cancel" : "AGGraphCancelUpdate",
+                 (unsigned long)x(30), (unsigned long)lrs[0], (unsigned long)lrs[1], (unsigned long)lrs[2], (unsigned long)lrs[3],
+                 (unsigned long)lrs[4], (unsigned long)lrs[5]);
+        }
+        return;
+    }
+    if (swi == kAgDlSetSvc || swi == kAgDlPassedSvc) {
+        const u64 now = GetCNTPCT();  // mach ticks (24 MHz with the Apple timebase)
+        const double tick_ms = timebase_apple() ? 1.0 / 24000.0 : 1e-6;
+        if (swi == kAgDlSetSvc) {
+            const u64 d = x(1), old = rd<u64>(x(0) + 56);
+            set_x(8, old);  // ldr x8, [x0, #56]
+            static std::atomic<int> n{0};
+            if (d != old && n++ < 400) {
+                if (d == ~0ull) logf("agdl: set_deadline none (ctx %#lx)", (unsigned long)x(0));
+                else logf("agdl: set_deadline in %.2f ms (ctx %#lx lr %#lx)", ((double)d - (double)now) * tick_ms,
+                          (unsigned long)x(0), (unsigned long)x(30));
+            }
+        } else {
+            const u64 d = rd<u64>(x(19) + 392);
+            set_x(0, 1);  // mov w0, #1
+            static std::atomic<int> n{0};
+            if (n++ < 400) logf("agdl: deadline passed by %.2f ms (graph %#lx)", ((double)now - (double)d) * tick_ms, (unsigned long)x(19));
+        }
+        return;
+    }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
         set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));
     } else {
@@ -568,6 +628,38 @@ void GuestThread::CallSVC(uint32_t swi) {
         static std::atomic<u64> svc_cycles{0}, svc_timed{0};
         u64 t0 = 0;
         if (svc_time) t0 = __builtin_ia32_rdtsc();
+        // Speed 30 debug: X86CODE_A64_THUNK_HIST=sub1,sub2: calls of thunks whose name contains one of the substrings,
+        // by (name, lr, caller's lr, x0 low bits for timer arms), the top 20 every 4096 calls
+        static const char *th = getenv("X86CODE_A64_THUNK_HIST");
+        if (th) {
+            const std::string &nm = g_thunks[swi].name;
+            bool hit = false;
+            for (std::string l = std::string(th) + ","; !l.empty() && !hit;) {
+                const std::string sub = l.substr(0, l.find(','));
+                l = l.substr(l.find(',') + 1);
+                hit = !sub.empty() && nm.find(sub) != std::string::npos;
+            }
+            if (hit) {
+                static std::mutex hm;
+                static std::unordered_map<std::string, u64> hist;
+                static u64 total = 0;
+                const u64 fp = x(29);
+                const u64 lr2 = fp > 0x10000 && fp < 0x800000000000ull ? rd<u64>(fp + 8) : 0;
+                char key[160];
+                snprintf(key, sizeof key, "%s lr=%#lx lr2=%#lx", nm.c_str(), (unsigned long)x(30), (unsigned long)lr2);
+                std::lock_guard<std::mutex> g(hm);
+                hist[key]++;
+                if ((++total & 4095) == 0) {
+                    std::vector<std::pair<u64, std::string>> v;
+                    for (auto &e : hist) v.push_back({e.second, e.first});
+                    std::sort(v.rbegin(), v.rend());
+                    timespec tn; clock_gettime(CLOCK_MONOTONIC, &tn);
+                    logf("thunkhist t=%lld total=%llu", (long long)tn.tv_sec, (unsigned long long)total);
+                    for (size_t k = 0; k < v.size() && k < 20; k++) logf("thunkhist %llu %s", (unsigned long long)v[k].first, v[k].second.c_str());
+                    hist.clear();
+                }
+            }
+        }
         int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
         tsd_to_native();
         // Speed 29: X86CODE_A64_MSG_STATS=1: mach_msg* thunk calls and wall time inside them (blocking receives
@@ -575,7 +667,14 @@ void GuestThread::CallSVC(uint32_t swi) {
         static const bool msg_stats = getenv("X86CODE_A64_MSG_STATS") != nullptr;
         const bool is_msg = msg_stats && g_thunks[swi].name.find("mach_msg") != std::string::npos;
         timespec m0{};
-        if (is_msg) clock_gettime(CLOCK_MONOTONIC, &m0);
+        u64 mh = 0, mopt = 0, mlr = 0; u32 msid = ~0u;
+        if (is_msg) {
+            clock_gettime(CLOCK_MONOTONIC, &m0);
+            const std::string &nm = g_thunks[swi].name;
+            if ((nm == "_mach_msg" || nm == "_mach_msg_overwrite") && x(0) > 0x10000) { mh = x(0); mopt = x(1); }
+            mlr = x(30);
+            if (mh && (mopt & 1)) msid = rd<u32>(mh + 20);
+        }
         g_thunks[swi].fn(*this, swi);
         if (is_msg) {
             static std::atomic<u64> n_msg{0}, ns_msg{0};
@@ -583,6 +682,25 @@ void GuestThread::CallSVC(uint32_t swi) {
             clock_gettime(CLOCK_MONOTONIC, &m1);
             const u64 dt = (u64)((m1.tv_sec - m0.tv_sec) * 1000000000ll + (m1.tv_nsec - m0.tv_nsec));
             const u64 n = n_msg.fetch_add(1) + 1, ns = ns_msg.fetch_add(dt) + dt;
+            // Speed 30: histogram of (sent msgh_id, received msgh_id, guest caller), top entries every 8192 calls
+            {
+                u32 rid = ~0u;
+                if (mh && (mopt & 2) && (u32)x(0) == 0) rid = rd<u32>(mh + 20);
+                static std::mutex hm;
+                static std::unordered_map<std::string, u64> hist;
+                char key[96];
+                snprintf(key, sizeof key, "send=%d recv=%d lr=%#lx thr=%s", (int)msid, (int)rid, (unsigned long)mlr,
+                         (mopt & 2) && (u32)x(0) == 0x10004003 ? "timeout" : "");
+                std::lock_guard<std::mutex> g(hm);
+                hist[key]++;
+                if ((n & 8191) == 0) {
+                    std::vector<std::pair<u64, std::string>> v;
+                    for (auto &e : hist) v.push_back({e.second, e.first});
+                    std::sort(v.rbegin(), v.rend());
+                    for (size_t k = 0; k < v.size() && k < 15; k++) logf("msghist %llu %s", (unsigned long long)v[k].first, v[k].second.c_str());
+                    hist.clear();
+                }
+            }
             if ((n & 511) == 0)
                 logf("msgstats t=%lld.%03lld n=%llu inside_ms=%llu", (long long)m1.tv_sec, (long long)m1.tv_nsec / 1000000,
                      (unsigned long long)n, (unsigned long long)(ns / 1000000));

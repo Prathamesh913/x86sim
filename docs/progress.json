@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 29: Safari WebContent crash fixed at the root (Darling's madvise ignored MADV_ZERO: recycled pages kept stale data); 3 consecutive clean gates (s29g1-3). Swift conformance filter covers class queries (cold Settings round trips 10.0M -> 7.2M, Health cold 5.5 -> 4.5 s). Open: Maps route AttributeGraph abort (DynamicLayoutComputer<_VStackLayout>), SpringBoard idle ~810 mach_msg/s, app-code persistence, SplashBoard decode, Siri audio.",
+ "now": "Speed 30: Maps route abort narrowed (rule leaves no value; not TLS, not deadline cancellation, not the heap scavenger; Darling shared vm_remap race fixed behind X86CODE_A64_REMAP_FREEZE=1, not the cause). SpringBoard idle traffic identified: ~256 real mach_msg/s from two CADisplayLinks (SBUIPreciseClockTimer 15 fps as on a Mac; _UIMotionEffectEngine 30 fps with an event-less simulator motion provider, the excess). Open: Maps route, motion-engine link, app-code persistence, SplashBoard decode, Siri audio.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -782,5 +782,30 @@
    "Siri audio input",
    "huge pages blocked by host"
   ]
+ },
+ "speed30": {
+  "date": "2026-11-01",
+  "details": "docs/notebook/rounds/speed30.md",
+  "fixed": [
+   "Darling shared vm_remap lost concurrent stores: same-task copy=FALSE remap freezes the source (opt-in X86CODE_A64_REMAP_FREEZE=1)",
+   "a64-penv variables reach the guest environment"
+  ],
+  "found": [
+   "Maps route: AG rule leaves no value (TLS and deadline cancellation ruled out)",
+   "SpringBoard idle: real mach_msg ~256/s, driven by SBUIPreciseClockTimer (15 fps) + _UIMotionEffectEngine (30 fps, no motion events)"
+  ],
+  "tools": [
+   "X86CODE_A64_ABORT_TSD",
+   "X86CODE_A64_AGDL",
+   "X86CODE_A64_THUNK_HIST",
+   "MSG_STATS histogram",
+   "host/simshim/diag agnodediag.c, dldiag.m"
+  ],
+  "measured": {
+   "maps_route_abort": "10/13 route runs",
+   "springboard_idle_mach_msg_per_s": "~256 (810 incl. voucher thunks)",
+   "mac_sim_springboard_idle": "~50-70 csw/s, 0.5 idle wakeups/s (26.5)"
+  },
+  "gate": "pending"
  }
 }

@@ -382,8 +382,17 @@ static void fatal_exit(int code) {
     syscall(SYS_kill, getpid(), SIGKILL);
     syscall(SYS_exit_group, 128 + code);
 }
+extern std::atomic<u64> g_remap_lo, g_remap_hi;  // handlers.cpp h_vm_remap
 static void on_fault(int sig, siginfo_t *si, void *uc) {
     auto *ctx = (ucontext_t *)uc;
+    // Speed 30: a store into a range h_vm_remap froze for a shared remap: wait until it is writable again, retry
+    if (sig == SIGSEGV && si->si_code == SEGV_ACCERR) {
+        const u64 a = (u64)si->si_addr;
+        if (a >= g_remap_lo.load() && a < g_remap_hi.load()) {
+            for (int k = 0; k < 20000000 && a >= g_remap_lo.load() && a < g_remap_hi.load(); k++) sched_yield();
+            return;
+        }
+    }
     if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86CODE_A64_FAULTLOG")) {
         struct sigaction *old = &g_old_segv;
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
@@ -647,6 +656,8 @@ void print_stats() {
 
 using namespace a64;
 
+// Speed 30: set by the a64-penv constructor (end of this file) when it applied a variable
+static bool g_penv_applied = false;
 extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, char **argv, char **envp, char **apple, const DarwinApi *api) {
     clock_gettime(CLOCK_MONOTONIC, &g_t0);
     g_darwin = api;
@@ -729,7 +740,9 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     // Guest environment: mldr renamed DYLD_* to X86CODE_A64_DYLD_* so Darling's dyld ignores them.
     std::vector<char *> genv;
     std::string root, cache_dir;
-    for (char **e = envp; *e; e++) {
+    // Speed 30: environ when the a64-penv file applied something (its setenv() calls must reach the guest too), envp
+    // otherwise (unchanged default)
+    for (char **e = g_penv_applied ? environ : envp; *e; e++) {
         std::string s = *e;
         if (!s.compare(0, 17, "X86CODE_A64_DYLD_")) s = s.substr(12);
         // Speed 28 (debug): X86CODE_A64_GENV_<NAME>=v reaches the guest as NAME=v (launchd jobs only get X86CODE_A64_*)
@@ -807,6 +820,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
 // (many knobs are read once into static consts). File: $X86CODE_A64_PENV_FILE or /home/bobby/scratch/x86code/a64-penv,
 // lines "<program basename> K=V [K=V...]" ('#' comments). Used to bisect one app's knobs without rebooting the phone.
 __attribute__((constructor(101))) static void a64_penv() {
+    // (g_penv_applied: declared above main's environment loop)
     const char *exe = getenv("X86CODE_A64_EXE");
     if (!exe) return;
     const char *b = strrchr(exe, '/');
@@ -819,7 +833,7 @@ __attribute__((constructor(101))) static void a64_penv() {
         char *save = nullptr, *tok = strtok_r(line, " \t\n", &save);
         if (!tok || *tok == '#' || strcmp(tok, b) != 0) continue;
         while ((tok = strtok_r(nullptr, " \t\n", &save)))
-            if (char *eq = strchr(tok, '=')) { *eq = 0; setenv(tok, eq + 1, 1); }
+            if (char *eq = strchr(tok, '=')) { *eq = 0; setenv(tok, eq + 1, 1); g_penv_applied = true; }
     }
     fclose(f);
 }

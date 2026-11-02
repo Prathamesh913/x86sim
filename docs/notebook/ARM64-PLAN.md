@@ -1778,3 +1778,18 @@ phone's memory scope (IN=0 OUT=107).
 - tests/apps (x86ui, x86net, x86data + build.sh / run.sh): all checks PASS on 27.2 (README there).
 - Open: first keys typed right after the first tap into a text field can be lost while the keyboard session comes up
   (later bursts arrive intact); the in-app WKWebView paints a few seconds after didFinish.
+
+## Speed 30 (2026-11-01): Maps route abort narrowed, SpringBoard idle traffic identified (details: rounds/speed30.md)
+
+- **Maps route** (AttributeGraph "attribute failed to set an initial value", 10 of 13 route runs): the rule runs and
+  leaves no value. Ruled out with evidence: AG's TLS (abort dump of the current UpdateStack: right stack, right node),
+  deadline cancellation (frame flags not cancelled; JIT probes at set_deadline / passed_deadline / cancel never fired;
+  Speed 27's interposition could not see cache-internal calls), the guest heap scavenger. Found and fixed behind
+  `X86CODE_A64_REMAP_FREEZE=1`: Darling's shared vm_remap (copy into a memfd, then map it over the source) loses
+  concurrent stores; not the Maps cause. GATE_ROUTE stays off by default.
+- **SpringBoard idle**: real mach_msg ~256/s (Speed 29's 810 counted voucher_mach_msg_* thunks), all main-thread
+  run-loop wakeups driven by two CADisplayLinks: SBUIPreciseClockTimer (15 fps, also on a Mac) and
+  _UIMotionEffectEngine (30 fps, simulator motion provider without events; not on a Mac). Not reduced yet.
+- Tooling: a64-penv variables reach the guest env; ABORT_TSD, AGDL, THUNK_HIST, MSG_STATS histogram; diag shims
+  agnodediag.c, dldiag.m (CADisplayLink / motion engine).
+- Not done: app-code persistence, hot/cold layout, SplashBoard ASTC/LZFSE decode, Siri audio input, msg fast path.
