@@ -714,7 +714,15 @@ void GuestThread::CallSVC(uint32_t swi) {
         const bool mv = base + attr != node, cl = !(f_old & 0x10);
         if (mv) moved++;
         if (cl) clear++;
-        if ((mv || cl) && n++ < 400)
+        // the abort path: bit 4 clear and the value type's size (value witness table +0x40 of [type +8]) non-zero
+        const u64 meta = cl ? rd<u64>(x(21) + 8) : 0, vsize = meta ? rd<u64>(rd<u64>(meta - 8) + 0x40) : 0;
+        if (cl && vsize) {
+            const u64 base_at = node - attr;
+            logf("agchk: ABORT PATH attr %#x size %lu: flags via x28 %#x (base then %#lx), via base now %#x (base now %#lx), words then %08x %08x %08x now %08x %08x %08x",
+                 attr, (unsigned long)vsize, f_old, (unsigned long)base_at, f_cur, (unsigned long)base, rd<u32>(node), rd<u32>(node + 4), rd<u32>(node + 8),
+                 base ? rd<u32>(base + attr) : 0, f_cur, base ? rd<u32>(base + attr + 8) : 0);
+        }
+        if (mv && n++ < 100)
             logf("agchk: attr %#x node(x28) %#lx flags %#x | base now %#lx node now %#lx flags %#x | %s%s (moved %lu, bit4-clear %lu)", attr,
                  (unsigned long)node, f_old, (unsigned long)base, (unsigned long)(base + attr), f_cur, mv ? "TABLE MOVED " : "",
                  cl ? "BIT4 CLEAR" : "", (unsigned long)moved.load(), (unsigned long)clear.load());

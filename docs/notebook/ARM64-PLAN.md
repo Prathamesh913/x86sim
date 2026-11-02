@@ -1863,3 +1863,21 @@ phone's memory scope (IN=0 OUT=107).
 - **Leftovers**: evicted chunks re-admitted into freed gaps; placeapp prunes a reinstalled app's stale container rows;
   background huge-image copy kept opt-in (X86CODE_A64_AOT_HUGE_BG=1: the thread vanished on the phone).
 - **Aged-gate STALL**: gate logic (Settings alive from the About check resumes on About); the checks accept it.
+
+## Speed 35 (2026-11-02): codegen bump in place, split A/B, image copy out of guests, Maps cause (details: rounds/speed35.md)
+
+- **Codegen 0x1a** (inline FRINT/FCVTA in image chunks): a codegen bump now rebuilds each chunk in its own slot (same
+  library + address), with the pool base from kept in-plan chunks only. 4.23M blocks, 1224 MB in 17 s. Full builds
+  trim the coldest library chunks and leave 128 MB of live room (a packed slab crash-looped SpringBoard). Neutral on
+  opens and taps.
+- **Split image**: count-trained, hot_split_pct 20, full build: lost (cold Settings 5.7-6.1 vs 3.4-3.6 s, Preferences
+  10M vs 6.4M walks). The full build's coverage loss dominates. Next: split in place in existing slots.
+- **Huge copy**: a64hugecopy (a detached Linux process, spawned without SIGCHLD) builds the tmpfs copy; guests map the
+  .map until it exists. HUGE_FG=1 is the old behavior. The host still has no 2 MB pages.
+- **Maps**: UpdateStack::update checks flags through a node pointer taken before the rule. The node table grows
+  (vm_remap copy=FALSE) during the rule, and on the second growth our dtape_share_region leaves the old range
+  unaliased. Fix next: always map the memfd over the whole source of a same-task copy=FALSE remap.
+- **mach fast path**: designed (per-port shm ring + generation, markers for slow-path order, futex per set); floor
+  2.2 us vs 18 us. Not built.
+- Uninstall prunes placement + updates the image; the gate switcher check is logs-first with a looser visual. Gate
+  s35g1-3 clean, tests/apps PASS.
