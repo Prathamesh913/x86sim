@@ -106,7 +106,13 @@ pub fn placed_source(p: &Placement, path: &Path) -> Result<Option<PlacedFile>> {
     let base = img.header.base();
     let ranges: Vec<(u64, u64)> = img.header.code_ranges().iter().map(|&(lo, hi)| (p.addr + lo - base, p.addr + hi - base)).collect();
     let code_bytes = ranges.iter().map(|r| r.1 - r.0).sum();
-    let ident = img.header.uuid.map(|u| hex(&u)).unwrap_or_else(|| format!("{}:{}", p.fsize, p.mtime));
+    let mut ident = img.header.uuid.map(|u| hex(&u)).unwrap_or_else(|| format!("{}:{}", p.fsize, p.mtime));
+    if p.key.starts_with("Containers/") {
+        // Speed 31: app files are rebuilt by developers without a UUID change (debug builds): key by content too
+        let mut h = crate::key::Fnv64::new();
+        h.bytes(&data);
+        ident = format!("{ident}.{:016x}", h.finish());
+    }
     Ok(Some(PlacedFile {
         source: Source {
             name: p.key.clone(),

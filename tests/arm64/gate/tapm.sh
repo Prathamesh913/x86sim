@@ -4,7 +4,7 @@
 # The Settings icon is at (1025, 683) on an iPhone 17 (1206x2622).
 . "$(dirname "$0")/lib.sh"
 O=${GATE_OUT:-$SCR/gate}/$1; mkdir -p "$O"; HL=$SCR/simhid.log
-SB=$(ps -eo pid,comm | awk '$2=="SpringBoard"{print $1}' | head -1)
+SB=$(pid_of SpringBoard)
 c() { awk '{print $14+$15}' "/proc/$SB/stat"; }
 for i in $(seq 1 "${2:-6}"); do
 	home 6

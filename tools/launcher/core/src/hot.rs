@@ -1,6 +1,7 @@
 //! The training hot set: block descriptors recorded by training boots (`<uuid>-<build>.<exe>.bin` files, any build),
 //! with the number of profiles each block appears in (hotter = more processes ran it). Cached in `<aot>/hot.bin`,
-//! rebuilt when the set of training files changes.
+//! rebuilt when the set of training files changes. Speed 31: also `<uuid>-<build>.<exe>.live` (descriptors only: what a
+//! process on the image translated itself, libarm64jit X86CODE_A64_AOT_LIVE=1).
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -10,17 +11,25 @@ pub struct Hot {
     /// (descriptor, profiles) sorted by descriptor
     pub blocks: Vec<(u64, u32)>,
     pub files: usize,
+    /// Speed 31: descriptors from `.live` files (sorted): blocks processes on the image had to translate themselves.
+    /// They rank first in their chunk (LIVE_RANK added to their profile count) so a slot that is too small drops
+    /// colder training blocks instead.
+    pub live: Vec<u64>,
 }
+
+pub const LIVE_RANK: u32 = 1 << 20;
 
 const PC_MASK: u64 = (1 << 56) - 1;
 
-fn training_files(dirs: &[PathBuf], uuid: &str) -> Vec<PathBuf> {
+fn training_files(dirs: &[PathBuf], uuid: &str, until: Option<u64>) -> Vec<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
     let mut v = Vec::new();
     for d in dirs {
         let Ok(rd) = std::fs::read_dir(d) else { continue };
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
-            if n.starts_with(uuid) && n.ends_with(".bin") {
+            let new = until.is_some_and(|u| e.metadata().map(|m| m.mtime() as u64 > u).unwrap_or(false));
+            if n.starts_with(uuid) && n.ends_with(".bin") && !new {
                 v.push(e.path());
             }
         }
@@ -29,13 +38,14 @@ fn training_files(dirs: &[PathBuf], uuid: &str) -> Vec<PathBuf> {
     v
 }
 
-fn read_descs(p: &Path) -> Option<Vec<u64>> {
+pub fn read_descs(p: &Path) -> Option<Vec<u64>> {
     let mut f = std::fs::File::open(p).ok()?;
     let mut h = [0u8; 160];
     f.read_exact(&mut h).ok()?;
     let start = match &h[..8] {
         b"A64JC06\0" => 160,
         b"A64JC05\0" => 152,
+        b"A64CK01\0" => 168, // chunk: u64 code_off after the header
         _ => return None,
     };
     let n = u64::from_le_bytes(h[40..48].try_into().unwrap()) as usize;
@@ -61,8 +71,38 @@ fn signature(files: &[PathBuf]) -> u64 {
     h.finish()
 }
 
-pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path) -> Result<Hot> {
-    let files = training_files(dirs, uuid);
+fn live_descs(dirs: &[PathBuf], uuid: &str) -> Vec<u64> {
+    let mut v = Vec::new();
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with(uuid) && n.ends_with(".live") {
+                v.extend(read_descs(&e.path()).unwrap_or_default());
+            }
+        }
+    }
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>) -> Result<Hot> {
+    let mut hot = load_bins(dirs, uuid, cache_file, until)?;
+    hot.live = live_descs(dirs, uuid);
+    if !hot.live.is_empty() {
+        let mut m: HashMap<u64, u32> = hot.blocks.drain(..).collect();
+        for &d in &hot.live {
+            *m.entry(d).or_default() += LIVE_RANK;
+        }
+        hot.blocks = m.into_iter().collect();
+        hot.blocks.sort_unstable();
+    }
+    Ok(hot)
+}
+
+fn load_bins(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>) -> Result<Hot> {
+    let files = training_files(dirs, uuid, until);
     let sig = signature(&files);
     if let Ok(b) = std::fs::read(cache_file) {
         if b.len() >= 16 && u64::from_le_bytes(b[..8].try_into().unwrap()) == sig {
@@ -74,7 +114,7 @@ pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path) -> Result<Hot> {
                         (u64::from_le_bytes(b[o..o + 8].try_into().unwrap()), u32::from_le_bytes(b[o + 8..o + 12].try_into().unwrap()))
                     })
                     .collect();
-                return Ok(Hot { blocks, files: files.len() });
+                return Ok(Hot { blocks, files: files.len(), live: vec![] });
             }
         }
     }
@@ -99,7 +139,7 @@ pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path) -> Result<Hot> {
         std::fs::create_dir_all(p)?;
     }
     std::fs::write(cache_file, out)?;
-    Ok(Hot { blocks, files: files.len() })
+    Ok(Hot { blocks, files: files.len(), live: vec![] })
 }
 
 impl Hot {

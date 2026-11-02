@@ -30,7 +30,11 @@ crashes() {
 }
 # Speed 27: logs first. A check reads the screen only once the logs say the app is alive: its process is running and
 # its per-process JIT log has no crash since mark_logs. (A screenshot of something that already crashed is wasted.)
-pid_of() { ps -eo pid=,comm= | awk -v n="$1" '$2==n{print $1; exit}'; }
+# Speed 31: only this phone's processes (another phone on the host runs the same names): a guest process's
+# environment names its device dir (TMPDIR=<view>$DEV/data/tmp/, X86SIM_DEVICE).
+of_phone() { tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | grep -qF "$(realpath -m "$DEV")/data"; }
+pids_of() { local p; for p in $(ps -eo pid=,comm= | awk -v n="$1" '$2==n{print $1}'); do of_phone "$p" && echo "$p"; done; }
+pid_of() { pids_of "$1" | head -1; }
 # crashed_proc NAME: a crash line in NAME's JIT logs since mark_logs
 crashed_proc() {
 	for f in "$LOGB"/"$1".*.log; do

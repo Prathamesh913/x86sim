@@ -69,6 +69,10 @@ pub struct Config {
     pub follow_features: bool,
     /// Darling prefix for builder processes (never the live sim's)
     pub test_prefix: PathBuf,
+    /// Speed 31: per-process training .bins newer than this (unix seconds) are left out of the hot set (`.live` files
+    /// always count): keeps an image update to what was asked for (e.g. the .live feedback) instead of every profile
+    /// recorded since. None: every file.
+    pub train_until: Option<u64>,
 }
 
 impl Default for Config {
@@ -83,6 +87,7 @@ impl Default for Config {
             budget_mb: DEFAULT_BUDGET_MB,
             follow_features: false,
             test_prefix: s.join("a64testprefix"),
+            train_until: None,
         }
     }
 }
@@ -249,7 +254,7 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     if !training.contains(&p.jc) {
         training.push(p.jc.clone());
     }
-    let hot = hot::load(&training, &uuid, &p.aot.join("hot.bin"))?;
+    let hot = hot::load(&training, &uuid, &p.aot.join("hot.bin"), cfg.train_until)?;
     let mut sources = discover::cache_sources(&cache);
     let mut placed_paths = HashMap::new();
     let placements = discover::read_placement(&p.placement());
@@ -303,7 +308,8 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     // scope
     let loaded: HashSet<String> = if cfg.scope == "loaded" { dependency_closure(&cache, &placed_deps) } else { HashSet::new() };
     chunks.retain(|c| match cfg.scope.as_str() {
-        "hot" => !c.hot.is_empty(),
+        // Speed 31: app-tier chunks always (an app on the image never trains: it would translate its own code live)
+        "hot" => !c.hot.is_empty() || c.src.kind == Kind::App,
         "all" => true,
         _ => !c.hot.is_empty() || c.src.kind != Kind::Cache || loaded.contains(&c.src.name),
     });
@@ -339,6 +345,13 @@ fn allocate(chunks: &mut [PlanChunk], cfg: &Config) {
     for c in chunks.iter_mut() {
         c.want = if c.hot.is_empty() { 0 } else { align(c.est_hot + c.est_hot / 4 + (64 << 10)) };
         used += c.want;
+    }
+    // Speed 31: app-tier chunks get their whole static code (function starts etc.), whatever the scope
+    for c in chunks.iter_mut().filter(|c| c.src.kind == Kind::App) {
+        // (app code is denser in blocks than the measured cache ratio: Cadence's debug dylib needed ~7x its code)
+        let full = align((c.est_full * 9 / 8).max(c.src.code_bytes * 12) + (64 << 10)).max(c.want);
+        used += full - c.want;
+        c.want = full;
     }
     if cfg.scope != "hot" {
         let mut order: Vec<usize> = (0..chunks.len()).collect();
@@ -424,7 +437,26 @@ fn chunk_state(p: &Paths, m: &Manifest, c: &PlanChunk) -> (String, Vec<String>) 
     let Some(r) = m.chunks.get(&c.src.name) else { return ("missing".into(), vec![]) };
     if r.key == c.key {
         let present = r.file.as_ref().is_none_or(|f| p.chunks().join(f).exists());
-        return if present { ("up-to-date".into(), vec![]) } else { ("missing".into(), vec!["chunk file deleted".into()]) };
+        if !present {
+            return ("missing".into(), vec!["chunk file deleted".into()]);
+        }
+        if c.src.kind == Kind::App && r.state == "truncated" && r.slot_size < c.want {
+            return ("stale".into(), vec!["slot too small (app code is translated whole)".into()]);
+        }
+        // Speed 31: blocks processes on the image had to translate themselves (.live files) that this chunk lacks:
+        // rebuild it into its slot (they rank first, see hot::LIVE_RANK). Other training growth does not make a
+        // chunk stale (that would grow the image past what each process needs free for its own code).
+        let live: Vec<u64> = c.hot.iter().filter(|h| h.1 >= hot::LIVE_RANK).map(|h| h.0).collect();
+        if live.len() >= 32 {
+            if let Some(f) = r.file.as_ref() {
+                let have: HashSet<u64> = hot::read_descs(&p.chunks().join(f)).unwrap_or_default().into_iter().collect();
+                let miss = live.iter().filter(|d| !have.contains(d)).count();
+                if miss >= 32 {
+                    return ("stale".into(), vec![format!("{miss} live-translated blocks not in the chunk")]);
+                }
+            }
+        }
+        return ("up-to-date".into(), vec![]);
     }
     let mut why = vec![];
     if r.ident != c.src.ident {
@@ -595,7 +627,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     let placements: HashMap<String, discover::Placement> = discover::read_placement(&p.placement()).into_iter().map(|x| (x.key.clone(), x)).collect();
     let mut ent_paths: HashMap<String, PathBuf> = HashMap::new();
     for c in &todo {
-        let statics = if cfg.scope == "hot" && !opts.measure {
+        let statics = if cfg.scope == "hot" && !opts.measure && c.src.kind != Kind::App {
             vec![]
         } else {
             match c.src.kind {
@@ -655,6 +687,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
             .env("A64_RUNTIME", &cfg.runtime_root)
             .env("TIMEOUT", "86400")
             .env("X86CODE_A64_AOT_BUILD", "1")
+            .env("X86CODE_A64_AOT_DEVICE_DATA", cfg.device.as_ref().map(|d| d.join("data")).unwrap_or_default())
             .env("X86CODE_A64_AOT_JOB", &jp)
             .env("X86CODE_A64_JITCACHE_DIR", &p.jc)
             .env("X86CODE_A64_CODECACHE_MB", SLAB_MB.to_string())

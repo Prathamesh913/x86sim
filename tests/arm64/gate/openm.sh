@@ -5,18 +5,20 @@
 # (simrecord capture, scale 4): response = first changed frame, black = the launch gap (frames >95% black), content =
 # first frame of the settled screen (simrecord open). Default apps: Settings Messages Health Wallet Maps.
 # iPhone 17 (1206x2622) on the 27.2 home layout of var/device-a64-ios272 (4 icons per row, Messages in the dock).
+# Speed 31: x86ui / Cadence (installed with x86sim install) open by bundle id; t0 = the trigger write.
 # Env: SECS (capture length, default 16), N (cold+warm rounds per app, default 1).
 . "$(dirname "$0")/lib.sh"
 O=${GATE_OUT:-$SCR/gate}/$1; shift; mkdir -p "$O"; HL=$SCR/simhid.log
 declare -A XY=([Settings]="1020 668" [Messages]="744 2444" [Health]="188 668" [Wallet]="464 668" [Maps]="744 368"
-	[Calendar]="188 368" [Photos]="464 368" [News]="1020 368" [Safari]="468 2444")
+	[x86ui]="id com.x86code.test.x86ui" [Cadence]="id com.designgears.alarm" [Calendar]="188 368" [Photos]="464 368" [News]="1020 368" [Safari]="468 2444")
 declare -A PROC=([Settings]=Preferences [Messages]=MobileSMS [Health]=Health [Wallet]=Passbook [Maps]=Maps
-	[Calendar]=MobileCal [Photos]=MobileSlideShow [News]=News [Safari]=MobileSafari)
+	[Calendar]=MobileCal [Photos]=MobileSlideShow [News]=News [Safari]=MobileSafari [x86ui]=x86ui [Cadence]=Cadence)
 APPS=("$@"); [ ${#APPS[@]} = 0 ] && APPS=(Settings Messages Health Wallet Maps)
 measure() { # LABEL X Y
 	python3 cli/libexec/simrecord.py capture "$O/m.frames" "${SECS:-16}" 4 >/dev/null & local cp=$!; sleep 0.8
-	touch_ tap $2 $3; wait $cp
-	local t0; t0=$(grep "simhid: touch down" "$HL" | tail -1 | awk '{print $1}')
+	local t0
+	if [ "$2" = id ]; then t0=$(date +%s%N); app "$3"; wait $cp  # Speed 31: by bundle id (openurl trigger)
+	else touch_ tap $2 $3; wait $cp; t0=$(grep "simhid: touch down" "$HL" | tail -1 | awk '{print $1}'); fi
 	python3 - "$O/m.frames" "$t0" "$1" <<'PY' | tee -a "$O/openm.log"
 import json, subprocess, sys, os
 sys.path.insert(0, "cli/libexec"); import simrecord, numpy as np
@@ -35,7 +37,7 @@ PY
 }
 for r in $(seq 1 "${N:-1}"); do
 	for a in "${APPS[@]}"; do
-		for p in $(ps -eo pid,comm | awk -v c="${PROC[$a]}" '$2==c{print $1}'); do kill -9 "$p"; done
+		for p in $(pids_of "${PROC[$a]}"); do kill -9 "$p"; done
 		home 6; measure "$a-cold" ${XY[$a]}
 		shot "$O/$a-cold.png"
 		home 6; measure "$a-warm" ${XY[$a]}

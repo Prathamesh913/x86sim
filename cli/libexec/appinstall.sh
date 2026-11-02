@@ -31,7 +31,19 @@ install)
 	# staging copy inside the device's data directory (visible inside Darling); installd copies it again
 	S=$D/tmp/x86code-install; mkdir -p "$S"; rm -rf "$S/$(basename "$app")"
 	cp -a "$app" "$S/" || exit 1
-	request "install tmp/x86code-install/$(basename "$app")" "^install .*$(basename "$app")" 120 ;;
+	request "install tmp/x86code-install/$(basename "$app")" "^install .*$(basename "$app")" 120 || exit 1
+	# Speed 31 (opt-in, X86SIM_APP_AOT=1): translate the app ahead of time. Its Mach-Os get placement slots
+	# (placeapp.py: existing slots never move) and the AOT image gets their chunks (x86code-aot update: the app's
+	# chunks only, plus any library chunk with new .live training). Processes started from now on use them; until
+	# the update has finished, new processes find no image for the new key and translate live.
+	if [ "${X86SIM_APP_AOT:-0}" = 1 ]; then
+		J=$(sed -n 's/^X86CODE_A64_JITCACHE_DIR=//p' "$X86SIM_DEVICE/sim.env")
+		inst=$(ls -td "$D"/Containers/Bundle/Application/*/"$(basename "$app")" 2>/dev/null | head -1)
+		if [ -n "$J" ] && [ -n "$inst" ]; then
+			python3 "$X86SIM_ROOT/cli/libexec/arm64/placeapp.py" "$J" "$inst" &&
+			"$X86SIM_ROOT/tools/launcher/target/release/x86code-aot" --jc "$J" --device "$X86SIM_DEVICE" update | tail -1
+		fi
+	fi ;;
 uninstall)
 	[ -n "$1" ] || { echo "usage: x86sim uninstall <bundle id>" >&2; exit 2; }
 	request "uninstall $1" "^uninstall $1:" 60 ;;

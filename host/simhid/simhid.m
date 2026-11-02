@@ -261,7 +261,17 @@ static void handle_line(char* line) {
 	if (sscanf(line, "key %15s %i", a, &usage) == 2) {
 #if __arm64__
 		// x86Code arm64: the keyboard service is attached at the first key command (see initUsingHIDService)
-		if (!keyboard_svc.service && hid_system) { add_service(hid_system, &keyboard_svc); usleep(300000); }
+		// Speed 31: the first key used to be followed by the next ones 300 ms later, and those were lost: the new
+		// keyboard puts UIKit into hardware-keyboard mode and the focused field's keyboard session restarts (the
+		// software keyboard goes away) before it takes keys. The keys are not dropped here: this client's later lines
+		// wait (they queue in the socket, in order) until the session had time to come back. SIMHID_KB_SETTLE_MS
+		// (default 1500) after the first attach; the first key itself waits too.
+		if (!keyboard_svc.service && hid_system) {
+			add_service(hid_system, &keyboard_svc);
+			const char* ms = getenv("SIMHID_KB_SETTLE_MS");
+			usleep((ms && *ms ? atoi(ms) : 1500) * 1000);
+			slog("keyboard settled");
+		}
 #endif
 		send_key(&keyboard_svc, 7, usage, !strcmp(a, "down"));
 		return;

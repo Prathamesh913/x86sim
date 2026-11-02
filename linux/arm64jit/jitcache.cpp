@@ -284,6 +284,59 @@ std::atomic<u64> g_saved_blocks{0};
 // Speed 9: not in a process that loaded the AOT image (X86CODE_A64_AOT_AUTOSAVE=1 to keep it, for training .bins). Its
 // .bin is never read back while the image exists, yet every such process wrote one of ~240 MB (the image's blocks
 // registered so far): ~6.5 GB per boot.
+// Speed 31: training feedback from processes on the AOT image. Their .bin is never written (above), so blocks the image
+// lacks (untrained paths of cache libraries, placed app code) were translated live on every start, forever. With
+// X86CODE_A64_AOT_LIVE=1 such a process keeps <key>.<exe>.live: the union of the descriptors it translated itself
+// (header like an A64JC06 file, descriptor count at +40, 24-byte entries from +160, no code). tools/launcher's hot set
+// reads them like training .bins, so `x86code-aot update` moves those blocks into their library's chunk.
+static bool live_env() {
+    static const bool on = [] { const char *e = getenv("X86CODE_A64_AOT_LIVE"); return e && atoi(e) == 1; }();
+    return on;
+}
+static bool live_on() {
+    return live_env() && g_aot_loaded && g_uuid_ok && !getenv("X86CODE_A64_AOT_BUILD");
+}
+std::atomic<u64> g_live_saved{0};
+static void save_live(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
+    if (!live_on()) return;
+    const u64 n = Dynarmic::A64::Jit::GetSharedStats(sc).blocks;
+    if (n < g_live_saved.load() + 500) return;
+    g_live_saved = n;
+    std::vector<u64> d = Dynarmic::A64::Jit::GetDynamicDescriptors(sc, kCacheLo, kCacheHi);
+    std::string path = g_path.substr(0, g_path.size() - 4) + ".live";
+    size_t had = 0;
+    if (FILE *f = fopen(path.c_str(), "rb")) {
+        uint8_t h[160];
+        u64 m = 0;
+        if (fread(h, 1, 160, f) == 160 && !memcmp(h, "A64JC06", 8) && (memcpy(&m, h + 40, 8), m < (1u << 26))) {
+            uint8_t e[24];
+            for (u64 i = 0; i < m && fread(e, 1, 24, f) == 24; i++) { u64 x; memcpy(&x, e, 8); d.push_back(x); }
+            had = m;
+        }
+        fclose(f);
+    }
+    std::sort(d.begin(), d.end());
+    d.erase(std::unique(d.begin(), d.end()), d.end());
+    if (d.size() == had) return;
+    const std::string tmp = path + ".tmp." + std::to_string(getpid());
+    FILE *f = fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    uint8_t h[160]{};
+    memcpy(h, "A64JC06", 8);
+    memcpy(h + 8, g_uuid, 16);
+    memcpy(h + 24, &g_build, 8);
+    const u64 cnt = d.size();
+    memcpy(h + 40, &cnt, 8);
+    fwrite(h, 1, 160, f);
+    uint8_t e[24]{};
+    for (u64 x : d) { memcpy(e, &x, 8); fwrite(e, 1, 24, f); }
+    const bool ok = fclose(f) == 0;
+    if (ok && rename(tmp.c_str(), path.c_str()) == 0)
+        logf("jitcache: %s live save: %zu descriptors (%zu new) to %s", why, d.size(), d.size() - had, path.c_str());
+    else
+        unlink(tmp.c_str());
+}
+
 static bool autosave_on() {
     const char *e = getenv("X86CODE_A64_JITCACHE_AUTOSAVE");
     const char *a = getenv("X86CODE_A64_AOT_AUTOSAVE");
@@ -307,7 +360,7 @@ static void save_if_grown(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
 void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &sp) {
     g_shared = sp;
     g_saved_blocks = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;  // what the load brought in
-    if (!g_uuid_ok || !autosave_on()) return;
+    if (!g_uuid_ok || (!autosave_on() && !live_env())) return;
     // The thread is not a Darling thread: with signals unblocked, a process-directed signal delivered to it made
     // mldr abort (metalhostd SIGABRT on the saver's tid). Block everything here; the guest's threads take them.
     sigset_t all, old;
@@ -331,6 +384,7 @@ void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &
             if (quiet >= 2 || since >= 12) {
                 const u64 before = g_saved_blocks.load();
                 save_if_grown(*sp, quiet >= 2 ? "idle" : "periodic");
+                save_live(*sp, quiet >= 2 ? "idle" : "periodic");
                 if (g_saved_blocks.load() != before) since = 0;
             }
         }
@@ -339,6 +393,7 @@ void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &
 }
 
 void jitcache_save_on_exit() {
+    if (auto sp = g_shared.lock()) save_live(*sp, "exit");
     if (!autosave_on()) return;
     if (auto sp = g_shared.lock()) save_if_grown(*sp, "exit");
 }
@@ -350,8 +405,12 @@ void jitcache_save_on_exit() {
 int placement_map_all() {
     int n = 0;
     for (const auto &p : g_place) {
-        if (g_runtime_root.empty() || p.key.rfind("Containers/", 0) == 0) continue;
-        const std::string path = g_runtime_root + p.key;
+        // Speed 31: app keys ("Containers/...") resolve under the device's data dir (tools/launcher passes it as
+        // X86CODE_A64_AOT_DEVICE_DATA); before, the app tier's files were never mapped and their chunks faulted.
+        static const char *dev_data = getenv("X86CODE_A64_AOT_DEVICE_DATA");
+        const bool app = p.key.rfind("Containers/", 0) == 0;
+        if (app ? !dev_data : g_runtime_root.empty()) continue;
+        const std::string path = app ? std::string(dev_data) + "/" + p.key : g_runtime_root + p.key;
         const bool is_dyld = p.key == "usr/lib/dyld_sim";
         int fd = open(path.c_str(), O_RDONLY);
         if (fd < 0) continue;
