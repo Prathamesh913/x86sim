@@ -157,6 +157,14 @@ app_switcher() {
 		xy=$(timeout 20 tesseract "$O/now.png" stdout -c tessedit_create_tsv=1 2>/dev/null |
 			awk -F'\t' 'NF==12 && $12 ~ /^(Settings|Photos|Maps|Messages|News|Safari|Wallet|Health|Files|Calendar)$/ {y=$8+$10/2; if (y>=250 && y<=450) {print $12, int(y); exit}}')
 		if [ -n "$xy" ]; then cp "$O/now.png" "$O/$1.png"; say "HIT $1 [card label: $xy]"; home 5; return 0; fi
+		# Speed 35: logs first (SpringBoard runs the switcher: alive, no crash logged), then a looser visual check
+		# (switcherlook.py: the label band OCR'd on its own, or the card's shape) when the full-frame OCR missed the label
+		case $(proc_state SpringBoard) in
+			crashed) say "CRASH $1: SpringBoard crashed"; return 5 ;;
+			gone) say "GONE $1: SpringBoard is not running"; return 6 ;;
+		esac
+		xy=$(python3 "$X/tests/arm64/gate/switcherlook.py" "$O/now.png" 2>/dev/null)
+		case $xy in label*|card*) cp "$O/now.png" "$O/$1.png"; say "HIT $1 [$xy]"; home 5; return 0 ;; esac
 		sleep 2
 	done
 	cp "$O/now.png" "$O/$1-fail.png"; say "FAIL $1: no app switcher cards"; home 5; return 4

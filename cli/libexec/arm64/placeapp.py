@@ -5,12 +5,18 @@
 # reinstalled file (other size/mtime) keeps its slot when it still fits. Afterwards `x86code-aot update` builds the
 # app tier's chunks (one per file, keyed by the Mach-O UUID + a hash of the file + its slot).
 #   placeapp.py JC_DIR APP_DIR...   (APP_DIR: <device>/data/Containers/Bundle/Application/<UUID>/<Name>.app)
+#   placeapp.py --prune JC_DIR [DATA_DIR]   (Speed 35, uninstall: drop every Containers/ row whose container exists on
+#                                           no phone; exit 0 = placement changed, 3 = nothing pruned)
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mkplacement import arm64_vmsize, key_of, HI, GUARD
 
 def main():
-    jc, apps = sys.argv[1], sys.argv[2:]
+    prune_all = sys.argv[1] == "--prune"
+    if prune_all:
+        jc, apps = sys.argv[2], []
+    else:
+        jc, apps = sys.argv[1], sys.argv[2:]
     path = os.path.join(jc, "placement.txt")
     lines = open(path).read().splitlines() if os.path.exists(path) else []
     rows = []  # [addr, slot, fsize, mtime, key]
@@ -37,9 +43,11 @@ def main():
         if i >= 0:
             datas.add(rp[:i])
             names.add(os.path.basename(rp))
+    if prune_all and len(sys.argv) > 3:
+        datas.add(os.path.realpath(sys.argv[3]))
     for r in list(rows):
         f = r[4].split("/")
-        if len(f) > 5 and f[0] == "Containers" and f[4] in names and \
+        if len(f) > 5 and f[0] == "Containers" and (prune_all or f[4] in names) and \
                 not any(os.path.isdir(os.path.join(d, *f[:4])) for d in datas):
             rows.remove(r)
             by_key.pop(r[4], None)
@@ -75,7 +83,9 @@ def main():
                 changed += 1
                 print(f"placeapp: {r[0]:x} {r[1] >> 10} KB {k}")
     if not changed:
-        print("placeapp: nothing to place")
+        print("placeapp: nothing to prune" if prune_all else "placeapp: nothing to place")
+        if prune_all:
+            sys.exit(3)
         return
     tmp = path + ".new"
     with open(tmp, "w") as f:

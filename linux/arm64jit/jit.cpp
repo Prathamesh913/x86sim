@@ -384,6 +384,19 @@ std::optional<uint32_t> agout_read_code(u64 a) {
     return 0xD4000001u | ((a == kAgSetOut ? kAgOutSetSvc : kAgOutGetSvc) << 5);
 }
 
+// Speed 35 debug: X86CODE_A64_AGCHK=1 (27.2 24B8117; with X86CODE_A64_LIVE_ONLY for the process). After the rule runs,
+// AG::Graph::UpdateStack::update reloads the node's flags through x28 (= [table base 0x22e74c908] + attribute id,
+// computed before the rule; 0x1c950bf90) and aborts "failed to set an initial value" when bit 4 is clear and the value
+// type is not empty (0x1c950c138 -> 0x1c950c4b8 -> 0x1c950c628). The SVC replaces that load (ldr w8, [x28, #4]) and
+// logs when the cached pointer no longer equals the current base + id, or bit 4 is clear, with both views' flags.
+constexpr u64 kAgChkPc = 0x1c950c134;
+std::optional<uint32_t> agchk_read_code(u64 a) {
+    if (a != kAgChkPc) return std::nullopt;
+    static const bool on = getenv("X86CODE_A64_AGCHK") && atoi(getenv("X86CODE_A64_AGCHK")) == 1 && GuestThread::rd<uint32_t>(kAgChkPc) == 0xb9400788u;
+    if (!on) return std::nullopt;
+    return 0xD4000001u | (kAgChkSvc << 5);
+}
+
 struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
     std::optional<uint32_t> MemoryReadCode(u64 a) override {
@@ -395,6 +408,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
         if (auto w = astc_read_code(a)) return w;
         if (auto w = lzfse_read_code(a)) return w;
         if (auto w = agout_read_code(a)) return w;
+        if (auto w = agchk_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
     uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
@@ -692,6 +706,20 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kAstcSvc) { astc_step(*this); return; }
     if (swi == kLzfseSvcA || swi == kLzfseSvcB) { lzfse_step(*this, swi == kLzfseSvcB); return; }
     if (swi >= kLzfseSvcDestroy && swi <= kLzfseSvcInit) { lzfse_stream_step(*this, swi); return; }
+    if (swi == kAgChkSvc) {  // ldr w8, [x28, #4] + the check above
+        const u64 node = x(28), base = rd<u64>(kAgTableVar);
+        const u32 attr = rd<u32>(x(27) - 8), f_old = rd<u32>(node + 4), f_cur = base ? rd<u32>(base + attr + 4) : 0;
+        set_x(8, f_old);
+        static std::atomic<u64> n{0}, moved{0}, clear{0};
+        const bool mv = base + attr != node, cl = !(f_old & 0x10);
+        if (mv) moved++;
+        if (cl) clear++;
+        if ((mv || cl) && n++ < 400)
+            logf("agchk: attr %#x node(x28) %#lx flags %#x | base now %#lx node now %#lx flags %#x | %s%s (moved %lu, bit4-clear %lu)", attr,
+                 (unsigned long)node, f_old, (unsigned long)base, (unsigned long)(base + attr), f_cur, mv ? "TABLE MOVED " : "",
+                 cl ? "BIT4 CLEAR" : "", (unsigned long)moved.load(), (unsigned long)clear.load());
+        return;
+    }
     if (swi == kAgOutSetSvc || swi == kAgOutGetSvc) {
         static const u64 want = strtoull(getenv("X86CODE_A64_AGOUT"), nullptr, 16);
         auto rdv = [](u64 a, void *buf, size_t n) {

@@ -60,7 +60,23 @@ install)
 	fi ;;
 uninstall)
 	[ -n "$1" ] || { echo "usage: x86sim uninstall <bundle id>" >&2; exit 2; }
-	request "uninstall $1" "^uninstall $1:" 60 ;;
+	request "uninstall $1" "^uninstall $1:" 60 || exit 1
+	# Speed 35: the uninstalled app's placement rows (and image chunks) go too, transactionally as on install: the
+	# pruned placement.txt is kept only together with an image updated for it (assembly only: no chunk changes).
+	if [ "${X86SIM_APP_AOT:-1}" = 1 ]; then
+		J=$(sed -n 's/^X86CODE_A64_JITCACHE_DIR=//p' "$X86SIM_DEVICE/sim.env")
+		P=$J/placement.txt; B=$J/placement.txt.pre-uninstall
+		if [ -n "$J" ] && [ -f "$P" ]; then
+			cp -p "$P" "$B"
+			python3 "$X86SIM_ROOT/cli/libexec/arm64/placeapp.py" --prune "$J" "$D"; rc=$?
+			if [ $rc = 0 ]; then
+				"$X86SIM_ROOT/tools/launcher/target/release/x86code-aot" --jc "$J" --device "$X86SIM_DEVICE" update | tail -1
+				[ "${PIPESTATUS[0]}" = 0 ] || { echo "appinstall: AOT update after uninstall failed; placement restored" >&2; cp -p "$B" "$P"; }
+			elif [ $rc != 3 ]; then
+				cp -p "$B" "$P"
+			fi
+		fi
+	fi ;;
 launch)
 	[ -n "$1" ] || { echo "usage: x86sim launch <bundle id> [args...]" >&2; exit 2; }
 	line="app $(IFS=$'\t'; echo "$*")"

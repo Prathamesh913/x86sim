@@ -130,6 +130,8 @@ constexpr u32 kSwiftConfVerifySvc = 0xfff9;
 constexpr u32 kAgDlSetSvc = 0xfff1, kAgDlPassedSvc = 0xfff2, kAgDlCancelSvc = 0xfff3;
 // Speed 31 debug (X86CODE_A64_AGOUT=<attribute id hex>, 27.2 24B8117): AGGraphSetOutputValue / AGGraphGetOutputValue probes
 constexpr u32 kAgOutSetSvc = 0xfff4, kAgOutGetSvc = 0xfff5;
+// Speed 35 debug (X86CODE_A64_AGCHK=1): AG::Graph::UpdateStack::update's post-rule flags load (27.2 0x1c950c134)
+constexpr u32 kAgChkSvc = 0xffd0;
 void agout_dump(u32 attr);
 // "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
 constexpr u32 kSwiftTypeSvc = 0xfffc;
