@@ -413,7 +413,9 @@ def main():
         **({"X86CODE_A64_LOG": "/private/var/tmp/x86code-a64"} if ARM64 else {}),
         # x86Code: glibc malloc of libarm64jit/dynarmic (the ELF side): one arena per thread kept tens of MB of freed
         # JIT metadata resident per thread; two arenas for the process
-        **({"GLIBC_TUNABLES": "glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576"} if ARM64 else {}),
+        # RAM 1: A64_GLIBC_TUNABLES_EXTRA appends tunables (e.g. glibc.mem.decorate_maps=1 names arenas/stacks in smaps)
+        **({"GLIBC_TUNABLES": ":".join(filter(None, ["glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576",
+                                                     os.environ.get("A64_GLIBC_TUNABLES_EXTRA", "")]))} if ARM64 else {}),
         # x86Code: its own frame ring, so an x86_64 device's viewers are not disturbed
         # Speed 8: in /run/user/<uid> (the arm64 container's /dev/shm is private, X86CODE_PRIVATE_SHM); boot-a64.sh links
         # /dev/shm/x86code-a64-simfb.ring to it for the host's viewers

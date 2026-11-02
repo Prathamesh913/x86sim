@@ -1,3 +1,4 @@
+#include <sys/prctl.h>
 #include <sys/personality.h>
 #include <algorithm>
 #include <malloc.h>
@@ -838,4 +839,15 @@ __attribute__((constructor(101))) static void a64_penv() {
             if (char *eq = strchr(tok, '=')) { *eq = 0; setenv(tok, eq + 1, 1); g_penv_applied = true; }
     }
     fclose(f);
+}
+
+// RAM 1: no transparent huge pages for anonymous memory in guest processes. With THP "always" on the host, the
+// first touch of a 2 MB-aligned stretch of a guest heap, a thread stack or the JIT's metadata faults a whole 2 MB page
+// (~124 MB of huge pages over an idle phone, mostly untouched 4 KB pages). The AOT image and the dyld cache are file
+// mappings and never used THP here. Per process (inherited across fork/exec), not a host setting.
+// X86CODE_A64_THP=1 keeps the host default.
+__attribute__((constructor(102))) static void a64_no_thp() {
+    const char *e = getenv("X86CODE_A64_THP");
+    if (e && atoi(e) == 1) return;
+    prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
 }
