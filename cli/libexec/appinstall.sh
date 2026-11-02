@@ -4,12 +4,18 @@
 #                                  LaunchServices -> InstallCoordination -> installd, in host/openurl inside the device)
 #   uninstall <bundle id>
 #   launch <bundle id> [args...]   open through FrontBoard (as simctl launch), arguments passed to the app
+# An optional first argument names the device, as simctl's <device>: a device dir, or an arm64 phone's name / folder
+# (var/device-a64-<name>, as `x86sim device list` shows; "booted" = the default). Else X86SIM_DEVICE.
 # Each waits for the helper's answer in <device>/data/var/log/x86code-openurl.log and prints it.
 . "$(dirname "$0")/../lib/config.sh"
+cmd=$1; shift
+. "$(dirname "$0")/../lib/pickdevice.sh"
+# install <device> <app> / uninstall <device> <bundle id>: a leading device argument when one more follows
+if [ $# -ge 2 ] && pick_device "$1"; then shift; fi
+export X86SIM_DEVICE
 D=$X86SIM_DEVICE/data
 LOG=$D/var/log/x86code-openurl.log
 Q=$D/tmp/x86code-openurl
-cmd=$1; shift
 request() {  # request LINE PATTERN TIMEOUT
 	local n; n=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 	printf '%s\n' "$1" > "$Q.new" && mv "$Q.new" "$Q"

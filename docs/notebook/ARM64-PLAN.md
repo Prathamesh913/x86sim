@@ -1758,3 +1758,23 @@ phone's memory scope (IN=0 OUT=107).
 - **Gate: 3 consecutive clean boots** (s29g1-3, Safari on Wikipedia included).
 - Open: Maps route ("attribute failed to set an initial value: DynamicLayoutComputer<_VStackLayout>", independent of
   every native shortcut and of the IR opts; GATE_ROUTE=1 runs it); SpringBoard ~810 mach_msg/s idle (MSG_STATS).
+
+## Apps (2026-11-01): installing third-party apps, test-app suite
+
+- **`x86sim install|uninstall|launch [<phone>] …`** (simctl-style leading device: name / folder / dir, cli/lib/pickdevice.sh)
+  on arm64 phones; launcher core `apps.rs` (install / uninstall / launch / list) and MCP tools `app_install`,
+  `app_uninstall`, `app_launch`, `app_list` for the hub's "Install app…".
+- **installcoordinationd** was not a job on arm64: every install failed ("Failed to create IXPlaceholder …
+  com.apple.installcoordinationd … lookup error 3"). On demand in boot-a64.sh's UI set.
+- **mobiletimerd** (AlarmKit, com.apple.alarmkitservices) added on demand; it then trapped at every start in
+  `+[BSServiceQuality main]`'s "invalid QoS class" assertion: Darling's `bsdthread_register` never wrote `main_qos`
+  back (XNU does: the main thread's QoS, DEFAULT when none), so `qos_class_main()` was UNSPECIFIED in every process.
+  Fixed in darling-xnu (libsystem_kernel). Cadence's AlarmKit prompt, scheduling and calendar work.
+- **gettid (286)** wrote through its pointers unconditionally; React Native's glog calls `syscall(SYS_gettid)` the
+  Linux way (junk pointer) and Waymark (Expo / Hermes) died with SIGSEGV at start. Now as XNU: ESRCH unless the thread
+  assumed an identity with settid.
+- User apps (built on the Mac, in $X86SIM_SCRATCH/apps, not committed): Cadence (SwiftUI + AlarmKit + widgets ext) and
+  Waymark (TCRClone's Expo app, Release build with the JS bundle) install, launch and run on an iOS 27.2 phone.
+- tests/apps (x86ui, x86net, x86data + build.sh / run.sh): all checks PASS on 27.2 (README there).
+- Open: first keys typed right after the first tap into a text field can be lost while the keyboard session comes up
+  (later bursts arrive intact); the in-app WKWebView paints a few seconds after didFinish.

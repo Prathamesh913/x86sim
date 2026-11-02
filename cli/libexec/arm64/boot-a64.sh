@@ -137,7 +137,12 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # NanoRegistry's sync query failed its lookup, NSXPCConnection ran the error handler inline and that dispatch_sync'd onto
 # the queue the thread was on: a deadlock inside +[NRPairedDeviceRegistry sharedInstance]'s dispatch_once, which Maps'
 # main thread waits on (GEO observer callback): Maps froze on a bare globe, no tiles, no input.
-UI="com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
+# installcoordinationd (apps feature, on demand): app installs (`x86sim install`, as simctl install: IXAppInstallCoordinator
+# -> installcoordinationd -> installd -> LaunchServices). Without it every install failed at once ("Failed to create
+# IXPlaceholder ... com.apple.installcoordinationd ... lookup error 3"). Idle cost none until an install looks it up.
+# mobiletimerd (on demand): AlarmKit (com.apple.alarmkitservices) and the timer/alarm servers, which a Mac's simulator
+# runs. Without it AlarmManager.requestAuthorization() never answered (Cadence's "Allow" did nothing).
+UI="com.apple.installcoordinationd com.apple.mobiletimerd com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
 	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd

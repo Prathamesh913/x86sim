@@ -271,7 +271,11 @@ case $c in
 	apptest) exec "$L/apptest.sh" "$@" ;;
 	install|uninstall) exec "$L/appinstall.sh" "$c" "$@" ;;
 	debug) exec "$L/simdebug.sh" "$@" ;;
-	launch|terminate|get_app_container|listapps|push|location|addmedia|log|io|pidof) exec python3 "$L/simctl.py" "$c" "$@" ;;
+	launch|terminate|get_app_container|listapps|push|location|addmedia|log|io|pidof)
+		# simctl-style leading <device> (x86sim launch apps com.foo): a phone's name/folder/dir
+		. "$X/cli/lib/pickdevice.sh"
+		if [ $# -ge 1 ] && { [ $# -ge 2 ] || [ "$c" = listapps ]; } && pick_device "$1"; then shift; export X86SIM_DEVICE; fi
+		exec python3 "$L/simctl.py" "$c" "$@" ;;
 	probe) cmd_probe "$@" ;;
 	seedperms) exec python3 "$L/seedperms.py" "$X86SIM_DEVICE" "$@" ;;
 	cache) case $1 in

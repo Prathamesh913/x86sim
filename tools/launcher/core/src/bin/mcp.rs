@@ -5,7 +5,7 @@
 //! Register it with an MCP client, e.g. `claude mcp add x86code -- /path/to/x86code-mcp`.
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use x86code_core::{aot, features, instance, sim};
+use x86code_core::{aot, apps, features, instance, sim};
 
 fn tools() -> Value {
     let phone = json!({"type": "string", "description": "the phone: its name (as in the hub, e.g. \"QA\"), folder (device-a64-qa) or path. Default: the only running phone, else the configured one"});
@@ -30,6 +30,13 @@ fn tools() -> Value {
         {"name": "sim_stop", "description": "Stop a phone (only that phone).", "inputSchema": {"type": "object", "properties": {"phone": phone}}},
         {"name": "sim_restart", "description": "Restart a phone (stop, then start with its current features and the pre-translated code). Returns at once; poll phones_list.",
          "inputSchema": {"type": "object", "properties": {"phone": phone}}},
+        {"name": "app_install", "description": "Install an iOS Simulator app (.app bundle built for arm64 iphonesimulator) on a running phone, as simctl install: installd installs it and the home screen shows its icon. Returns the bundle id.",
+         "inputSchema": {"type": "object", "properties": {"phone": phone, "path": {"type": "string", "description": "the .app directory on this machine"}}, "required": ["path"]}},
+        {"name": "app_uninstall", "description": "Uninstall an app from a running phone (simctl uninstall).",
+         "inputSchema": {"type": "object", "properties": {"phone": phone, "bundle_id": {"type": "string"}}, "required": ["bundle_id"]}},
+        {"name": "app_launch", "description": "Open an app on a running phone by bundle id (simctl launch); args are passed to the app. Returns the pid.",
+         "inputSchema": {"type": "object", "properties": {"phone": phone, "bundle_id": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}, "required": ["bundle_id"]}},
+        {"name": "app_list", "description": "Installed apps on a running phone (simctl listapps).", "inputSchema": {"type": "object", "properties": {"phone": phone}}},
         {"name": "aot_status", "description": "Pre-translated code of a phone's iOS version: parts up to date / stale (with reasons) / missing, and the translator's codegen version.",
          "inputSchema": {"type": "object", "properties": {"phone": phone}}}
     ])
@@ -89,6 +96,13 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
             features::apply_preset(&device, n)?;
             json!({"phone": inst.name, "preset": n, "features": features::list(&device), "note": "applies at the next boot (sim_restart)"})
         }
+        "app_install" => json!({"phone": inst.name, "installed": apps::install(&inst, std::path::Path::new(a["path"].as_str().unwrap_or("")))?}),
+        "app_uninstall" => json!({"phone": inst.name, "answer": apps::uninstall(&inst, a["bundle_id"].as_str().unwrap_or(""))?}),
+        "app_launch" => {
+            let args: Vec<String> = a["args"].as_array().map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            json!({"phone": inst.name, "answer": apps::launch(&inst, a["bundle_id"].as_str().unwrap_or(""), &args)?})
+        }
+        "app_list" => json!({"phone": inst.name, "answer": apps::list(&inst)?}),
         "sim_restart" => json!({"phone": inst.name, "restarting": true, "pid": sim::restart(&device)?}),
         "sim_start" => json!({"phone": inst.name, "starting": true, "pid": sim::start(&device)?}),
         "sim_stop" => {
