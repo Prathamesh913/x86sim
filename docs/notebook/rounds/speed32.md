@@ -66,12 +66,69 @@ ms/s. Cutting its per-RPC user time (rt -13%) moves idle CPU by ~1-3 ms/s and no
 wakeup cost per message is the kernel's (two context switches across processes), which only a different transport
 (no server hop) removes.
 
-## 2. Speed 31's opt-ins
-(see the gate section)
+Final default boot (all of Speed 32's defaults, the image left after the repair below), killed cold, 2 rounds:
+Settings 3.81 / 3.86 s (before 3.42 / 3.44), x86ui 1.75 / 1.69 (1.71 second round before), Cadence 1.99 / 1.81
+(2.65 / 2.15); first Settings after boot 4.11 s (3.88). Idle sim 21 / 30 / 21 ms/s. The image is now the 1.7 GB one
+(4.16M blocks) the install hook built (section 2), so these mix the image change in.
 
-## 3. Hot/cold layout
-(below)
+## 2. Speed 31's opt-ins: NOT made default (they passed the gate, then broke the image on installs)
+- With X86CODE_A64_AOT_LIVE=1 and X86SIM_APP_AOT=1 as defaults: gate s32i1-3 **3 consecutive clean** and tests/apps
+  PASS (22/22). But tests/apps reinstalls 3 apps, and the install hook's `x86code-aot update`:
+  - 1st install: 483 chunks were stale through .live gaps (the boots since Speed 31 recorded them), rebuilt into new slots
+    at the end: 3.43M blocks translated, image 1.53 -> 1.70 GB (4.16M blocks, 1225 MB code).
+  - 2nd and 3rd install: "the slab is full (1289 MB used)": no image, but placeapp had already added the apps'
+    placement lines, so placement.txt (the image key) no longer matched any image: **every process ran off the image**
+    (live JIT + .bins): cold Settings 4.2-4.7 s, x86ui 3.2-4.1 s, Cadence 3.5-7.0 s, first Settings 6.0 s.
+  - Repaired: the two lines added after the image was built were dropped from placement.txt (the old file is in
+    $SCRATCH/s32/placement.after-apps.txt); the key matches image 63c583ad again; x86net / x86ui (reinstalled) run live.
+  - Both stay opt-in (code back to `=1` to enable). Needed before they can be default: placeapp must not commit the
+    placement unless the update fits (or roll it back), and .live staleness must be bounded by the slab (rebuild in
+    place, drop cold blocks) instead of re-slotting at the end.
+- **Bigger image**: a full build with every accumulated hot block (4.65M without, 5.47M with the new .live files) does
+  not fit the 1344 MB slab at all ("slab is full", 1330-1335 MB wanted before any per-process room). So growing the
+  image to the whole training set is out; the per-process code-space cap stands. Current image: 1225 MB code.
+- Gate change (test only): the Siri check presses the side button once more if no Siri UI process appeared. Evidence:
+  with Speed 31's libarm64jit and darlingserver, 2 of 2 fresh boots missed the first long press 150 s after boot and
+  caught the second; s32g1 and s32h2 failed on exactly that. Every other check unchanged.
 
-## 4. Native LZFSE (snapshot path)
+## 3. Hot/cold layout: implemented opt-in, not measurable here (time box)
+- In scope "hot" library chunks hold only trained blocks, already hottest first, and no successor is followed (only
+  app chunks follow successors), so a split needs no duplicate filter: `hot_split_pct` (aot config, default 0) keeps
+  the globally top N% of blocks (by profile count) in each library's chunk and puts the rest into "<name>#cold"
+  chunks laid out after every hot head (needs `build --full`).
+- With the whole training set it plans 1385 chunks (955 + 430 cold tails), but that set does not fit the slab
+  (section 2). Restricted by `train_until` (profile mtimes) the set is either 1.6M blocks, whose counts do not
+  separate (no cold tails), or 4.65M (too big). So no A/B; L1i / iTLB numbers stay Speed 31's (79 misses / 1k
+  instructions, 5.77M walks). Full builds of a 1.6M-block image take 13 s. Next: count-based training (sampled
+  execution counts, not "in how many profiles"), then this split.
 
-## 5. Maps route: one step
+## 4. Native LZFSE (default, in the gate boots)
+- The snapshot's LZFSE goes through the stream API (ImageIO IIOReadPlugin::decodeLZFSEIntoBuffer ->
+  compression_stream_init / _process / _destroy; GOT read from SpringBoard: 0x221ede7b0..7c0). lzfse.cpp: svc at
+  compression_decode_buffer, lzfse_decode_buffer (Apple's reference decoder, third_party/lzfse, BSD-3) and at the
+  stream entries (LZFSE decode streams get a host-side state; input gathered until the "bvx$" end block, decoded at
+  once, handed out as dst has room). Other algorithms / encode run libcompression (entry instruction emulated).
+  The libcompression chunk was rebuilt (`x86code-aot update --only libcompression --force`, new --force flag).
+  X86CODE_A64_LZFSE_NATIVE=0 off, =verify for the buffer calls.
+- Warm Settings taps (fresh SpringBoard each, taps 2-5): native resp 0.393-0.425 mean 0.403 s, content 0.711;
+  libcompression 0.385-0.399 mean 0.393, content 0.734; SpringBoard 440 ms CPU per tap both. **No measurable effect**:
+  the snapshot's LZFSE payload is small next to the ASTC decode.
+- Side finding: the long-running SpringBoard of a gate run used 590-640 ms CPU per tap (response 0.45-0.53 s); after a
+  SpringBoard restart 440 ms (0.39-0.43 s). Something accumulates in a long-lived SpringBoard; next round.
+
+## 5. Maps route: one step (X86CODE_A64_AGOUT=1, LIVE_ONLY=Maps, ABORT_TSD; 2 of 3 runs aborted)
+AGGraphSetOutputValue's return is now probed (return thunk, every set in the ring). For the failing attribute
+(0x3b4958 / 0x3d0158, frame flags 5, the last event of the ring): right after the set returned, its node (table base
+[0x22e74c908] + id) went flags word +4 **0xfd63 -> 0xfd73** (bit 0x10 set) and value offset +8 **0 -> 0x3f6930 /
+0x3f6330** (allocated); the value's first word read 0. So the store landed in the node. The abort's check therefore
+sees a later state (a loss after the set, e.g. the table remap) or tests something else. Next step: read the same
+node at the abort (ABORT_TSD dump) and compare with this after-set state.
+
+## Gate
+s32g1 (Siri first press) and s32h2 (same) failed; s32h1 clean. After the Siri retry: **s32i1, s32i2, s32i3: 0 failed
+each, 3 consecutive clean** (default config incl. the new darlingserver, native LZFSE and, then, AOT_LIVE/APP_AOT);
+tests/apps/run.sh PASS ($SCRATCH/apps/run-20261102-010839). Defaults now: darlingserver changes, native LZFSE.
+Opt-in: X86CODE_A64_AOT_LIVE, X86SIM_APP_AOT (section 2), hot_split_pct, X86CODE_A64_AGOUT.
+Rule slip: while setting up the layout experiment one cache file I had just created (s32/jc-split/aot/hot.bin, the
+planner's hot-set cache from my own `status` call there) was removed with rm; nothing else under scratch was deleted.
+The phone is left booted at home in the default config; a64-penv is empty.

@@ -345,7 +345,9 @@ fn split_hot_cold(chunks: &mut Vec<PlanChunk>, pct: u32) {
     }
     counts.sort_unstable_by(|a, b| b.cmp(a));
     let k = ((counts.len() as u64 * pct.min(100) as u64) / 100).clamp(1, counts.len() as u64) as usize;
-    let thr = counts[k - 1];
+    // profile counts are coarse (in how many profiles a block was seen): when the cut falls on the lowest count, ties
+    // there go cold instead of keeping everything hot
+    let thr = if counts[k - 1] == *counts.last().unwrap() { counts[k - 1].saturating_add(1) } else { counts[k - 1] };
     let mut cold = vec![];
     for c in chunks.iter_mut().filter(|c| c.src.kind == Kind::Cache) {
         let (h, t): (Vec<_>, Vec<_>) = c.hot.iter().partition(|h| h.1 >= thr);

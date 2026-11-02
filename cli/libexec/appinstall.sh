@@ -32,11 +32,11 @@ install)
 	S=$D/tmp/x86code-install; mkdir -p "$S"; rm -rf "$S/$(basename "$app")"
 	cp -a "$app" "$S/" || exit 1
 	request "install tmp/x86code-install/$(basename "$app")" "^install .*$(basename "$app")" 120 || exit 1
-	# Speed 31 (Speed 32: default on, X86SIM_APP_AOT=0 off): translate the app ahead of time. Its Mach-Os get placement slots
+	# Speed 31 (opt-in, X86SIM_APP_AOT=1; Speed 32: not default, a full slab left placement and image apart): translate the app ahead of time. Its Mach-Os get placement slots
 	# (placeapp.py: existing slots never move) and the AOT image gets their chunks (x86code-aot update: the app's
 	# chunks only, plus any library chunk with new .live training). Processes started from now on use them; until
 	# the update has finished, new processes find no image for the new key and translate live.
-	if [ "${X86SIM_APP_AOT:-1}" = 1 ]; then
+	if [ "${X86SIM_APP_AOT:-0}" = 1 ]; then
 		J=$(sed -n 's/^X86CODE_A64_JITCACHE_DIR=//p' "$X86SIM_DEVICE/sim.env")
 		inst=$(ls -td "$D"/Containers/Bundle/Application/*/"$(basename "$app")" 2>/dev/null | head -1)
 		if [ -n "$J" ] && [ -n "$inst" ]; then

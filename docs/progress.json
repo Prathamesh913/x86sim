@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 31: app tier fixed (placed app Mach-Os translated whole into the image) + .live training feedback from processes on the image: live translations per cold open x86ui 14k -> 1k, Cadence 26k -> 1.3k blocks; first Settings open after boot 7.15 -> 3.79 s. Native ASTC SplashBoard snapshot decode (default, 3 clean gates): warm tap response 0.470 -> 0.440 s. Motion-engine link is Apple's behaviour (no sim motion events on a Mac either): left alone. Maps route: the failing attribute does set its output value before the abort. Open: hot/cold layout, LZFSE, Maps set path, msg fast path.",
+ "now": "Speed 32: mach_msg measured (Darling round trip 20.9 us vs Mac 5.2; null trap 5.6 vs 0.15 us; the cost is the two cross-process wakeups through darlingserver) and darlingserver's per-RPC CPU cut (lock-free current_thread, x87 control word only, no EAGAIN pass): rt 20.9 -> 17.6 us, idle sim ~20 -> ~19 ms/s, taps/opens unchanged. Native LZFSE incl. the stream API (default, 3 clean gates): no measurable tap change. AOT_LIVE / APP_AOT stay opt-in: as defaults an install filled the slab and left placement and image apart (repaired). Full training set does not fit the slab; hot/cold split implemented opt-in, not measurable. Maps: after AGGraphSetOutputValue the node has its value (flags 0xfd63->0xfd73, value allocated).",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -839,5 +839,20 @@
    "LZFSE native decode"
   ],
   "gate": "s31g1-3: 0 failed each, 3 consecutive clean; tests/apps/run.sh PASS"
+ },
+ "speed32": {
+  "date": "2026-11-02",
+  "notes": "docs/notebook/rounds/speed32.md",
+  "gate": "s32i1-3 clean (Siri check retries one press), tests/apps PASS",
+  "defaults": [
+   "darlingserver per-RPC cuts",
+   "native LZFSE"
+  ],
+  "opt_in": [
+   "X86CODE_A64_AOT_LIVE",
+   "X86SIM_APP_AOT",
+   "hot_split_pct",
+   "X86CODE_A64_AGOUT"
+  ]
  }
 }

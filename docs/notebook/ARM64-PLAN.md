@@ -1816,3 +1816,21 @@ phone's memory scope (IN=0 OUT=107).
   path (X86CODE_A64_AGOUT ring). Next: check the node's value word after the set.
 - Gate helper pid_of scoped to the phone; simhid holds keys for 1.5 s after the keyboard first attaches.
 - Gate s31g1-3: 3 consecutive clean (0 failed each); tests/apps/run.sh PASS. Native ASTC + keyboard settle default.
+
+## Speed 32 (2026-11-02): mach_msg cost, darlingserver per-RPC cuts, native LZFSE, opt-ins kept opt-in (details: rounds/speed32.md)
+
+- **mach_msg measured** (tests/arm64/msgbench.c): round trip 20.9 us (Mac 5.2), send+rcv without wakeup 12.0 us, null
+  trap 5.6 us (Mac 0.15). ~68% kernel: two cross-process wakeups per RPC (a bare AF_UNIX ping-pong is 2.6 us here);
+  syscalls themselves are ~33 ns. Busy-polling is 3x worse when both ends share a CPU: not done. A server-less fast
+  path needs the IPC spaces outside darlingserver: not done.
+- **darlingserver** (default): lock-free current_thread (was ~1/3 of its user CPU per RPC), x87 control word only in
+  microthread switches, no EAGAIN recvmmsg pass. rt 20.9 -> 17.6 us, null trap 5.6 -> 5.0; idle sim 20-23 -> 18-19
+  ms/s; taps and opens unchanged within noise.
+- **Native LZFSE** (default): compression_decode_buffer / lzfse_decode_buffer and the stream API (the snapshot path).
+  No measurable warm-tap change.
+- **AOT_LIVE / APP_AOT stay opt-in**: gated clean, but an install's update re-slotted 483 live-stale chunks, the next
+  installs hit "slab is full" after placeapp changed placement.txt: every process off the image (repaired). The whole
+  training set (4.65M+ blocks) does not fit the slab. Hot/cold split (`hot_split_pct`) implemented opt-in, unmeasured.
+- **Maps**: the failing node has flags 0xfd63 -> 0xfd73 and an allocated value right after AGGraphSetOutputValue.
+- Gate s32i1-3: 3 consecutive clean (Siri check presses twice at most: first-press miss also on Speed 31's bits);
+  tests/apps PASS.
