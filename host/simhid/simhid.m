@@ -121,26 +121,31 @@ static VService touch_svc, buttons_svc, keyboard_svc;
 static IOHIDEventSystemRef_ hid_system;
 
 static Boolean v_open(void* t, void* r, IOOptionBits o) {
-	slog("v_open %s", ((VService*)t)->name);
+	// Speed 34: NULL-safe: after the idle detach (_IOHIDServiceTerminate) IOKit calls close / unschedule with a NULL
+	// target (backboardd crashed in v_close on the first gate)
+	slog("v_open %s", t ? ((VService*)t)->name : "(null)");
 	return true;
 }
-static void v_close(void* t, void* r, IOOptionBits o) { slog("v_close %s", ((VService*)t)->name); }
+static void v_close(void* t, void* r, IOOptionBits o) { slog("v_close %s", t ? ((VService*)t)->name : "(null)"); }
 static CFTypeRef v_copyProperty(void* t, void* r, CFStringRef key) {
 	VService* s = t;
+	if (!s || !s->props) return NULL;
 	CFTypeRef v = CFDictionaryGetValue(s->props, key);
 	return v ? CFRetain(v) : NULL;
 }
 static Boolean v_setProperty(void* t, void* r, CFStringRef key, CFTypeRef value) { return true; }
 static void v_setEventCallback(void* t, void* r, void* cb, void* a, void* b) {
-	slog("v_setEventCallback %s cb=%p", ((VService*)t)->name, cb);
+	slog("v_setEventCallback %s cb=%p", t ? ((VService*)t)->name : "(null)", cb);
 }
 static void v_schedule(void* t, void* r, dispatch_queue_t q) {
 	VService* s = t;
+	if (!s) return;
 	if (q) dispatch_retain(q);
 	s->queue = q;
 	slog("v_schedule %s queue=%p", s->name, q);
 }
 static void v_unschedule(void* t, void* r, dispatch_queue_t q) {
+	if (!t) { slog("v_unschedule (null)"); return; }
 	slog("v_unschedule %s", ((VService*)t)->name);
 	((VService*)t)->queue = NULL;
 }

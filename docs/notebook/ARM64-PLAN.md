@@ -1850,3 +1850,16 @@ phone's memory scope (IN=0 OUT=107).
 - **Counts**: X86CODE_A64_COUNT=1 (opt-in, training): 4 ms per-process sampler -> <key>.<exe>.cnt; hot.rs ranks sampled
   blocks first (hits x 1024). L1i / split image not measured this round.
 - **Maps**: node at the abort equals the after-set state (nothing lost); the set returned 0x98 (not a bool): next.
+
+## Speed 34 (2026-11-02): the aged tap was the keyboard, FRINT/FCVTA inline, leftovers (details: rounds/speed34.md)
+
+- **Aged taps fixed**: the +90 ms SpringBoard CPU per warm tap was UIKit's focus system, active while simhid's
+  on-demand keyboard stays attached (the gate's typing, or any typing in the launcher). simhid now detaches it after
+  SIMHID_KB_IDLE_S (30 s) idle and re-attaches on the next key: 630-720 -> 540-580 ms, the same as fresh.
+- **FP**: FRINTA / FRINTX / FCVTAS / FCVTAU inline in dynarmic's x64 backend (emit_x64_frint.h). 1.2M-case
+  JIT-vs-software test exact, flags included (tests/arm64/frint). FPRoundInt / FPRoundBase are gone from SpringBoard's
+  profile. The loop that called them is libcompression's snapshot encoder.
+- **Maps**: AGGraphSetOutputValue is void, so the 0x98 in w0 was never a return value. Lead closed.
+- **Leftovers**: evicted chunks re-admitted into freed gaps; placeapp prunes a reinstalled app's stale container rows;
+  background huge-image copy kept opt-in (X86CODE_A64_AOT_HUGE_BG=1: the thread vanished on the phone).
+- **Aged-gate STALL**: gate logic (Settings alive from the About check resumes on About); the checks accept it.
