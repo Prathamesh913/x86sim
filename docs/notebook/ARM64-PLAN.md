@@ -1793,3 +1793,26 @@ phone's memory scope (IN=0 OUT=107).
 - Tooling: a64-penv variables reach the guest env; ABORT_TSD, AGDL, THUNK_HIST, MSG_STATS histogram; diag shims
   agnodediag.c, dldiag.m (CADisplayLink / motion engine).
 - Not done: app-code persistence, hot/cold layout, SplashBoard ASTC/LZFSE decode, Siri audio input, msg fast path.
+
+## Speed 31 (2026-11-01): app code + live-translated blocks in the image, native ASTC snapshot decode (details: rounds/speed31.md)
+
+- **Motion engine (SpringBoard idle)**: the simulator motion provider produces no events on a Mac either. Without
+  events UIKit keeps the 30 fps link (pauses only when dimmed; slow mode needs events). Speed 30's Mac sample came
+  from a phone that was not at the home screen. This is Apple's behaviour, so it was not changed (that would be
+  feature disabling). The lever is the cost per wakeup.
+- **App tier fixed + placeapp.py** (X86SIM_APP_AOT=1 on `x86sim install`): the builder never mapped Containers/ files.
+  App chunks are now translated whole (12x code slot) and keyed by UUID + file hash + slot. Live translations per cold
+  open: x86ui 11.3k cache + 2.8k app blocks -> 395 + 627, Cadence 20.1k + 6.2k -> 637 + 634.
+- **.live training feedback** (X86CODE_A64_AOT_LIVE=1): processes on the image record what they translate themselves.
+  Their chunks go stale only for these blocks (ranked first in the slot). Cold content: Settings first-after-boot
+  7.15 -> 3.79 s, killed 3.39 -> 3.46; x86ui 1.90/1.81 -> 1.78/1.64; Cadence 2.13/2.59 -> 2.37/2.07.
+- **Native ASTC decode** (libate at_encoder_decompress_texels -> vendored astc-encoder; verify: 0 bytes differ): warm
+  Settings tap response 0.470 -> 0.440 s, SpringBoard 552 -> 526 ms CPU per tap, content 0.762 -> 0.750 s.
+  X86CODE_A64_ASTC_NATIVE=0 off. LZFSE not native.
+- **Hot/cold layout**: measured (Preferences cold L1i 4.27G misses, 79/1k insns; iTLB walks 5.77M), not implemented
+  (needs split chunks + a same-sub-chunk successor filter in the builder).
+- **Maps route**: the failing attribute did call AGGraphSetOutputValue right before the abort
+  (DynamicContainerInfo<DynamicLayoutViewAdaptor>.updateValue): the value is set and then lost or rejected in AG's set
+  path (X86CODE_A64_AGOUT ring). Next: check the node's value word after the set.
+- Gate helper pid_of scoped to the phone; simhid holds keys for 1.5 s after the keyboard first attaches.
+- Gate s31g1-3: 3 consecutive clean (0 failed each); tests/apps/run.sh PASS. Native ASTC + keyboard settle default.

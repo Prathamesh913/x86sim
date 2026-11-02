@@ -37,6 +37,8 @@ done
 sleep 15; say "PSS after apps: $(pss)"
 # keyboard: Spotlight from the home screen (swipe down), type, look for the text and the keyboard's keys
 home 5; touch_ swipe 603 900 603 1600; sleep 4; touch_ text wifi; f wait_ocr keyboard 'wifi|Wi-Fi' 40
+# Speed 31 (info): the first keys after the keyboard comes up arrive whole (simhid queues them while it attaches)
+ocr | grep -qiw 'wifi' && say "first keys: wifi typed whole" || say "first keys: 'wifi' not read back whole (info)"
 # Speed 27: and more letters (each one queries the parser and suggestions); Spotlight must not crash on any of them
 touch_ text " photos"; sleep 8; crashed_proc Spotlight && { say "CRASH keyboard: Spotlight crashed while typing"; FAIL=$((FAIL + 1)); }
 # Siri (Speed 26): hold the side button (iPhone 17 has no home button; on a home-button model the long press is the

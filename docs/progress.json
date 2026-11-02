@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 30: Maps route abort narrowed (rule leaves no value; not TLS, not deadline cancellation, not the heap scavenger; Darling shared vm_remap race fixed behind X86CODE_A64_REMAP_FREEZE=1, not the cause). SpringBoard idle traffic identified: ~256 real mach_msg/s from two CADisplayLinks (SBUIPreciseClockTimer 15 fps as on a Mac; _UIMotionEffectEngine 30 fps with an event-less simulator motion provider, the excess). Open: Maps route, motion-engine link, app-code persistence, SplashBoard decode, Siri audio.",
+ "now": "Speed 31: app tier fixed (placed app Mach-Os translated whole into the image) + .live training feedback from processes on the image: live translations per cold open x86ui 14k -> 1k, Cadence 26k -> 1.3k blocks; first Settings open after boot 7.15 -> 3.79 s. Native ASTC SplashBoard snapshot decode (default, 3 clean gates): warm tap response 0.470 -> 0.440 s. Motion-engine link is Apple's behaviour (no sim motion events on a Mac either): left alone. Maps route: the failing attribute does set its output value before the abort. Open: hot/cold layout, LZFSE, Maps set path, msg fast path.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -807,5 +807,37 @@
    "mac_sim_springboard_idle": "~50-70 csw/s, 0.5 idle wakeups/s (26.5)"
   },
   "gate": "s30g1: 0 failed (defaults unchanged)"
+ },
+ "speed31": {
+  "date": "2026-11-01",
+  "details": "docs/notebook/rounds/speed31.md",
+  "fixed": [
+   "AOT app tier: builder maps Containers/ placed files (never worked); app chunks translated whole, keyed by UUID + file hash + slot",
+   "first keys after the keyboard attaches are no longer lost (simhid settle 1.5 s, keys queue)",
+   "gate pid_of matches only the phone's own processes"
+  ],
+  "added": [
+   "native ASTC decode for libate at_encoder_decompress_texels (vendored astc-encoder, default on; X86CODE_A64_ASTC_NATIVE=0 off, =verify)",
+   ".live training feedback (X86CODE_A64_AOT_LIVE=1, opt-in) + live-gap chunk staleness",
+   "placeapp.py, X86SIM_APP_AOT=1 install hook (opt-in)",
+   "tools: nonimage.sh, X86CODE_A64_LIVE_BINS, X86CODE_A64_AGOUT, x86code-aot train_until"
+  ],
+  "measured": {
+   "live_blocks_per_cold_open": "x86ui 11306+2772 -> 395+627 (cache+app), Cadence 20092+6195 -> 637+634",
+   "perf_live_jit_share": "x86ui 14.3 -> 12.5 %, Cadence 13.5 -> 10.9 %, Settings 13.5 -> 14.2 %",
+   "cold_content_s": "Settings first 7.15 -> 3.79, killed 3.39 -> 3.46; x86ui 1.90/1.81 -> 1.78/1.64; Cadence 2.13/2.59 -> 2.37/2.07",
+   "warm_tap": "response 0.470 -> 0.440 s, content 0.762 -> 0.750 s, SpringBoard 552 -> 526 ms CPU per tap",
+   "preferences_cold_perf": "20.1G cycles (Speed 28: 23.6G), L1i misses 4.27G, iTLB walks 5.77M",
+   "image_blocks": "3394690 -> 3623348"
+  },
+  "found": [
+   "motion-engine 30 fps link: UIKit behaviour without sim motion events, same on a Mac (not changed)",
+   "Maps route: failing attribute calls AGGraphSetOutputValue right before the abort (value lost/rejected in AG's set path)"
+  ],
+  "not_done": [
+   "hot/cold image layout (measured only)",
+   "LZFSE native decode"
+  ],
+  "gate": "s31g1-3: 0 failed each, 3 consecutive clean; tests/apps/run.sh PASS"
  }
 }
