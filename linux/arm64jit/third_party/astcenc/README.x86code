@@ -1,0 +1,1 @@
+ARM astc-encoder 5.2.0 (https://github.com/ARM-software/astc-encoder, Apache-2.0): library sources only (Source/astcenc_*), built decompress-only for the native libate ASTC decode (linux/arm64jit/astc.cpp).

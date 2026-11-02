@@ -276,6 +276,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
         if (auto w = swifttype_read_code(a)) return w;
         if (auto w = swift_timebase_read_code(a)) return w;
         if (auto w = agdl_read_code(a)) return w;
+        if (auto w = astc_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
     uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
@@ -570,6 +571,7 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kSwiftConfVerifySvc) { swiftconf_verify(*this); return; }
     if (swi == kDyldScanSvcA || swi == kDyldScanSvcB) { dyld_scan_step(*this, swi == kDyldScanSvcB); return; }
     if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
+    if (swi == kAstcSvc) { astc_step(*this); return; }
     if (swi == kAgDlCancelSvc) {  // stp x29, x30, [sp, #-16]!
         const u64 nsp = sp() - 16;
         *(u64 *)nsp = x(29); *(u64 *)(nsp + 8) = x(30);

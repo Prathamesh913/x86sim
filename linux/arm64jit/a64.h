@@ -133,6 +133,10 @@ constexpr u32 kSwiftTypeSvc = 0xfffc;
 // "svc #0xfffb" / "#0xfffa": dyld_sim's loaded-loader scans (dyldsim.cpp), substituted by MemoryReadCode.
 constexpr u32 kDyldScanSvcA = 0xfffb, kDyldScanSvcB = 0xfffa;
 std::optional<u32> dyld_scan_read_code(u64 a);
+// "svc #0xfff0": Speed 31, entry of libate's at_encoder_decompress_texels (astc.cpp), substituted by MemoryReadCode.
+constexpr u32 kAstcSvc = 0xfff0;
+void astc_prepare(const std::string &cache_path);
+std::optional<u32> astc_read_code(u64 a);
 extern u64 g_exit_stub;  // "svc #0xffff": LR of every native->guest call
 
 u32 add_thunk(const std::string &name, Handler fn, const void *native = nullptr, int nfixed = 0);
@@ -142,6 +146,7 @@ void boundary_init();
 void dyld_sim_patches(u64 slide);
 struct GuestThread;
 void dyld_scan_step(GuestThread &t, bool loop_b);
+void astc_step(GuestThread &t);
 std::optional<u32> swiftconf_read_code(u64 a);  // swiftconf.cpp: svc substituted at the Swift conformance step
 void swiftconf_step(GuestThread &t);
 void swiftconf_verify(GuestThread &t);
