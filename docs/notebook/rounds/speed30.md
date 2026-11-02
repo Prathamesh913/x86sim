@@ -66,3 +66,6 @@ Persisting app/non-cache code, hot/cold layout, native ASTC/LZFSE SplashBoard de
 
 ## Gate
 See the end of this file.
+
+## Gate result
+s30g1 (cold boot, default config): **0 failed**. Only one boot this round. Defaults are unchanged (every new behaviour is behind a knob), so the three-clean-boot rule did not apply. Maps route check not in the default gate (still aborts).

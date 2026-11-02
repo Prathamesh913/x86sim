@@ -806,6 +806,6 @@
    "springboard_idle_mach_msg_per_s": "~256 (810 incl. voucher thunks)",
    "mac_sim_springboard_idle": "~50-70 csw/s, 0.5 idle wakeups/s (26.5)"
   },
-  "gate": "pending"
+  "gate": "s30g1: 0 failed (defaults unchanged)"
  }
 }
