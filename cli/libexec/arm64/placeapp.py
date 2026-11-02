@@ -21,6 +21,30 @@ def main():
     by_key = {r[4]: r for r in rows}
     end = max((r[0] + r[1] for r in rows), default=0x2AC000000)
     changed = 0
+    # Speed 34: a reinstall gets a new container UUID; the old container's rows stayed in placement.txt forever.
+    # Drop rows of the same .app name in another container when that container exists on no phone (the jitcache
+    # dir is shared by every phone of this runtime: var/device-*/data and the installing phone's data are checked).
+    # Remaining slots never move.
+    datas = set()
+    root = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../.."))
+    vd = os.path.join(root, "var")
+    if os.path.isdir(vd):
+        datas |= {os.path.join(vd, d, "data") for d in os.listdir(vd) if d.startswith("device")}
+    names = set()
+    for app in apps:
+        rp = os.path.realpath(app)
+        i = rp.find("/Containers/")
+        if i >= 0:
+            datas.add(rp[:i])
+            names.add(os.path.basename(rp))
+    for r in list(rows):
+        f = r[4].split("/")
+        if len(f) > 5 and f[0] == "Containers" and f[4] in names and \
+                not any(os.path.isdir(os.path.join(d, *f[:4])) for d in datas):
+            rows.remove(r)
+            by_key.pop(r[4], None)
+            changed += 1
+            print(f"placeapp: pruned stale {r[4]}")
     for app in apps:
         for d, _, fs in os.walk(os.path.realpath(app)):
             for n in sorted(fs):

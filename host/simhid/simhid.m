@@ -168,6 +168,38 @@ static void add_service(IOHIDEventSystemRef_ sys, VService* s) {
 	slog("added %s service (id 0x%llx)", s->name, (unsigned long long)s->id);
 }
 
+#if __arm64__
+// Speed 34: detach the keyboard service again after SIMHID_KB_IDLE_S (default 30; 0 = never) without a key, as a
+// hardware keyboard that goes away. While one is attached UIKit runs in hardware-keyboard mode, and SpringBoard's
+// focus system then walks the focus environment on every app transition: +80-100 ms of SpringBoard CPU per warm
+// Settings tap (630-720 ms vs 530-550 fresh), which is what "the aged system" was (the gate types into Spotlight /
+// Settings search, and the attach stayed for the rest of the boot). The next key attaches it again (with the settle).
+extern void _IOHIDEventSystemRemoveService(IOHIDEventSystemRef_, IOHIDServiceRef);
+extern void _IOHIDServiceTerminate(IOHIDServiceRef);
+static uint64_t kb_last_ns;
+static int kb_down;  // keys held (no detach while one is down)
+static uint64_t now_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000000000ull + ts.tv_nsec; }
+static pthread_mutex_t cmd_mu;
+static void* kb_idle_thread(void* arg) {
+	const uint64_t idle = (uint64_t)(intptr_t)arg * 1000000000ull;
+	for (;;) {
+		sleep(2);
+		pthread_mutex_lock(&cmd_mu);
+		if (keyboard_svc.service && hid_system && kb_down <= 0 && now_ns() - kb_last_ns > idle) {
+			IOHIDServiceRef sv = keyboard_svc.service;
+			keyboard_svc.service = NULL;
+			_IOHIDEventSystemRemoveService(hid_system, sv);
+			_IOHIDServiceTerminate(sv);
+			CFRelease(sv);
+			kb_down = 0;
+			slog("keyboard detached (idle)");
+		}
+		pthread_mutex_unlock(&cmd_mu);
+	}
+	return NULL;
+}
+#endif
+
 static void dispatch_event(VService* s, IOHIDEventRef e) {
 	if (!s->service || !e) {
 		slog("dispatch_event drop service=%p e=%p", s ? s->service : NULL, e);
@@ -272,6 +304,9 @@ static void handle_line(char* line) {
 			usleep((ms && *ms ? atoi(ms) : 1500) * 1000);
 			slog("keyboard settled");
 		}
+		kb_last_ns = now_ns();
+		kb_down += !strcmp(a, "down") ? 1 : -1;
+		if (kb_down < 0) kb_down = 0;
 #endif
 		send_key(&keyboard_svc, 7, usage, !strcmp(a, "down"));
 		return;
@@ -376,8 +411,19 @@ static void* listen_thread(void* arg) {
 	hid_system = system;
 	const char* kb = getenv("SIMHID_KEYBOARD");
 	if (kb && *kb == '1')
-#endif
+		add_service(system, &keyboard_svc);
+	else {  // Speed 34: idle detach of an on-demand keyboard (SIMHID_KEYBOARD=1 keeps it attached)
+		const char* is = getenv("SIMHID_KB_IDLE_S");
+		const int idle = is && *is ? atoi(is) : 30;
+		if (idle > 0) {
+			pthread_t kt;
+			pthread_create(&kt, NULL, kb_idle_thread, (void*)(intptr_t)idle);
+			pthread_detach(kt);
+		}
+	}
+#else
 	add_service(system, &keyboard_svc);
+#endif
 	pthread_t t;
 	pthread_create(&t, NULL, listen_thread, NULL);
 	pthread_detach(t);

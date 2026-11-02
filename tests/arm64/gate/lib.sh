@@ -149,7 +149,7 @@ maps_tiles() {
 # screen has no app name in that band.)
 app_switcher() {
 	local i xy
-	open_check "$1-app" com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General' 60 || return $?
+	open_check "$1-app" com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General|Model Name|iOS Version|About' 60 || return $?  # Speed 34: About kept (gate.sh)
 	for i in 1 2 3 4 5; do
 		# from the home screen (Settings is the most recent app), as the gesture is made on a phone at rest
 		home 5; touch_ swipe 603 2615 603 1700 400 300; sleep 4

@@ -64,7 +64,9 @@ home 5; open_ 'https://en.wikipedia.org/wiki/Paris'; f wait_proc safari MobileSa
 # ("attribute failed to set an initial value: DynamicLayoutComputer<_VStackLayout>") is open (speed29.md).
 [ "${GATE_ROUTE:-0}" = 1 ] && O="$O/route" f tests/arm64/gate/mapsroute.sh maps-route
 # Speed 27: home by swipe-up from an app, then the app switcher (swipe up and hold) shows the recent apps
-f open_check swipeup-app com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General' 60
+# Speed 34: Settings may still be alive from the About check (an aged system: jetsam's grace doubles per kill) and
+# then correctly resumes on About (iOS keeps the page): accept that page too (the check is "an app is showing").
+f open_check swipeup-app com.apple.Preferences 'Airplane|Wi-Fi|Bluetooth|General|Model Name|iOS Version|About' 60
 touch_ swipe 603 2610 603 1500 250; f wait_ocr swipeup-home 'Calendar|Photos|Wallet|Health' 30
 f app_switcher switcher
 home 15

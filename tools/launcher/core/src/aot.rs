@@ -618,7 +618,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     if opts.full && !opts.measure {
         man.chunks.clear();
     }
-    let todo: Vec<&PlanChunk> = plan
+    let mut todo: Vec<&PlanChunk> = plan
         .chunks
         .iter()
         .filter(|c| c.want > 0 || opts.measure)
@@ -722,6 +722,31 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                 };
                 let (_, _, n) = occ.remove(i);
                 evicted.push(n);
+            }
+        }
+        // Speed 34: chunks evicted by an earlier update come back when space has freed (dropped / pruned /
+        // re-keyed chunks left gaps): hottest per byte first, only into free space (never evicting for them), not
+        // during an --only (app install) update.
+        if opts.only.is_none() && evicted.is_empty() {
+            let mut back: Vec<&PlanChunk> = plan
+                .chunks
+                .iter()
+                .filter(|c| c.want > 0 && c.src.kind != Kind::App && !todo_names.contains(c.src.name.as_str()))
+                .filter(|c| man.chunks.get(&c.src.name).is_some_and(|r| r.state == "evicted" && r.slot_size == 0 && r.key == c.key))
+                .collect();
+            back.sort_by(|a, b| heat(&b.src.name, b.want).total_cmp(&heat(&a.src.name, a.want)));
+            let mut n_back = 0;
+            for c in back {
+                if let Some(at) = fit(&mut occ, c.want) {
+                    slots.insert(c.src.name.clone(), (at, c.want));
+                    occ.push((at, c.want, c.src.name.clone()));
+                    todo.push(c);
+                    n_back += 1;
+                }
+            }
+            if n_back > 0 {
+                prog.chunks_total = todo.len();
+                eprintln!("x86code-aot: {n_back} evicted chunks re-admitted into freed space");
             }
         }
     }
