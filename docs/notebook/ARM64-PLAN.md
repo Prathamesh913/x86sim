@@ -1834,3 +1834,19 @@ phone's memory scope (IN=0 OUT=107).
 - **Maps**: the failing node has flags 0xfd63 -> 0xfd73 and an allocated value right after AGGraphSetOutputValue.
 - Gate s32i1-3: 3 consecutive clean (Siri check presses twice at most: first-press miss also on Speed 31's bits);
   tests/apps PASS.
+
+## Speed 33 (2026-11-02): safe install hook + feedback default, aged-tap cause narrowed, sampled counts (details: rounds/speed33.md)
+
+- **Install hook / feedback (default)**: x86code-aot rebuilds feedback-stale chunks in their own slots (bounded by
+  live_seen), fills free gaps, evicts the coldest library chunks when the slab is full; appinstall.sh restores
+  placement.txt on any failure and builds only the app (--only UUID). Feedback update: 210 chunks in place, code space
+  1225 MB unchanged. AOT_LIVE / APP_AOT default (=0 off). Gate s33g1-3 clean, tests/apps PASS.
+- **Aged SpringBoard**: +70-90 ms CPU per warm tap (540-580 -> 620-650) follows the system, not SpringBoard (restarted
+  SpringBoard stays slow). +38% cycles spread evenly: more guest work (app-snapshot ASTC + vImage decode, a live-JIT
+  loop through dynarmic's software FPRoundInt) and dispatcher re-entries. Not fixed. Next: attribute the FPRoundInt
+  loop (inline ROUNDPS for FRINTX/FRINTI), check per-tap snapshot decode.
+- **Cold Settings**: 3.58/4.15 -> 3.42/3.90 s after the in-place update; the growth path (re-slotting to the end) is
+  closed. Clean-vs-grown A/B not done (a compact image of the same set does not fit the slab).
+- **Counts**: X86CODE_A64_COUNT=1 (opt-in, training): 4 ms per-process sampler -> <key>.<exe>.cnt; hot.rs ranks sampled
+  blocks first (hits x 1024). L1i / split image not measured this round.
+- **Maps**: node at the abort equals the after-set state (nothing lost); the set returned 0x98 (not a bool): next.
