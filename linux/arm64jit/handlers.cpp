@@ -301,22 +301,25 @@ static void h_vm_map(GuestThread &t, u32 i) {
 // Opt-in (X86CODE_A64_REMAP_FREEZE=1): it did not fix the Maps abort (one 1 MB remap there, still aborted), and nothing
 // becomes default without three clean gate boots.
 std::atomic<u64> g_remap_lo{0}, g_remap_hi{0};
-static bool remap_prot_of(u64 a, int *prot, bool *priv) {  // the /proc/self/maps entry holding a
+// Speed 36: the whole range [a, a + len) (several mappings after darlingserver's piecewise remap): *prot is the common
+// protection (0 if the pieces differ or a hole), *priv whether any piece is private.
+static bool remap_prot_of(u64 a, u64 len, int *prot, bool *priv) {
     FILE *m = fopen("/proc/self/maps", "r");
     if (!m) return false;
-    char line[512]; bool found = false;
-    while (fgets(line, sizeof line, m)) {
+    char line[512]; u64 covered = a; int common = -1; *priv = false;
+    while (fgets(line, sizeof line, m) && covered < a + len) {
         unsigned long lo, hi; char p[5];
         if (sscanf(line, "%lx-%lx %4s", &lo, &hi, p) != 3) continue;
-        if (a >= lo && a < hi) {
-            *prot = (p[0] == 'r' ? PROT_READ : 0) | (p[1] == 'w' ? PROT_WRITE : 0) | (p[2] == 'x' ? PROT_EXEC : 0);
-            *priv = p[3] == 'p';
-            found = true;
-            break;
-        }
+        if (hi <= covered) continue;
+        if (lo > covered) break;  // hole
+        const int pr = (p[0] == 'r' ? PROT_READ : 0) | (p[1] == 'w' ? PROT_WRITE : 0) | (p[2] == 'x' ? PROT_EXEC : 0);
+        if (common >= 0 && pr != common) common = 0; else if (common < 0) common = pr;
+        if (p[3] == 'p') *priv = true;
+        covered = hi;
     }
     fclose(m);
-    return found;
+    *prot = common < 0 ? 0 : common;
+    return covered >= a + len;
 }
 static void h_vm_remap(GuestThread &t, u32 i) {
     u64 ints[16]; load_regs(t, ints);
@@ -325,7 +328,7 @@ static void h_vm_remap(GuestThread &t, u32 i) {
     static const bool freeze = [] { const char *e = getenv("X86CODE_A64_REMAP_FREEZE"); return e && *e == '1'; }();
     const u64 src = ints[6] & ~0x3fffull, len = ((ints[6] + ints[2] + 0x3fff) & ~0x3fffull) - src;
     int prot = 0; bool priv = false;
-    if (!freeze || (u32)ints[7] != 0 || ints[0] != ints[5] || !ints[2] || !remap_prot_of(src, &prot, &priv) || !priv ||
+    if (!freeze || (u32)ints[7] != 0 || ints[0] != ints[5] || !ints[2] || !remap_prot_of(src, len, &prot, &priv) || !priv ||
         prot != (PROT_READ | PROT_WRITE)) {
         vm_map_like(t, i, ints, 1, 2, 3, 4);
         return;

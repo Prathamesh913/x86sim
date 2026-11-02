@@ -10,7 +10,12 @@ kill -9 $(pid_of Maps) 2>/dev/null; sleep 2
 app com.apple.Maps; wait_proc "$L" Maps 60 || exit 1; sleep 25; alive open; touch_ dismiss
 touch_ tap 500 1575; sleep 5; touch_ text "Eiffel Tower"; sleep 6; touch_ raw "key return"; sleep 15; alive search
 touch_ tap 500 520; sleep 20; alive place; touch_ dismiss; sleep 3
-for i in 1 2 3 4 5; do tap_word Plan && break; touch_ dismiss; sleep 3; done; sleep 15; alive plan
+# Speed 36: confirm the Directions sheet (a Plan tap once landed on the place card's "Add a Note"); else close and retry
+for i in 1 2 3 4 5; do
+	tap_word Plan || { touch_ dismiss; sleep 3; continue; }
+	sleep 15; ocr | grep -Eqi 'Directions|My Location|From' && break
+	say "$L: no Directions sheet after Plan (try $i), closing it"; touch_ tap 113 301; sleep 2; touch_ dismiss; sleep 3
+done; alive plan
 touch_ tap 400 2130; sleep 6; touch_ text "Louvre Museum"; sleep 12; alive origin
 touch_ tap 500 670; sleep 30; alive route
 o=$(ocr); cp "$O/now.png" "$O/$L.png"

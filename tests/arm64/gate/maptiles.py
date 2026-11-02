@@ -3,7 +3,7 @@
 Looks at the map area above the search card (device pixels y 200-1450 on a 1206x2622 iPhone 17 frame) and counts
 water-blue and land-green pixels and distinct colours. A rendered map (globe or street level) has both; the states
 Maps showed while it couldn't load tiles have neither: a bare globe (cream sphere with its grid) or a flat cream
-area. Prints one line "tiles yes|no blue B green G colours C" and exits 0 for yes, 1 for no."""
+area (Speed 36: or a street-level view: some blue/green and >= 250 colours). Prints one line "tiles yes|no blue B green G colours C" and exits 0 for yes, 1 for no."""
 import sys
 from PIL import Image
 
@@ -15,6 +15,8 @@ n = len(px)
 blue = sum(1 for r, g, b in px if b > r + 40 and b > g + 5) / n
 green = sum(1 for r, g, b in px if g > r + 25 and g > b + 15) / n
 cols = len({(r // 16, g // 16, b // 16) for r, g, b in px})
-ok = blue + green >= 0.15 and cols >= 150
+# Speed 36: a street-level city view (central Paris, where Maps reopens after the route test) is mostly cream streets:
+# blue + green 0.11 with 332 colours. The no-tile states have few colours, so many colours with some water/park pass.
+ok = (blue + green >= 0.15 and cols >= 150) or (blue + green >= 0.06 and cols >= 250)
 print(f"tiles {'yes' if ok else 'no'} blue {blue:.2f} green {green:.2f} colours {cols}")
 sys.exit(0 if ok else 1)

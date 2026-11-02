@@ -60,9 +60,9 @@ f open_check wallet com.apple.Passbook 'Wallet|Passes|Apple Pay|Tickets' 120
 f open_check messages com.apple.MobileSMS 'Messages|Edit|Filters|New Message|Start a conversation' 120
 f open_check news com.apple.news 'Today|News\+|Following|Audio|Sports|Puzzles|Top Stories' 150
 home 5; open_ 'https://en.wikipedia.org/wiki/Paris'; f wait_proc safari MobileSafari 60 && PROC=MobileSafari f wait_ocr safari 'Paris|Wikipedia|France' 150
-# Speed 29: Maps route (search, Plan, origin, route): GATE_ROUTE=1. Off by default while the AttributeGraph abort
-# ("attribute failed to set an initial value: DynamicLayoutComputer<_VStackLayout>") is open (speed29.md).
-[ "${GATE_ROUTE:-0}" = 1 ] && O="$O/route" f tests/arm64/gate/mapsroute.sh maps-route
+# Speed 29: Maps route (search, Plan, origin, route). Speed 36: on by default (GATE_ROUTE=0 skips it): the AttributeGraph
+# abort was darlingserver's shared vm_remap losing the old table's aliasing on the second growth (speed36.md).
+[ "${GATE_ROUTE:-1}" = 1 ] && O="$O/route" f tests/arm64/gate/mapsroute.sh maps-route
 # Speed 27: home by swipe-up from an app, then the app switcher (swipe up and hold) shows the recent apps
 # Speed 34: Settings may still be alive from the About check (an aged system: jetsam's grace doubles per kill) and
 # then correctly resumes on About (iOS keeps the page): accept that page too (the check is "an app is showing").
