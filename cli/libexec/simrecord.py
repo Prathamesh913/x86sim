@@ -4,7 +4,7 @@ and measure app-open latency frame-accurately.
     simrecord.py capture OUT.frames SECS [SCALE]      copy every published ring frame (slot t_ns, CLOCK_REALTIME) to
                                                       OUT.frames, downscaled by SCALE (default 2); prints the wall
                                                       time span. Run it around a tap/launch.
-    simrecord.py render OUT.frames OUT.mp4 [--touches simhid.log] [--fps 60] [--label TEXT]
+    simrecord.py render OUT.frames OUT.mp4 [--touches simhid.log] [--fps 60] [--label TEXT]   (SIMRECORD_CLEAN=1: no timer)
                                                       constant-fps mp4 (each output frame shows the newest ring frame
                                                       at that wall time), touch overlay from host/simhid's log lines
                                                       ("<wall ns> simhid: touch down|move|up (x,y)", normalized), and a
@@ -112,6 +112,8 @@ def render(src, out, tlog=None, fps=60, label=None, t0=None):
     t0 = t0 or start
     fs_ = max(14, w // 20)
     vf = "drawtext=text='t=%%{pts\\:flt\\:%.3f}':x=10:y=10:fontsize=%d:fontcolor=white:box=1:boxcolor=black@0.6" % ((start - t0) / 1e9, fs_)
+    if os.environ.get("SIMRECORD_CLEAN"):   # demo videos: no timer overlay
+        vf = "null"
     if label:
         vf += ",drawtext=text='%s':x=w-tw-10:y=10:fontsize=%d:fontcolor=white:box=1:boxcolor=black@0.6" % (label, max(14, w // 20))
     p = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "%dx%d" % (w2, h2),
