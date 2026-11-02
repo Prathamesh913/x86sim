@@ -185,6 +185,10 @@ bool decode_all(NStream &n) {
 
 void lzfse_stream_step(GuestThread &t, u32 swi) {
     const u64 strm = t.x(0) & GuestThread::kTbi;
+    if (mode() != 1) {  // image code carries the svc whatever the mode: run libcompression
+        if (swi == kLzfseSvcInit || swi == kLzfseSvcReinit) emu_cmp_w2(t); else emu_ldr_x8(t);
+        return;
+    }
     if (swi == kLzfseSvcInit || swi == kLzfseSvcReinit) {
         // (stream, operation, algorithm): decode (1) of LZFSE natively
         if ((t.x(1) & 0xffffffffu) == 1 && (t.x(2) & 0xffffffffu) == kAlgLzfse) {

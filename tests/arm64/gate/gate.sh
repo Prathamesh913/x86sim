@@ -44,7 +44,15 @@ touch_ text " photos"; sleep 8; crashed_proc Spotlight && { say "CRASH keyboard:
 # Siri (Speed 26): hold the side button (iPhone 17 has no home button; on a home-button model the long press is the
 # home button's) and count Siri's UI processes (assistantd alone runs anyway, so it is not counted)
 home 5; touch_ raw "button lock down"; sleep 2.5; touch_ raw "button lock up"; sleep 4; shot "$O/siri.png"; sleep 6
-siri=$(for n in Siri Campo SiriViewService; do pids_of $n; done | grep -c .); say "siri UI processes: $siri"; [ "$siri" -gt 0 ] || FAIL=$((FAIL + 1))
+siri=$(for n in Siri Campo SiriViewService; do pids_of $n; done | grep -c .)
+# Speed 32: Siri's first launch after boot can miss the first long press (also with Speed 31's bits: 2 of 2 fresh boots
+# missed the first press 150 s after boot and caught the second); one more press before it counts as a failure
+if [ "$siri" = 0 ]; then
+	say "siri: no UI process after the first press, pressing again"
+	home 5; touch_ raw "button lock down"; sleep 2.5; touch_ raw "button lock up"; sleep 10
+	siri=$(for n in Siri Campo SiriViewService; do pids_of $n; done | grep -c .)
+fi
+say "siri UI processes: $siri"; [ "$siri" -gt 0 ] || FAIL=$((FAIL + 1))
 f open_check files com.apple.DocumentsApp 'On My iPhone|Browse|Recents|Shared' 120
 f open_check health com.apple.Health 'Summary|Pinned|Health Data|Sharing|Welcome to Health' 120 && f health_welcome health
 f open_check wallet com.apple.Passbook 'Wallet|Passes|Apple Pay|Tickets' 120
