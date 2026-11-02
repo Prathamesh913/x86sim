@@ -73,6 +73,11 @@ pub struct Config {
     /// always count): keeps an image update to what was asked for (e.g. the .live feedback) instead of every profile
     /// recorded since. None: every file.
     pub train_until: Option<u64>,
+    /// Speed 32 (opt-in, needs `build --full`): hot/cold layout. With N > 0 (scope "hot"), the globally hottest N% of
+    /// the trained blocks of each cache library stay in its chunk and the rest goes to a "<name>#cold" chunk; every hot
+    /// head is laid out before every cold tail, so the code that runs most is contiguous across libraries (fewer
+    /// pages and cache sets). No successor is followed in scope "hot", so the two halves never share a block.
+    pub hot_split_pct: u32,
 }
 
 impl Default for Config {
@@ -88,6 +93,7 @@ impl Default for Config {
             follow_features: false,
             test_prefix: s.join("a64testprefix"),
             train_until: None,
+            hot_split_pct: 0,
         }
     }
 }
@@ -316,9 +322,50 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     if cfg.follow_features {
         chunks.retain(|c| c.feature.as_ref().is_none_or(|f| feats.enabled(f)));
     }
+    if cfg.hot_split_pct > 0 && cfg.scope == "hot" {
+        split_hot_cold(&mut chunks, cfg.hot_split_pct);
+    }
     allocate(&mut chunks, cfg);
+    if cfg.hot_split_pct > 0 && cfg.scope == "hot" {
+        // allocate() orders by hot blocks; keep every hot head before every cold tail (stable: hottest first within)
+        chunks.sort_by_key(|c| c.src.name.ends_with(COLD_SUFFIX));
+    }
     let build = key::build_id(&p.placement());
     Ok(Plan { image_name: key::image_name(&uuid, build), cache_uuid: uuid, build, chunks, hot, cfg: cfg.clone() })
+}
+
+pub const COLD_SUFFIX: &str = "#cold";
+
+/// Speed 32: see Config::hot_split_pct. The cut is one global profile-count threshold: a block is hot when its count
+/// is among the top pct% of all trained blocks (ties stay hot).
+fn split_hot_cold(chunks: &mut Vec<PlanChunk>, pct: u32) {
+    let mut counts: Vec<u32> = chunks.iter().filter(|c| c.src.kind == Kind::Cache).flat_map(|c| c.hot.iter().map(|h| h.1)).collect();
+    if counts.is_empty() {
+        return;
+    }
+    counts.sort_unstable_by(|a, b| b.cmp(a));
+    let k = ((counts.len() as u64 * pct.min(100) as u64) / 100).clamp(1, counts.len() as u64) as usize;
+    let thr = counts[k - 1];
+    let mut cold = vec![];
+    for c in chunks.iter_mut().filter(|c| c.src.kind == Kind::Cache) {
+        let (h, t): (Vec<_>, Vec<_>) = c.hot.iter().partition(|h| h.1 >= thr);
+        if t.is_empty() {
+            continue;
+        }
+        let n = c.hot.len().max(1) as u64;
+        let mut cc = c.clone();
+        cc.src.name = format!("{}{}", c.src.name, COLD_SUFFIX);
+        cc.key = key::chunk_key(&cc.src.name, &cc.src.ident, cc.src.addr);
+        cc.est_hot = c.est_hot * t.len() as u64 / n;
+        cc.est_full = cc.est_hot;
+        cc.hot = t;
+        c.est_hot = c.est_hot * h.len() as u64 / n;
+        c.est_full = c.est_full.max(c.est_hot);
+        c.hot = h;
+        cold.push(cc);
+    }
+    chunks.retain(|c| !c.hot.is_empty() || c.src.kind != Kind::Cache);
+    chunks.extend(cold);
 }
 
 fn dependency_closure(cache: &Cache, roots: &[String]) -> HashSet<String> {
@@ -507,12 +554,15 @@ pub struct BuildOpts {
     pub measure: bool,
     pub cancel: Arc<AtomicBool>,
     pub only: Option<Vec<String>>,
+    /// Speed 32: rebuild the --only chunks even when up to date (a translator change that only affects some
+    /// libraries' code, e.g. a MemoryReadCode substitution at an entry point)
+    pub force: bool,
 }
 
 impl Default for BuildOpts {
     fn default() -> Self {
         let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
-        BuildOpts { workers: (n / 2).max(1), full: false, measure: false, cancel: Arc::new(AtomicBool::new(false)), only: None }
+        BuildOpts { workers: (n / 2).max(1), full: false, measure: false, cancel: Arc::new(AtomicBool::new(false)), only: None, force: false }
     }
 }
 
@@ -567,7 +617,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
         .iter()
         .filter(|c| c.want > 0 || opts.measure)
         .filter(|c| opts.only.as_ref().is_none_or(|o| o.iter().any(|n| c.src.name.contains(n.as_str()))))
-        .filter(|c| opts.measure || chunk_state(p, &man, c).0 != "up-to-date")
+        .filter(|c| opts.measure || (opts.force && opts.only.is_some()) || chunk_state(p, &man, c).0 != "up-to-date")
         .collect();
     prog.chunks_total = todo.len();
     if todo.is_empty() && !opts.measure && plan.status(p).image_current {

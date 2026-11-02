@@ -274,9 +274,44 @@ std::optional<uint32_t> agdl_read_code(u64 a) {
 // (0 = every call, first 2000). The replaced first instructions are emulated in the handlers.
 constexpr u64 kAgSetOut = 0x1c952c490, kAgGetOut = 0x1c952c91c, kAgKeyVar = 0x22e74c980;
 constexpr u64 kAgOutRing = 1 << 16;
-struct AgOutEv { u64 frame, value, type, lr; u32 tid; bool set; };
+struct AgOutEv { u64 frame = 0, value = 0, type = 0, lr = 0; u32 tid = 0; bool set = false, ret = false; uint8_t result = 0; u32 f0 = 0, f1 = 0, v0 = 0, f1a = 0, v0a = 0; u64 val = 0; };
 AgOutEv g_agout_ring[kAgOutRing];
 std::atomic<u64> g_agout_n{0};
+constexpr u64 kAgTableVar = 0x22e74c908;
+struct AgOutRet { u64 lr; u32 attr; u32 before[8]; u64 ring; };
+thread_local std::vector<AgOutRet> t_agout_ret;
+void agout_node(u32 attr, u32 *w) {
+    const u64 base = GuestThread::rd<u64>(kAgTableVar);
+    for (int i = 0; i < 8; i++) w[i] = base ? GuestThread::rd<u32>(base + attr + 4 * i) : 0;
+}
+void agout_ret_h(GuestThread &t, u32) {
+    if (t_agout_ret.empty()) die("agout: return thunk without a pending set");
+    AgOutRet r = t_agout_ret.back();
+    t_agout_ret.pop_back();
+    u32 w[8];
+    agout_node(r.attr, w);
+    const u64 base = GuestThread::rd<u64>(kAgTableVar);
+    u64 val[2] = {};
+    if (base && w[2]) { val[0] = GuestThread::rd<u64>(base + w[2]); val[1] = GuestThread::rd<u64>(base + w[2] + 8); }
+    if (r.ring != ~0ull) {  // the abort dump shows it (ring mode: the failing attribute is not known in advance)
+        AgOutEv &e = g_agout_ring[r.ring & (kAgOutRing - 1)];
+        e.ret = true; e.result = (uint8_t)t.x(0); e.f0 = r.before[0]; e.f1 = r.before[1]; e.v0 = r.before[2]; e.f1a = w[1]; e.v0a = w[2]; e.val = val[0];
+    }
+    static const u64 want = strtoull(getenv("X86CODE_A64_AGOUT"), nullptr, 16);
+    if (want > 1) logf("agout: set returned %lu for attr %#x: node before %08x %08x %08x %08x %08x %08x, after %08x %08x %08x %08x %08x %08x"
+         " (flags word +4: %#x -> %#x, value offset +8: %#x -> %#x), value %016lx %016lx, table %#lx",
+         (unsigned long)(t.x(0) & 0xff), r.attr, r.before[0], r.before[1], r.before[2], r.before[3], r.before[4], r.before[5],
+         w[0], w[1], w[2], w[3], w[4], w[5], r.before[1], w[1], r.before[2], w[2], (unsigned long)val[0], (unsigned long)val[1],
+         (unsigned long)base);
+    t.set_x(30, r.lr);  // the thunk's "ret" goes back to the caller
+}
+void agout_arm_return(GuestThread &t, u32 attr, u64 ring) {
+    static const u32 thunk = add_thunk("x86code_agout_ret", agout_ret_h);
+    AgOutRet r{t.x(30), attr, {}, ring};
+    agout_node(attr, r.before);
+    t_agout_ret.push_back(r);
+    t.set_x(30, stub_code(thunk));
+}
 std::optional<uint32_t> agout_read_code(u64 a) {
     if (a != kAgSetOut && a != kAgGetOut) return std::nullopt;
     static const bool on = getenv("X86CODE_A64_AGOUT") && GuestThread::rd<uint32_t>(kAgSetOut) == 0xd10203ffu &&
@@ -294,6 +329,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
         if (auto w = swift_timebase_read_code(a)) return w;
         if (auto w = agdl_read_code(a)) return w;
         if (auto w = astc_read_code(a)) return w;
+        if (auto w = lzfse_read_code(a)) return w;
         if (auto w = agout_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
@@ -590,6 +626,8 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kDyldScanSvcA || swi == kDyldScanSvcB) { dyld_scan_step(*this, swi == kDyldScanSvcB); return; }
     if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
     if (swi == kAstcSvc) { astc_step(*this); return; }
+    if (swi == kLzfseSvcA || swi == kLzfseSvcB) { lzfse_step(*this, swi == kLzfseSvcB); return; }
+    if (swi >= kLzfseSvcDestroy && swi <= kLzfseSvcInit) { lzfse_stream_step(*this, swi); return; }
     if (swi == kAgOutSetSvc || swi == kAgOutGetSvc) {
         static const u64 want = strtoull(getenv("X86CODE_A64_AGOUT"), nullptr, 16);
         auto rdv = [](u64 a, void *buf, size_t n) {
@@ -603,9 +641,13 @@ void GuestThread::CallSVC(uint32_t swi) {
             u64 buf = w[12] ? w[12] : st + 32, fr = 0;
             if (rdv(buf + 8 * (w[13] - 1), &fr, 8)) top = fr;
         }
+        u64 ring_i;
         {  // ring of the last 64K events for agout_dump (the failing attribute is not known in advance)
-            const u64 i = g_agout_n++ & (kAgOutRing - 1);
-            g_agout_ring[i] = {top, swi == kAgOutSetSvc ? x(0) : 0, x(swi == kAgOutSetSvc ? 1 : 0), x(30), (u32)gettid(), swi == kAgOutSetSvc};
+            ring_i = g_agout_n++;
+            AgOutEv ev;
+            ev.frame = top; ev.value = swi == kAgOutSetSvc ? x(0) : 0; ev.type = x(swi == kAgOutSetSvc ? 1 : 0); ev.lr = x(30);
+            ev.tid = (u32)gettid(); ev.set = swi == kAgOutSetSvc;
+            g_agout_ring[ring_i & (kAgOutRing - 1)] = ev;
         }
         static std::atomic<int> n{0};
         if (want != 1 && ((u32)top == (u32)want || (!want && n < 2000)) && n++ < 20000) {
@@ -613,6 +655,10 @@ void GuestThread::CallSVC(uint32_t swi) {
                                           (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(30));
             else logf("agout: get attr %#x flags %#x type %#lx lr %#lx", (unsigned)top, (unsigned)(top >> 32), (unsigned long)x(0), (unsigned long)x(30));
         }
+        // Speed 32: for the wanted attribute, also look at its node right after AGGraphSetOutputValue returns (return
+        // thunk: the original LR is kept per thread). Node = [AG table base 0x22e74c908] + attribute id (as the set path
+        // computes it); +4 is the flags word the set tests (0xc0), +8 the value's table offset.
+        if (swi == kAgOutSetSvc && top != ~0ull && (want == 1 || (u32)top == (u32)want)) agout_arm_return(*this, (u32)top, ring_i);
         if (swi == kAgOutSetSvc) jit->SetSP(sp() - 128);  // sub sp, sp, #128
         else {                                              // stp x20, x19, [sp, #-32]!
             const u64 nsp = sp() - 32;
@@ -970,8 +1016,14 @@ void agout_dump(u32 attr) {
         const AgOutEv &e = g_agout_ring[i & (kAgOutRing - 1)];
         if ((u32)e.frame != attr) continue;
         if (shown++ < 200)
+        {
             logf("agout dump #%llu: %s attr %#x flags %#x value %#lx type %#lx lr %#lx tid %u", (unsigned long long)(i - lo), e.set ? "set" : "get",
                  (unsigned)e.frame, (unsigned)(e.frame >> 32), (unsigned long)e.value, (unsigned long)e.type, (unsigned long)e.lr, e.tid);
+            if (e.ret)  // Speed 32: the node right after the set returned
+                logf("agout dump #%llu:   returned %u; node info %08x, flags word +4 %#x -> %#x, value offset +8 %#x -> %#x, value[0] %016lx",
+                     (unsigned long long)(i - lo), e.result, e.f0, e.f1, e.f1a, e.v0, e.v0a, (unsigned long)e.val);
+            else if (e.set) logf("agout dump #%llu:   (the set has not returned)", (unsigned long long)(i - lo));
+        }
     }
     logf("agout dump: %d events for attr %#x in the last %llu", shown, attr, (unsigned long long)(n - lo));
 }

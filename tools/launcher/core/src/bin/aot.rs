@@ -98,6 +98,7 @@ fn run() -> Result<()> {
             o.full = cmd == "build" && has(&mut args, "--full");
             o.measure = cmd == "measure";
             o.only = take(&mut args, "--only").map(|s| s.split(',').map(String::from).collect());
+            o.force = has(&mut args, "--force");
             let flag = Arc::new(AtomicBool::new(false));
             o.cancel = flag.clone();
             unsafe {

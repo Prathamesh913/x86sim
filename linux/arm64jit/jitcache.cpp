@@ -286,11 +286,11 @@ std::atomic<u64> g_saved_blocks{0};
 // registered so far): ~6.5 GB per boot.
 // Speed 31: training feedback from processes on the AOT image. Their .bin is never written (above), so blocks the image
 // lacks (untrained paths of cache libraries, placed app code) were translated live on every start, forever. With
-// X86CODE_A64_AOT_LIVE=1 such a process keeps <key>.<exe>.live: the union of the descriptors it translated itself
+// X86CODE_A64_AOT_LIVE (Speed 32: default on, =0 off) such a process keeps <key>.<exe>.live: the union of the descriptors it translated itself
 // (header like an A64JC06 file, descriptor count at +40, 24-byte entries from +160, no code). tools/launcher's hot set
 // reads them like training .bins, so `x86code-aot update` moves those blocks into their library's chunk.
 static bool live_env() {
-    static const bool on = [] { const char *e = getenv("X86CODE_A64_AOT_LIVE"); return e && atoi(e) == 1; }();
+    static const bool on = [] { const char *e = getenv("X86CODE_A64_AOT_LIVE"); return !e || atoi(e) != 0; }();
     return on;
 }
 static bool live_on() {

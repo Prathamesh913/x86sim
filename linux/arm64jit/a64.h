@@ -138,6 +138,13 @@ constexpr u32 kDyldScanSvcA = 0xfffb, kDyldScanSvcB = 0xfffa;
 std::optional<u32> dyld_scan_read_code(u64 a);
 // "svc #0xfff0": Speed 31, entry of libate's at_encoder_decompress_texels (astc.cpp), substituted by MemoryReadCode.
 constexpr u32 kAstcSvc = 0xfff0;
+// "svc #0xffef" / "#0xffee": Speed 32, entries of libcompression's compression_decode_buffer / lzfse_decode_buffer
+// (lzfse.cpp), substituted by MemoryReadCode.
+constexpr u32 kLzfseSvcA = 0xffef, kLzfseSvcB = 0xffee;
+// "svc #0xffed".."#0xffea": compression_stream_init / _reinit / _process / _destroy (lzfse.cpp)
+constexpr u32 kLzfseSvcInit = 0xffed, kLzfseSvcReinit = 0xffec, kLzfseSvcProc = 0xffeb, kLzfseSvcDestroy = 0xffea;
+void lzfse_prepare(const std::string &cache_path);
+std::optional<u32> lzfse_read_code(u64 a);
 void astc_prepare(const std::string &cache_path);
 std::optional<u32> astc_read_code(u64 a);
 extern u64 g_exit_stub;  // "svc #0xffff": LR of every native->guest call
@@ -150,6 +157,8 @@ void dyld_sim_patches(u64 slide);
 struct GuestThread;
 void dyld_scan_step(GuestThread &t, bool loop_b);
 void astc_step(GuestThread &t);
+void lzfse_step(GuestThread &t, bool lzfse_entry);
+void lzfse_stream_step(GuestThread &t, u32 swi);
 std::optional<u32> swiftconf_read_code(u64 a);  // swiftconf.cpp: svc substituted at the Swift conformance step
 void swiftconf_step(GuestThread &t);
 void swiftconf_verify(GuestThread &t);
