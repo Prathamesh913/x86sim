@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 28: dyld_sim's loaded-loader scans run natively (cold Settings 5.05 -> 3.5 s, Health 6.9 -> 5.3, Wallet 3.95 -> 2.86, Maps 6.15 -> 5.1 with the app killed first; first open after boot Settings 5.35 -> 4.15, Health 9.3 -> 7.4). JSC JIT stale code fixed (sys_icache_invalidate reaches the JIT). Huge-page AOT image implemented but the host has no free 2 MB pages. Open: WebContent crash in DOMWrapperWorld::clearWrappers (not JIT), Maps route, Siri UI.",
+ "now": "Speed 29: Safari WebContent crash fixed at the root (Darling's madvise ignored MADV_ZERO: recycled pages kept stale data); 3 consecutive clean gates (s29g1-3). Swift conformance filter covers class queries (cold Settings round trips 10.0M -> 7.2M, Health cold 5.5 -> 4.5 s). Open: Maps route AttributeGraph abort (DynamicLayoutComputer<_VStackLayout>), SpringBoard idle ~810 mach_msg/s, app-code persistence, SplashBoard decode, Siri audio.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -192,7 +192,8 @@
  ],
  "notes": [
   "Speed 25 (2026-11-01): see docs/notebook/rounds/speed25.md",
-  "Speed 28 (2026-11-01): see docs/notebook/rounds/speed28.md"
+  "Speed 28 (2026-11-01): see docs/notebook/rounds/speed28.md",
+  "Speed 29 (2026-11-01): see docs/notebook/rounds/speed29.md"
  ],
  "speed6": {
   "date": "2026-10-30",
@@ -757,5 +758,29 @@
    "Maps route aborts (AttributeGraph)"
   ],
   "gate": "s28a1/s28g1/s28g2: 1 failed each (WebContent clearWrappers crash); all other checks pass. Zero-crash gate NOT met."
+ },
+ "speed29": {
+  "date": "2026-11-01",
+  "details": "docs/notebook/rounds/speed29.md",
+  "fixed": [
+   "madvise(MADV_ZERO) returns ENOTSUP instead of a silent no-op (WebContent DOMWrapperWorld::clearWrappers crash)",
+   "Swift conformance native filter for class queries + verify mode (0 dropped of 96 checked matches)",
+   "per-process env file a64-penv, abort strings dump, OPT_KEEP, MSG_STATS debug knobs; gate GATE_ROUTE=1"
+  ],
+  "measured": {
+   "swiftconf_round_trips_settings_cold": "10.0M -> 7.2M",
+   "health_cold_killed_s": "5.43/5.56 -> 4.58/4.47",
+   "settings_cold_killed_s": "3.55-3.62 -> 3.49-3.83 (noise)",
+   "springboard_idle_mach_msg_per_s": 810,
+   "settings_cold_mach_msgs_first_12s": "SpringBoard +~2K over idle, Preferences ~2.5-3K"
+  },
+  "gate": "s29g1, s29g2, s29g3: 0 failed each (Maps route not in the default gate)",
+  "open": [
+   "Maps route AttributeGraph abort",
+   "app/non-cache code persistence",
+   "ASTC/LZFSE SplashBoard decode",
+   "Siri audio input",
+   "huge pages blocked by host"
+  ]
  }
 }

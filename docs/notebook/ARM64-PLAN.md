@@ -1747,3 +1747,14 @@ phone's memory scope (IN=0 OUT=107).
   free order-9 blocks, so it falls back (no gain measurable here).
 - Gate: 1 failure per boot (the WebContent crash); zero-crash gate NOT met.
 
+
+## Speed 29 (2026-11-01): WebContent root cause (MADV_ZERO), class conformance filter, clean gate (details: rounds/speed29.md)
+
+- **Safari WebContent clearWrappers crash fixed**: Darling's sys_madvise returned success for every advice >= 5 without
+  acting; XNU's MADV_ZERO (11), used by libpas to zero recycled pages, left stale data in "zeroed" tables. It now
+  fails with ENOTSUP (callers zero themselves). darling-xnu 91f5392.
+- **Swift conformance filter for class queries** ([sp+0xb0] = queried metadata): chain descriptors, only with a
+  non-Swift root; verify mode found 0 dropped matches. Cold Settings round trips 10.0M -> 7.2M; Health cold 5.5 -> 4.5 s.
+- **Gate: 3 consecutive clean boots** (s29g1-3, Safari on Wikipedia included).
+- Open: Maps route ("attribute failed to set an initial value: DynamicLayoutComputer<_VStackLayout>", independent of
+  every native shortcut and of the IR opts; GATE_ROUTE=1 runs it); SpringBoard ~810 mach_msg/s idle (MSG_STATS).
