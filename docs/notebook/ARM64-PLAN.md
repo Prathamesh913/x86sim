@@ -1881,3 +1881,17 @@ phone's memory scope (IN=0 OUT=107).
   2.2 us vs 18 us. Not built.
 - Uninstall prunes placement + updates the image; the gate switcher check is logs-first with a looser visual. Gate
   s35g1-3 clean, tests/apps PASS.
+
+## Speed 36 (2026-11-02): Maps route fixed, mach_msg census, in-slot split (details: rounds/speed36.md)
+
+- **Maps route works** (11/12 + 3/3 in-gate, was 0/2): darlingserver's shared vm_remap now remaps a source made of
+  several mappings piece by piece; memfd pieces keep their memfd, so AttributeGraph's old node table stays aliased
+  with the grown one (XNU semantics). REMAP_FREEZE checks the whole range (still opt-in). GATE_ROUTE on by default.
+- **mach_msg fast path: not built, on data.** Census (opt-in darlingserver counters): during taps ~4.1k RPCs/s; 57% of
+  sends are complex send+receive (MIG/XPC with descriptors); of simple messages 53% go to workloop/knote receivers in
+  other tasks, 35-45% to port sets, 3-9% to a plain receive. The simple + plain-receive design covers ~1-2% of
+  traffic. To matter a fast path needs rights transfer (send-once replies, port descriptors) and workloop delivery;
+  upper bound of all darlingserver IPC during taps ~40 ms/s CPU.
+- **In-slot split** = today's layout (slots already hottest-first). A layout-only A/B needs a full build with the
+  same coverage.
+- Gate s36i1-3 clean, tests/apps PASS. Open: one Safari WebContent stuck at launch (s36h2), not reproduced in 6 opens.

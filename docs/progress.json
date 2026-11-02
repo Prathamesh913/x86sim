@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 35: codegen 0x1a image rebuilt in place (chunks keep their slots; full builds lose coverage); count-trained 20% split lost the A/B (cold Settings 5.7-6.1 vs 3.4-3.6 s, 10M vs 6.4M walks) and stays opt-in; tmpfs image copy moved to a64hugecopy outside guests (no open waits); Maps abort root-caused (AG reloads flags through a pre-rule node pointer; our second vm_remap copy=FALSE leaves the old table range unaliased); darlingserver bypass designed (futex floor 2.2 us vs 18 us), not built. Gate s35g1-3 clean, tests/apps PASS.",
+ "now": "Speed 36: Maps route fixed (darlingserver shared vm_remap keeps old aliases on every growth; 11/12 + 3/3 in-gate), GATE_ROUTE on; mach_msg census shows the simple/plain-receive fast path would cover ~1-2% of traffic (most is complex MIG/XPC and workloop delivery): not built; in-slot split equals today's layout. Gate s36i1-3 clean, tests/apps PASS.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -902,5 +902,31 @@
    "aged_before": "630-720",
    "aged_after": "540-600"
   }
+ },
+ "speed36": {
+  "date": "2026-11-02",
+  "notes": "docs/notebook/rounds/speed36.md",
+  "gate": "s36i1-3 clean (route included), tests/apps PASS",
+  "defaults": [
+   "piecewise shared vm_remap (darlingserver)",
+   "GATE_ROUTE=1"
+  ],
+  "opt_in": [
+   "darlingserver RPC census ($SCRATCH/ds-rpcstats.on)",
+   "X86CODE_A64_REMAP_FREEZE (whole range)",
+   "X86CODE_A64_AGCHK"
+  ],
+  "maps_route": {
+   "before": "0/2",
+   "after": "11/12 + 3/3 in gate"
+  },
+  "rpc_per_s": {
+   "idle": 1600,
+   "taps": 4100,
+   "cold_opens": 3400
+  },
+  "not_built": [
+   "mach_msg fast path (coverage ~1-2%)"
+  ]
  }
 }
