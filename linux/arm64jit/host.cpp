@@ -802,3 +802,24 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     if (!main_fn) die("_dyld_sim_prepare returned no main");
     return (int)t.call(main_fn, {(u64)argc, gargv, genvp, gapple});
 }
+
+// Speed 29 debug: per-process environment from a file, applied before every other static initializer of this library
+// (many knobs are read once into static consts). File: $X86CODE_A64_PENV_FILE or /home/bobby/scratch/x86code/a64-penv,
+// lines "<program basename> K=V [K=V...]" ('#' comments). Used to bisect one app's knobs without rebooting the phone.
+__attribute__((constructor(101))) static void a64_penv() {
+    const char *exe = getenv("X86CODE_A64_EXE");
+    if (!exe) return;
+    const char *b = strrchr(exe, '/');
+    b = b ? b + 1 : exe;
+    const char *fn = getenv("X86CODE_A64_PENV_FILE");
+    FILE *f = fopen(fn ? fn : "/home/bobby/scratch/x86code/a64-penv", "r");
+    if (!f) return;
+    char line[1024];
+    while (fgets(line, sizeof line, f)) {
+        char *save = nullptr, *tok = strtok_r(line, " \t\n", &save);
+        if (!tok || *tok == '#' || strcmp(tok, b) != 0) continue;
+        while ((tok = strtok_r(nullptr, " \t\n", &save)))
+            if (char *eq = strchr(tok, '=')) { *eq = 0; setenv(tok, eq + 1, 1); }
+    }
+    fclose(f);
+}

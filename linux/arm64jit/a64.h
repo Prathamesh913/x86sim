@@ -124,6 +124,8 @@ constexpr u32 kExitSvc = 0xffff;
 constexpr u32 kLinuxSvc = 0xfffe;
 // "svc #0xfffd": Swift conformance scan step (swiftconf.cpp), substituted by MemoryReadCode, never in memory.
 constexpr u32 kSwiftConfSvc = 0xfffd;
+// "svc #0xfff9": Speed 29 verify mode of the conformance filter (X86CODE_A64_SWIFT_CONF_VERIFY), at the match sites.
+constexpr u32 kSwiftConfVerifySvc = 0xfff9;
 // "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
 constexpr u32 kSwiftTypeSvc = 0xfffc;
 // "svc #0xfffb" / "#0xfffa": dyld_sim's loaded-loader scans (dyldsim.cpp), substituted by MemoryReadCode.
@@ -140,6 +142,7 @@ struct GuestThread;
 void dyld_scan_step(GuestThread &t, bool loop_b);
 std::optional<u32> swiftconf_read_code(u64 a);  // swiftconf.cpp: svc substituted at the Swift conformance step
 void swiftconf_step(GuestThread &t);
+void swiftconf_verify(GuestThread &t);
 std::optional<u32> swifttype_read_code(u64 a);  // swiftscan.cpp: svc at the type-by-name conformance walk
 void swifttype_step(GuestThread &t);
 const std::string &jitcache_cache_file();  // jitcache.cpp: the main dyld cache file

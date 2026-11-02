@@ -36,6 +36,8 @@ constexpr u32 kExpect[] = {
     0xd2800008, 0xeb15011f, 0x54fffe41, 0x91001368,
 };
 int g_state = -1;  // -1 unchecked, 0 off, 1 on
+const bool g_verify = getenv("X86CODE_A64_SWIFT_CONF_VERIFY") != nullptr;
+u64 kMatched[3] = {0, 0, 0};  // the guest's "mov x8, #0" right after a successful type check (verify mode)
 
 bool enabled() {
     static const bool ok = [] {
@@ -47,6 +49,13 @@ bool enabled() {
         kMatch = kNextSection + 0x6c;
         const u32 beq = swift_text_word(kNextSection + 0x10);  // b.eq kDone
         kDone = kNextSection + 0x10 + (u64)((s64)((s32)(beq << 8) >> 13) * 4);
+        if (g_verify) {  // 27.2: +0xf0 / +0x18c / +0x20c, each "mov x8, #0"
+            const u64 off[3] = {0xf0, 0x18c, 0x20c};
+            for (int i = 0; i < 3; i++)
+                if (swift_text_word(kNextSection + off[i]) == 0xd2800008u) kMatched[i] = kNextSection + off[i];
+            logf("swiftconf verify: matched sites %#llx %#llx %#llx", (unsigned long long)kMatched[0],
+                 (unsigned long long)kMatched[1], (unsigned long long)kMatched[2]);
+        }
         return true;
     }();
     g_state = ok;
@@ -69,6 +78,8 @@ std::mutex g_mu;
 // X86CODE_A64_SWIFT_CONF_DEBUG=1: counters, logged every 16K steps
 const bool g_dbg = getenv("X86CODE_A64_SWIFT_CONF_DEBUG") != nullptr;
 std::atomic<u64> g_calls{0}, g_hits{0}, g_builds{0}, g_nobase{0}, g_mism{0}, g_skipped{0};
+thread_local u64 t_would_skip = 0;  // verify mode: the record handed to kMatch that the filter would have skipped
+std::atomic<u64> g_verify_bad{0}, g_verify_ok{0};
 #define COUNT(c) do { if (g_dbg) (c)++; } while (0)
 bool getenv_off_filter() {
     static const bool off = getenv("X86CODE_A64_SWIFT_CONF_FILTER") && atoi(getenv("X86CODE_A64_SWIFT_CONF_FILTER")) == 0;
@@ -98,15 +109,49 @@ u64 unique_value_descriptor(u64 metadata) {
     const u64 d = *(const u64 *)(metadata + 8);
     return d && (*(const u32 *)d & 0x40) ? d : 0;
 }
-bool cannot_match(u64 desc, u64 qdesc) {
-    if (!qdesc) return false;
+// Speed 29: class queries. [sp+0xb0] is the queried metadata (x0 stored at the function's entry). For a record naming
+// a type by descriptor (kind 0/1) the guest gets the queried type's descriptor and, failing equalContexts, walks the
+// superclass chain comparing each one's descriptor (kind 2/3 records, ObjC class names, compare metadata: never
+// skipped here). So a record certainly fails when its unique descriptor is none of the chain's descriptors, all of
+// them unique. The chain is read from the metadata (superclass at +8, Swift-class bit in the data word at +0x20,
+// description at +0x40) and used only if it ends at a non-Swift root (SwiftObject/NSObject): a superclass the guest
+// would still have to instantiate (incomplete metadata) leaves the chain ending at a Swift class, and nothing is
+// skipped. X86CODE_A64_SWIFT_CONF_CLASS=0 turns the class part off; X86CODE_A64_SWIFT_CONF_VERIFY=1 never skips but
+// logs any record the filter would have skipped that the guest then matched (the guest's three "matched" sites).
+struct Query {
+    int n = 0;          // descriptors in d (0: no filter)
+    u64 d[32];
+};
+Query make_query(u64 metadata) {
+    Query q;
+    if (const u64 v = unique_value_descriptor(metadata)) { q.d[q.n++] = v; return q; }
+    static const bool cls = !(getenv("X86CODE_A64_SWIFT_CONF_CLASS") && atoi(getenv("X86CODE_A64_SWIFT_CONF_CLASS")) == 0);
+    if (!cls || !metadata || *(const u64 *)metadata <= 0x7ff) return q;  // not a class (isa pointer), or off
+    bool swift = false;
+    int n = 0;
+    for (u64 c = metadata; c; c = *(const u64 *)(c + 8)) {
+        swift = (*(const u64 *)(c + 0x20) & 3) != 0;
+        if (!swift) continue;
+        const u64 d = *(const u64 *)(c + 0x40);
+        if (!d || !(*(const u32 *)d & 0x40) || n == 32) return q;
+        q.d[n++] = d;
+    }
+    if (swift || !n) return q;  // chain ends at a Swift class (maybe incomplete), or no Swift class at all
+    q.n = n;
+    return q;
+}
+bool cannot_match(u64 desc, const Query &q) {
+    if (!q.n) return false;
     const u32 kind = (*(const u32 *)(desc + 0xc) >> 3) & 7;
     if (kind > 1) return false;
     const u64 field = desc + 4;
     const s64 rel = *(const s32 *)field;
     if (!rel) return false;
     const u64 td = kind == 0 ? field + rel : *(const u64 *)(field + rel);
-    return td && td != qdesc && (*(const u32 *)td & 0x40);
+    if (!td || !(*(const u32 *)td & 0x40)) return false;
+    for (int i = 0; i < q.n; i++)
+        if (q.d[i] == td) return false;
+    return true;
 }
 
 const Index *index_for(u64 base, u64 count) {
@@ -135,10 +180,29 @@ const Index *index_for(u64 base, u64 count) {
 
 std::optional<u32> swiftconf_read_code(u64 a) {
     if (enabled() && a == kStep) return 0xd4000001u | (kSwiftConfSvc << 5);  // svc #kSwiftConfSvc
+    if (g_verify && g_state == 1 && (a == kMatched[0] || a == kMatched[1] || a == kMatched[2]))
+        return 0xd4000001u | (kSwiftConfVerifySvc << 5);
     return std::nullopt;
 }
 
+// verify mode: the guest matched the record in x23; it must not be one the filter would have skipped
+void swiftconf_verify(GuestThread &t) {
+    t.set_x(8, 0);  // the replaced "mov x8, #0"
+    if (t_would_skip && t.x(23) == t_would_skip) {
+        u64 d;
+        s64 pv;
+        record_protocol(t_would_skip, d, pv);
+        logf("swiftconf VERIFY FAIL: record %#llx (conformance %#llx) matched, the filter would skip it; metadata %#llx",
+             (unsigned long long)t_would_skip, (unsigned long long)d, (unsigned long long)*(const u64 *)(t.sp() + 0xb0));
+        g_verify_bad++;
+    } else g_verify_ok++;
+    if (const u64 nn = g_verify_ok + g_verify_bad; (nn & (nn - 1)) == 0)
+        logf("swiftconf verify: %llu matches checked, %llu would have been dropped", (unsigned long long)g_verify_ok.load(),
+             (unsigned long long)g_verify_bad.load());
+}
+
 void swiftconf_step(GuestThread &t) {
+    t_would_skip = 0;
     u64 rec = t.x(23), end = t.x(20);
     const u64 want = t.x(21), sp = t.sp();
     const u64 last = *(const u64 *)(sp + 0x70), count = *(const u64 *)(sp + 0x38);
@@ -160,12 +224,13 @@ void swiftconf_step(GuestThread &t) {
             const auto *v = it == ix->by_proto.end() ? nullptr : &it->second;
             auto at = v ? std::lower_bound(v->begin(), v->end(), from) : decltype(v->begin()){};
             if (v && !getenv_off_filter()) {
-                const u64 qdesc = unique_value_descriptor(*(const u64 *)(sp + 0xb0));
+                const Query q = make_query(*(const u64 *)(sp + 0xb0));
                 for (; at != v->end(); ++at) {
                     u64 d;
                     s64 pv;
                     record_protocol(ix->begins[at->first] + at->second, d, pv);
-                    if (!cannot_match(d, qdesc)) break;
+                    if (!cannot_match(d, q)) break;
+                    if (g_verify) { t_would_skip = ix->begins[at->first] + at->second; break; }
                     COUNT(g_skipped);
                 }
             }

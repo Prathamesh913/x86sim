@@ -1,3 +1,5 @@
+#include <sys/uio.h>
+#include <unistd.h>
 #include <unordered_map>
 #include <mutex>
 // libarm64jit: libsystem_kernel/platform/pthread exports that the generic pass-through can't serve: variadic
@@ -430,7 +432,40 @@ static void h_stacksize(GuestThread &t, u32 i) {
 
 // pthread_kill/__pthread_kill/kill with SIGABRT (libc's abort): log the guest backtrace first
 static void h_kill_like(GuestThread &t, u32 i) {
-    if (t.x(1) == 6) { logf("%s(SIGABRT): guest backtrace", g_thunks[i].name.c_str()); guest_backtrace(t); }
+    if (t.x(1) == 6) {
+        logf("%s(SIGABRT): guest backtrace", g_thunks[i].name.c_str());
+        guest_backtrace(t);
+        // Speed 29 debug: X86CODE_A64_ABORT_MSG=<hex addr>[,...]: guest char* globals holding the abort message (e.g.
+        // AttributeGraph's precondition text), printed if set
+        if (const char *e = getenv("X86CODE_A64_ABORT_MSG"))
+            for (const char *q = e; *q;) {
+                char *end;
+                const u64 a = strtoull(q, &end, 16);
+                if (end == q) break;
+                if (const char *m = *(const char *const *)a) logf("abort message at %#llx: %.2000s", (unsigned long long)a, m);
+                q = *end == ',' ? end + 1 : end;
+            }
+        // X86CODE_A64_ABORT_STRINGS=1: C strings pointed to from the aborting thread's stack (the formatted abort
+        // message usually sits in a caller's frame); memory is read with process_vm_readv, so bad pointers are skipped
+        if (getenv("X86CODE_A64_ABORT_STRINGS")) {
+            auto rd = [](u64 a, void *buf, size_t n) {
+                iovec l{buf, n}, r{(void *)a, n};
+                return process_vm_readv(getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
+            };
+            int shown = 0;
+            for (u64 o = 0; o < 0x8000 && shown < 40; o += 8) {
+                u64 v;
+                if (!rd(t.sp() + o, &v, 8) || v < 0x100000000ull || v >= 0x800000000000ull) continue;
+                char b[512];
+                if (!rd(v, b, sizeof b)) continue;
+                size_t n = 0;
+                while (n < sizeof b && b[n] && (b[n] == '\n' || (b[n] >= 32 && b[n] < 127))) n++;
+                if (n < 16 || (n < sizeof b && b[n])) continue;
+                logf("abort string [sp+%#llx] %#llx: %.*s", (unsigned long long)o, (unsigned long long)v, (int)n, b);
+                shown++;
+            }
+        }
+    }
     h_generic(t, i);
 }
 

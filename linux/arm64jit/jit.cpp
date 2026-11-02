@@ -357,6 +357,10 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         if (getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
         }
+        // Speed 29 (experiments): X86CODE_A64_OPT_KEEP=<hex mask> keeps only these Dynarmic::OptimizationFlag bits (with
+        // X86CODE_A64_LIVE_ONLY for the process: image code was translated with the defaults).
+        if (const char *e = getenv("X86CODE_A64_OPT_KEEP"))
+            c.optimizations = Dynarmic::OptimizationFlag((u32)c.optimizations & (u32)strtoul(e, nullptr, 16));
         // X86CODE_A64_SAFE=1: also drop FastDispatch (narrows shared races further for experiments).
         if (getenv("X86CODE_A64_SAFE") && atoi(getenv("X86CODE_A64_SAFE")) == 1) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
@@ -537,6 +541,7 @@ void GuestThread::CallSVC(uint32_t swi) {
     const u64 pc0 = jit->GetPC();  // svc+4
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kSwiftConfSvc) { swiftconf_step(*this); return; }
+    if (swi == kSwiftConfVerifySvc) { swiftconf_verify(*this); return; }
     if (swi == kDyldScanSvcA || swi == kDyldScanSvcB) { dyld_scan_step(*this, swi == kDyldScanSvcB); return; }
     if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
