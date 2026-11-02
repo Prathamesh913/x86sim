@@ -570,7 +570,23 @@ void GuestThread::CallSVC(uint32_t swi) {
         if (svc_time) t0 = __builtin_ia32_rdtsc();
         int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
         tsd_to_native();
+        // Speed 29: X86CODE_A64_MSG_STATS=1: mach_msg* thunk calls and wall time inside them (blocking receives
+        // included), logged cumulatively every 512 calls with a CLOCK_MONOTONIC stamp (diff lines around a tap)
+        static const bool msg_stats = getenv("X86CODE_A64_MSG_STATS") != nullptr;
+        const bool is_msg = msg_stats && g_thunks[swi].name.find("mach_msg") != std::string::npos;
+        timespec m0{};
+        if (is_msg) clock_gettime(CLOCK_MONOTONIC, &m0);
         g_thunks[swi].fn(*this, swi);
+        if (is_msg) {
+            static std::atomic<u64> n_msg{0}, ns_msg{0};
+            timespec m1;
+            clock_gettime(CLOCK_MONOTONIC, &m1);
+            const u64 dt = (u64)((m1.tv_sec - m0.tv_sec) * 1000000000ll + (m1.tv_nsec - m0.tv_nsec));
+            const u64 n = n_msg.fetch_add(1) + 1, ns = ns_msg.fetch_add(dt) + dt;
+            if ((n & 511) == 0)
+                logf("msgstats t=%lld.%03lld n=%llu inside_ms=%llu", (long long)m1.tv_sec, (long long)m1.tv_nsec / 1000000,
+                     (unsigned long long)n, (unsigned long long)(ns / 1000000));
+        }
         tsd_from_native();
         in_thunk = outer_thunk;
         if (svc_time) {
