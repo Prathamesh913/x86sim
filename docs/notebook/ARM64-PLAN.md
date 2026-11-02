@@ -1730,3 +1730,20 @@ phone's memory scope (IN=0 OUT=107).
   Spotlight typing, swipe-up home, app switcher, Health first-run sheet. Zero-crash gate NOT met: JSC JIT-code faults in
   WebContent on en.wikipedia.org (new, open); Siri UI still absent (no audio input device: simaudio arm64 built, HAL
   not reached yet).
+
+## Speed 28 (2026-11-01): dyld_sim loader scans, JSC stale code, huge pages blocked (details: rounds/speed28.md)
+
+- **Baseline explained**: Speed 27's "first open after boot" numbers include the app's on-demand daemons starting
+  (Health: healthd, healthappd and 4 more; Maps: navd, AppIntentsLiveEntityService), each paying dyld_sim prepare;
+  openm.sh's default kills only the app. Not a Speed 26/27 code regression (host memory pressure accounts for the rest).
+- **dyld_sim's loaded-loader scans native** (dyldsim.cpp, svc at the loop heads of loadDependents/getLoader): ~45% of a
+  cold Preferences' first 10 s was matchesPath over ~900 loaders per lookup. Cold (app killed): Settings 5.05 -> 3.5 s,
+  Messages 3.25 -> 2.2, Health 6.9 -> 5.3, Wallet 3.95 -> 2.86, Maps 6.15 -> 5.1; first open after boot Settings
+  5.35 -> 4.15, Health 9.3 -> 7.4, Maps 7.3 -> 5.9. `X86CODE_A64_DYLD_SCAN=0` off.
+- **JSC stale JIT code fixed**: sys_icache_invalidate / sys_cache_control went to Darling's x86_64 libplatform
+  (no-ops); they now invalidate the JIT range. Remaining WebContent crash: DOMWrapperWorld::clearWrappers (Safari
+  Reader), also with JSC's JIT off: not JIT code. Open.
+- **Huge-page image**: tmpfs copy filled through MADV_HUGEPAGE, kept only with >= 50% 2 MB folios; this host has no
+  free order-9 blocks, so it falls back (no gain measurable here).
+- Gate: 1 failure per boot (the WebContent crash); zero-crash gate NOT met.
+

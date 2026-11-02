@@ -1,7 +1,7 @@
 {
  "title": "iOS 27 Simulator on x86-64 Linux",
  "summary": "Apple's arm64-only iOS 27 Simulator runtime, unmodified, translated to x86-64 on the fly by an embedded JIT (dynarmic) inside Darling. No Mac at runtime. Graphics, input and networking go to native Linux services.",
- "now": "Speed 27: iOS 27.2 Spotlight typing works (CoreSpotlight host-path strings; query-parser asset downloads), boot to home ~16-42 s (was 73-82: lsd's database saves again), first-connection ENETDOWN fixed (libkqueue/sostate), Maps draws tiles, searches places and opens place and Directions cards (nanoregistryd, GeoServicesData). Open: Maps route aborts (AttributeGraph precondition), WebContent JSC JIT faults on en.wikipedia.org, Siri UI (no audio input device).",
+ "now": "Speed 28: dyld_sim's loaded-loader scans run natively (cold Settings 5.05 -> 3.5 s, Health 6.9 -> 5.3, Wallet 3.95 -> 2.86, Maps 6.15 -> 5.1 with the app killed first; first open after boot Settings 5.35 -> 4.15, Health 9.3 -> 7.4). JSC JIT stale code fixed (sys_icache_invalidate reaches the JIT). Huge-page AOT image implemented but the host has no free 2 MB pages. Open: WebContent crash in DOMWrapperWorld::clearWrappers (not JIT), Maps route, Siri UI.",
  "metrics": [
   [
    "Cold app open, iOS 27.2 (frame-timed tap -> content)",
@@ -191,7 +191,8 @@
   ]
  ],
  "notes": [
-  "Speed 25 (2026-11-01): see docs/notebook/rounds/speed25.md"
+  "Speed 25 (2026-11-01): see docs/notebook/rounds/speed25.md",
+  "Speed 28 (2026-11-01): see docs/notebook/rounds/speed28.md"
  ],
  "speed6": {
   "date": "2026-10-30",
@@ -725,5 +726,36 @@
    },
    "warm_content_s": "0.73-0.91"
   }
+ },
+ "speed28": {
+  "date": "2026-11-01",
+  "details": "docs/notebook/rounds/speed28.md",
+  "fixed": [
+   "dyld_sim loadDependents/getLoader loader scans native (prepare: Preferences 1.65 -> 0.73 s)",
+   "sys_icache_invalidate/sys_cache_control invalidate JIT translations (JSC stale JIT code)",
+   "huge-page tmpfs copy of the AOT .map (kept only with 2 MB folios)",
+   "fault dumps with registers + guest code; AOT_EXCLUDE/LIVE_ONLY/GENV debug knobs"
+  ],
+  "measured": {
+   "settings_cold_killed_s": "5.05 -> 3.33-3.71",
+   "messages_cold_killed_s": "3.25 -> 2.07-2.32",
+   "health_cold_killed_s": "6.9 -> 5.23-5.30",
+   "wallet_cold_killed_s": "3.95 -> 2.86",
+   "maps_cold_killed_s": "6.15 -> 5.09",
+   "settings_cold_fresh_s": "5.35 -> 4.15",
+   "health_cold_fresh_s": "9.3 -> 7.43",
+   "maps_cold_fresh_s": "7.28 -> 5.94",
+   "warm_s": "0.75-0.85 (unchanged)",
+   "preferences_cold_cycles": "28.9G -> 23.6G",
+   "itlb_walks": "5.5M (unchanged; no huge pages on this host)"
+  },
+  "open": [
+   "WebContent crash in WebCore::DOMWrapperWorld::clearWrappers (Safari Reader; happens with JSC JIT off and without the AOT image)",
+   "huge-page lever unmeasurable: host has no free order-9 blocks",
+   "swiftconf class-query filter (9.4M guest round trips per cold Settings)",
+   "hot/cold layout, non-image persistence, ASTC decode, mach_msg measurement, scope More: not done",
+   "Maps route aborts (AttributeGraph)"
+  ],
+  "gate": "s28a1/s28g1/s28g2: 1 failed each (WebContent clearWrappers crash); all other checks pass. Zero-crash gate NOT met."
  }
 }
