@@ -521,6 +521,10 @@ static void h_kill_like(GuestThread &t, u32 i) {
                     n += snprintf(line + n, sizeof line - n, " %x/%x", (unsigned)fr, (unsigned)(fr >> 32));
                 }
                 logf("abort tsd: stack %d frames(%llu):%s", depth, (unsigned long long)cnt, line);
+                if (depth == 0 && cnt && getenv("X86CODE_A64_AGOUT")) {  // Speed 31: the top frame's output-value trace
+                    u64 fr = 0; rdv(buf + 8 * (cnt - 1), &fr, 8);
+                    agout_dump((u32)fr);
+                }
                 v = w[1];  // guess: previous UpdateStack (checked by the dump shape)
             }
         }

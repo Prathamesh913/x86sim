@@ -128,6 +128,9 @@ constexpr u32 kSwiftConfSvc = 0xfffd;
 constexpr u32 kSwiftConfVerifySvc = 0xfff9;
 // Speed 30 debug (X86CODE_A64_AGDL=1, iOS 27.2 24B8117 only): AttributeGraph deadline probes, jit.cpp
 constexpr u32 kAgDlSetSvc = 0xfff1, kAgDlPassedSvc = 0xfff2, kAgDlCancelSvc = 0xfff3;
+// Speed 31 debug (X86CODE_A64_AGOUT=<attribute id hex>, 27.2 24B8117): AGGraphSetOutputValue / AGGraphGetOutputValue probes
+constexpr u32 kAgOutSetSvc = 0xfff4, kAgOutGetSvc = 0xfff5;
+void agout_dump(u32 attr);
 // "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
 constexpr u32 kSwiftTypeSvc = 0xfffc;
 // "svc #0xfffb" / "#0xfffa": dyld_sim's loaded-loader scans (dyldsim.cpp), substituted by MemoryReadCode.

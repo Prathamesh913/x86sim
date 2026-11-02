@@ -268,6 +268,23 @@ std::optional<uint32_t> agdl_read_code(u64 a) {
     return 0xD4000001u | ((a == kAgSetDeadline ? kAgDlSetSvc : kAgDlPassedSvc) << 5);
 }
 
+// Speed 31 debug: X86CODE_A64_AGOUT=<attribute id, hex> (27.2 24B8117 addresses; with X86CODE_A64_LIVE_ONLY for the
+// process): AGGraphSetOutputValue / AGGraphGetOutputValue log when AttributeGraph's current attribute (top frame of
+// the thread's UpdateStack: pthread key at 0x22e74c980, frames as in the Speed 30 abort dump) is that attribute
+// (0 = every call, first 2000). The replaced first instructions are emulated in the handlers.
+constexpr u64 kAgSetOut = 0x1c952c490, kAgGetOut = 0x1c952c91c, kAgKeyVar = 0x22e74c980;
+constexpr u64 kAgOutRing = 1 << 16;
+struct AgOutEv { u64 frame, value, type, lr; u32 tid; bool set; };
+AgOutEv g_agout_ring[kAgOutRing];
+std::atomic<u64> g_agout_n{0};
+std::optional<uint32_t> agout_read_code(u64 a) {
+    if (a != kAgSetOut && a != kAgGetOut) return std::nullopt;
+    static const bool on = getenv("X86CODE_A64_AGOUT") && GuestThread::rd<uint32_t>(kAgSetOut) == 0xd10203ffu &&
+                           GuestThread::rd<uint32_t>(kAgGetOut) == 0xa9be4ff4u;
+    if (!on) return std::nullopt;
+    return 0xD4000001u | ((a == kAgSetOut ? kAgOutSetSvc : kAgOutGetSvc) << 5);
+}
+
 struct Forward final : Dynarmic::A64::UserCallbacks {
     static GuestThread &T() { return *t_self; }
     std::optional<uint32_t> MemoryReadCode(u64 a) override {
@@ -277,6 +294,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
         if (auto w = swift_timebase_read_code(a)) return w;
         if (auto w = agdl_read_code(a)) return w;
         if (auto w = astc_read_code(a)) return w;
+        if (auto w = agout_read_code(a)) return w;
         return GuestThread::rd<uint32_t>(a);
     }
     uint8_t MemoryRead8(u64 a) override { return GuestThread::rd<uint8_t>(a); }
@@ -572,6 +590,37 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kDyldScanSvcA || swi == kDyldScanSvcB) { dyld_scan_step(*this, swi == kDyldScanSvcB); return; }
     if (swi == kSwiftTypeSvc) { swifttype_step(*this); return; }
     if (swi == kAstcSvc) { astc_step(*this); return; }
+    if (swi == kAgOutSetSvc || swi == kAgOutGetSvc) {
+        static const u64 want = strtoull(getenv("X86CODE_A64_AGOUT"), nullptr, 16);
+        auto rdv = [](u64 a, void *buf, size_t n) {
+            iovec l{buf, n}, r{(void *)a, n};
+            return process_vm_readv(getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
+        };
+        u64 key = 0, top = ~0ull, st = 0, w[14] = {};
+        rdv(kAgKeyVar, &key, 8);
+        if (key < kGuestTsdSlots) st = tsd[key] & ~1ull;
+        if (st && rdv(st, w, sizeof w) && w[13] && w[13] < 4096) {
+            u64 buf = w[12] ? w[12] : st + 32, fr = 0;
+            if (rdv(buf + 8 * (w[13] - 1), &fr, 8)) top = fr;
+        }
+        {  // ring of the last 64K events for agout_dump (the failing attribute is not known in advance)
+            const u64 i = g_agout_n++ & (kAgOutRing - 1);
+            g_agout_ring[i] = {top, swi == kAgOutSetSvc ? x(0) : 0, x(swi == kAgOutSetSvc ? 1 : 0), x(30), (u32)gettid(), swi == kAgOutSetSvc};
+        }
+        static std::atomic<int> n{0};
+        if (want != 1 && ((u32)top == (u32)want || (!want && n < 2000)) && n++ < 20000) {
+            if (swi == kAgOutSetSvc) logf("agout: set attr %#x flags %#x value %#lx type %#lx lr %#lx", (unsigned)top, (unsigned)(top >> 32),
+                                          (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(30));
+            else logf("agout: get attr %#x flags %#x type %#lx lr %#lx", (unsigned)top, (unsigned)(top >> 32), (unsigned long)x(0), (unsigned long)x(30));
+        }
+        if (swi == kAgOutSetSvc) jit->SetSP(sp() - 128);  // sub sp, sp, #128
+        else {                                              // stp x20, x19, [sp, #-32]!
+            const u64 nsp = sp() - 32;
+            *(u64 *)nsp = x(20); *(u64 *)(nsp + 8) = x(19);
+            jit->SetSP(nsp);
+        }
+        return;
+    }
     if (swi == kAgDlCancelSvc) {  // stp x29, x30, [sp, #-16]!
         const u64 nsp = sp() - 16;
         *(u64 *)nsp = x(29); *(u64 *)(nsp + 8) = x(30);
@@ -910,4 +959,20 @@ extern "C" void a64_enter_guest(u64 pc, u64 *frame) {
     frame[16] = r.rax; frame[17] = r.rdx; frame[18] = r.xmm0; frame[19] = r.xmm1;
 }
 
+}  // namespace a64
+
+namespace a64 {
+// Speed 31 debug (X86CODE_A64_AGOUT): the recorded output-value gets/sets of one attribute (abort dump, handlers.cpp)
+void agout_dump(u32 attr) {
+    const u64 n = g_agout_n.load(), lo = n > kAgOutRing ? n - kAgOutRing : 0;
+    int shown = 0;
+    for (u64 i = lo; i < n; i++) {
+        const AgOutEv &e = g_agout_ring[i & (kAgOutRing - 1)];
+        if ((u32)e.frame != attr) continue;
+        if (shown++ < 200)
+            logf("agout dump #%llu: %s attr %#x flags %#x value %#lx type %#lx lr %#lx tid %u", (unsigned long long)(i - lo), e.set ? "set" : "get",
+                 (unsigned)e.frame, (unsigned)(e.frame >> 32), (unsigned long)e.value, (unsigned long)e.type, (unsigned long)e.lr, e.tid);
+    }
+    logf("agout dump: %d events for attr %#x in the last %llu", shown, attr, (unsigned long long)(n - lo));
+}
 }  // namespace a64
