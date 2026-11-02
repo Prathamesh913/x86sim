@@ -123,3 +123,6 @@ core.[0-9]*
 !/docs/screens/99-devtools-push-location.png
 !/docs/screens/100-photos-addmedia.png
 /host/arm64host/arm64host
+
+# built arm64 test binaries (sources are the .c files beside them)
+tests/arm64/*.sim
