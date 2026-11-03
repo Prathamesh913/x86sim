@@ -543,7 +543,10 @@ static void aot_job(GuestThread &t, Dynarmic::A64::Jit::SharedCode &sc, const ch
         std::vector<u64> work, succ;
         u64 blocks = 0, tick = 0;
         bool overflow = false;
-        const u64 limit = ch.off + ch.size - std::min<u64>(ch.size / 8, 256 << 10);  // a block is far below this margin
+        // Stop this far before the slot end: the check runs before each PretranslateCollect, which can emit tens of KB
+        // (a block and its far code). size/8 alone left 16 KB in a 128 KB slot ("all" scope) and the code ran past it.
+        const u64 margin = std::min<u64>(std::max<u64>(ch.size / 8, 64 << 10), std::min<u64>(ch.size / 2, 256 << 10));
+        const u64 limit = ch.off + ch.size - margin;
         // to: where the successors go (nullptr: not followed)
         auto one = [&](u64 d, std::vector<u64> *to) {
             if (!in_range(d & ((1ull << 56) - 1)) || !seen.insert(d).second) return;
@@ -575,7 +578,11 @@ static void aot_job(GuestThread &t, Dynarmic::A64::Jit::SharedCode &sc, const ch
         }
         const u64 used = Dynarmic::A64::Jit::ChunkCodeEnd(sc) - ch.off;
         const std::string tmp = ch.out + ".tmp." + std::to_string(getpid());
-        size_t bytes = blocks ? Dynarmic::A64::Jit::SaveChunk(sc, tmp, g_uuid, g_build, kCacheLo, kCacheHi, ch.off) : 0;
+        // Never save code that ran past the slot: it would overlap the next chunk in the image (assembly refuses it).
+        const bool past_slot = used > ch.size;
+        if (past_slot) logf("aot: %s: code ran %llu bytes past its %llu-byte slot; not saved", ch.name.c_str(),
+                            (unsigned long long)(used - ch.size), (unsigned long long)ch.size);
+        size_t bytes = blocks && !past_slot ? Dynarmic::A64::Jit::SaveChunk(sc, tmp, g_uuid, g_build, kCacheLo, kCacheHi, ch.off) : 0;
         if (bytes && rename(tmp.c_str(), ch.out.c_str()) != 0) { unlink(tmp.c_str()); bytes = 0; }
         Dynarmic::A64::Jit::DiscardCode(sc, ch.off, ch.off + used);
         clock_gettime(CLOCK_MONOTONIC, &c1);
