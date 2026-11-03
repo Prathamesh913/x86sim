@@ -1,15 +1,16 @@
 #!/bin/bash
 # x86Code: build the test apps (tests/apps/<name>) for the arm64 iOS Simulator on the Mac (X86SIM_MAC) with swiftc —
 # no Xcode project — and copy the .app bundles to $X86SIM_SCRATCH/apps/. Usage: tests/apps/build.sh [name...]
+# On Linux (X86SIM_BUILD=linux, build/mac-env.sh: the default when sdks/iPhoneSimulator.sdk exists) the same commands
+# run here: build/linux-bin's xcrun/codesign map to build/linux-swiftc.sh + ld64.lld.
 set -e
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
-. "$X86SIM_ROOT/cli/lib/config.sh"
+. "$X86SIM_ROOT/build/mac-env.sh"
 A=$X86SIM_ROOT/tests/apps; OUT=$X86SIM_SCRATCH/apps; mkdir -p "$OUT"
-[ -n "$X86SIM_MAC" ] || { echo "build.sh: X86SIM_MAC is not set" >&2; exit 2; }
 names=${*:-$(cd "$A" && ls -d x86*/ | tr -d /)}
 for n in $names; do
 	echo "== $n" >&2
-	tar cf - -C "$A" common.swift "$n" | ssh "$X86SIM_MAC" "set -e; W=\$(mktemp -d /tmp/x86app.XXXXXX); cd \$W; tar xf -
+	tar cf - -C "$A" common.swift "$n" | mac "set -e; W=\$(mktemp -d /tmp/x86app.XXXXXX); cd \$W; tar xf -
 		APP=$n.app; mkdir -p \$APP
 		nice xcrun -sdk iphonesimulator swiftc -target arm64-apple-ios27.0-simulator -Onone \$( [ -f $n/main.swift ] || echo -parse-as-library ) \
 			-o \$APP/$n common.swift $n/*.swift >&2
