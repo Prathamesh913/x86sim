@@ -8,7 +8,7 @@
     device-a64.py runtimes                       the iOS versions in runtimes/ (version, build, dir)
 
 A new device gets a copy (reflinks) of var/device-a64's data/ when that has booted once (apps registered, setup
-done), so its first boot is a normal boot; mksimdevice.py writes the model's screen, identifiers and capabilities.
+done), so its first boot is a normal boot (device-repath.py moves its absolute paths to the new device); mksimdevice.py writes the model's screen, identifiers and capabilities.
 Speed 24: --ios picks the runtime (default 27.2); <device>/runtime names its runtimes/ dir and boot-a64.sh boots the
 device on it. Only a 27.0 device gets the copy (another version's data has its own first boot).
 Boot one with A64_DEVICE=var/device-a64-<name> cli/libexec/arm64/boot-a64.sh (or the launcher).
@@ -118,6 +118,9 @@ def cmd_create(args):
                 os.unlink(os.path.join(dev, "data", x))
             except OSError:
                 pass
+        # the copy's stores keep var/device-a64's absolute paths (lsd's csstore: every app's data container): its
+        # apps ran in the base phone's containers. device-repath.py rewrites them / drops the caches that hold them.
+        subprocess.run([sys.executable, os.path.join(ROOT, "cli/libexec/arm64/device-repath.py"), dev, BASE])
     env = dict(os.environ, X86SIM_ARCH="arm64", X86SIM_DEVICE=dev,
                X86SIM_RUNTIME=os.path.join(ROOT, "runtimes", rt, "RuntimeRoot"),
                X86SIM_STATE=os.environ.get("A64_STATE", os.path.join(VAR, "run-a64")), X86CODE_JOBLOG="1")

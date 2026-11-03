@@ -2329,3 +2329,39 @@ Own phone var/device-a64-ram3 (own prefix a64prefix-ram3, state var/run-a64-ram3
   pthread_cond_timedwait never timed out here, the keyboard stayed attached), so nothing of ours wakes up during
   teardown. 5 boot/stop cycles on ram3: no backboardd crash log. (Also fixed: the
   x86_64 SimulatorHID did not build: now_ns was inside #if __arm64__ but note_input uses it.)
+
+## Cloned phones' container paths + zombie processes (2026-11-03, ramclone1 / ram4)
+- **Clone paths, cause**: `device-a64.py create` reflink-copies var/device-a64/data, and these stores keep the base
+  phone's absolute Darling path (/Volumes/SystemRoot/.../var/device-a64/data/...): lsd's csstore (888 container paths:
+  every app's data container, app groups, plugin containers: the HOME apps got), FrontBoard applicationState.db (kvs
+  bplists with the containers), preferences (springboard, Preferences, assetsd, Maps, MobileSafari, photolibraryd,
+  domainscache), nsurlsessiond tasks.sqlite (NSKeyedArchiver URLs), MediaLibrary.sqlitedb, CoreSpotlight indexes, e5rt
+  bundle caches, ~90 MobileAsset/assetsubscriptiond state/locker/json files and 6 `atomic_instance_latest.locker`
+  symlinks. containermanagerd's metadata plists and MobileInstallation (LastBuildInfo, Journal) hold no absolute paths
+  (containers are resolved under HOME at runtime).
+- **Fix**: cli/libexec/arm64/device-repath.py DEVICE [BASE] (run by `device create` after the copy): plists rewritten
+  through plistlib (also bplists nested as data), sqlite text/bplist cells rewritten (+ vacuum, freed pages kept old
+  rows), json/text replaced, symlinks relinked, the csstores deleted (CSStore2 units are length-prefixed; lsd rebuilds
+  from the runtime's apps + MobileInstallation with the device's paths in ~4 min of the first boot), Spotlight indexes
+  and e5rt caches deleted; anything left is reported (exit 1). Refuses a booted device (--force).
+- **Verified** (fresh clone ramclone1): no file or symlink in its data/ names var/device-a64/ (logs aside); no process of
+  the phone has an fd or env var into the base phone; Maps/Safari HOME in ramclone1's containers; Settings, Maps, Safari
+  open; tests/apps/run.sh ramclone1 x86ui PASS (container in ramclone1); listapps 157 apps; base data/: sha1 of every
+  file with the path and mtimes of all files unchanged except var/log/com.apple.backboardd.log (main phone running).
+  Earlier "launch got no reply after deleting the csstore" did not reproduce once the other stores were rewritten.
+- **Repairs**: ram4 repaired (stopped): `python3 cli/libexec/arm64/device-repath.py var/device-a64-ram4 var/device-a64`.
+  ram2 was booted by someone at 14:49 and ram3 is in use: not run. For each (stop, repair, boot):
+  `A64_DEVICE=$PWD/var/device-a64-ram3 A64_STATE=$PWD/var/run-a64-ram3 A64_DPREFIX=$HOME/scratch/x86code/a64prefix-ram3 A64_STOP_ONLY=1 cli/libexec/arm64/boot-a64.sh && python3 cli/libexec/arm64/device-repath.py var/device-a64-ram3 var/device-a64`
+  (ram2 the same with -ram2). Data an old clone already wrote into the base phone's containers stays there.
+- **Zombies, cause**: not EVFILT_PROC/suspension. A process SIGKILLed while pid_suspend'ed in a live container is reaped
+  by launchd_sim (Maps 1836, Settings 1995 suspended; 10 more unsuspended kills: all reaped, launchd logs "cleaning up").
+  The zombies are orphans: when a launchd_sim dies (boot-a64.sh's stop_prefix SIGKILLs it; ram2's 13:26 container
+  outlived its reboot at 14:49 with ~60 live orphans), its children are reparented to the container's pid 1, Darling's
+  x86_64 /sbin/launchd, which only waits for its own jobs (XNU reaps orphans of initproc in the kernel:
+  P_LIST_DEADPARENT). Every orphan that exited later (jetsam's kills, daemons) stayed Z. Reproduced in a container:
+  `darling shell sh -c '(sleep 2 &)'` left a zombie under pid 1.
+- **Fix** (darling bcf4a3f38): launchd as pid 1 waits every 5 s for its zombie children (/proc/self/task/*/children)
+  that are not jobs ("Reaped stray zombie PID"). After: 5x `(sleep 1 &)` orphans and the app kills: no zombie. Installed
+  into darling-prefix/libexec/darling/sbin/launchd; containers started before keep the old launchd.
+- Open: stale containers survive a phone's reboot (pid 1 of ram2's 13:26 boot and older ones from 12:31-12:57 still run
+  with live orphan daemons): stop_prefix's `darling shutdown` does not always end the old container.
