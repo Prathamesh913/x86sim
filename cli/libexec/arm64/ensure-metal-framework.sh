@@ -8,7 +8,7 @@
 # Never commit the extracted binary (runtimes/ is gitignored).
 set -e
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
-RT=${A64_RUNTIME:-${X86SIM_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.0-24A434-arm64/RuntimeRoot}}
+RT=${A64_RUNTIME:-${X86SIM_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.2-24B8117-arm64/RuntimeRoot}}
 MFW=$RT/System/Library/Frameworks/Metal.framework
 CACHE=$RT/System/Library/Caches/com.apple.dyld/dyld_sim_shared_cache_arm64
 OUT=$MFW/Metal

@@ -4,7 +4,7 @@
 # booted x86 simulator's container is left alone.
 # Usage: tests/arm64/run.sh <linux path to binary> [args...]   (X86CODE_A64_STATS=1, X86CODE_A64_TRACE=1 pass through)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}; . "$X86SIM_ROOT/cli/lib/config.sh"
-R=/Volumes/SystemRoot${A64_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.0-24A434-arm64/RuntimeRoot}
+R=/Volumes/SystemRoot${A64_RUNTIME:-$X86SIM_ROOT/runtimes/ios-27.2-24B8117-arm64/RuntimeRoot}
 export DPREFIX="${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}"
 bin=$(realpath "$1"); shift
 # Speed 8: a private /dev/shm for the container (no tmpfs stacked over the host's, see darlingserver.cpp)

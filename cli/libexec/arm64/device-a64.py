@@ -9,7 +9,7 @@
 
 A new device gets a copy (reflinks) of var/device-a64's data/ when that has booted once (apps registered, setup
 done), so its first boot is a normal boot; mksimdevice.py writes the model's screen, identifiers and capabilities.
-Speed 24: --ios picks the runtime (default 27.0); <device>/runtime names its runtimes/ dir and boot-a64.sh boots the
+Speed 24: --ios picks the runtime (default 27.2); <device>/runtime names its runtimes/ dir and boot-a64.sh boots the
 device on it. Only a 27.0 device gets the copy (another version's data has its own first boot).
 Boot one with A64_DEVICE=var/device-a64-<name> cli/libexec/arm64/boot-a64.sh (or the launcher).
 """
@@ -31,7 +31,7 @@ def models():
         return json.load(f)
 
 
-DEFAULT_RT = "ios-27.0-24A434-arm64"
+DEFAULT_RT = "ios-27.2-24B8117-arm64"
 
 
 def runtimes():

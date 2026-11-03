@@ -89,7 +89,7 @@ impl Default for Config {
         let r = repo_root();
         let s = scratch();
         Config {
-            runtime_root: r.join("runtimes/ios-27.0-24A434-arm64/RuntimeRoot"),
+            runtime_root: r.join("runtimes/ios-27.2-24B8117-arm64/RuntimeRoot"),
             device: Some(r.join("var/device-a64")),
             training: vec![s.join("s15/train5"), s.join("s17/train6")],
             scope: "hot".into(),

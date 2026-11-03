@@ -19,7 +19,7 @@ export X86SIM_DEVICE=${A64_DEVICE:-$X86SIM_ROOT/var/device-a64}
 # Speed 24: a device's iOS version is its <device>/runtime (a runtimes/ dir name, device-a64.py create --ios); A64_RUNTIME
 # overrides. Each runtime has its own JIT/AOT cache dir ($X86SIM_SCRATCH/jc-<build>; 27.0: jitcache) and placement table.
 A64_RT_DIR=$(cat "$X86SIM_DEVICE/runtime" 2>/dev/null)
-export X86SIM_RUNTIME=${A64_RUNTIME:-$X86SIM_ROOT/runtimes/${A64_RT_DIR:-ios-27.0-24A434-arm64}/RuntimeRoot}
+export X86SIM_RUNTIME=${A64_RUNTIME:-$X86SIM_ROOT/runtimes/${A64_RT_DIR:-ios-27.2-24B8117-arm64}/RuntimeRoot}
 A64_BUILD=$(basename "$(dirname "$X86SIM_RUNTIME")" | sed -n 's/^ios-[0-9.]*-\([0-9A-Za-z]*\)-arm64$/\1/p')
 export X86SIM_STATE=${A64_STATE:-$X86SIM_ROOT/var/run-a64}
 . "$X86SIM_ROOT/cli/lib/config.sh"

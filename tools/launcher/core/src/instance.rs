@@ -79,7 +79,7 @@ pub fn load(dir: &Path) -> Instance {
     let name = std::fs::read_to_string(dir.join("name")).map(|s| s.trim().to_string()).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| default_name(sfx));
     let model_id = env.get("SIMULATOR_MODEL_IDENTIFIER").cloned().unwrap_or_default();
     let model = crate::sim::models().into_iter().find(|m| m.1 == model_id).map(|m| m.0).unwrap_or_else(|| if model_id.is_empty() { "iPhone".into() } else { model_id.clone() });
-    let runtime_dir = std::fs::read_to_string(dir.join("runtime")).map(|s| s.trim().to_string()).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "ios-27.0-24A434-arm64".into());
+    let runtime_dir = std::fs::read_to_string(dir.join("runtime")).map(|s| s.trim().to_string()).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "ios-27.2-24B8117-arm64".into());
     let runtime_root = repo_root().join("runtimes").join(&runtime_dir).join("RuntimeRoot");
     let runtime_present = crate::dyldcache::Cache::cache_dir(&runtime_root).join(crate::dyldcache::CACHE_NAME).exists();
     let (ios, build) = match runtime_dir.split('-').collect::<Vec<_>>()[..] {

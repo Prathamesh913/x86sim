@@ -8,7 +8,7 @@ X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
 . "$X86SIM_ROOT/cli/lib/config.sh"
 X=$X86SIM_ROOT; cd "$X"
 export X86SIM_ARCH=arm64
-export X86SIM_RUNTIME=${A64_RUNTIME:-$X/runtimes/ios-27.0-24A434-arm64/RuntimeRoot}
+export X86SIM_RUNTIME=${A64_RUNTIME:-$X/runtimes/ios-27.2-24B8117-arm64/RuntimeRoot}
 export X86SIM_DEVICE=${A64_PROBE_DEVICE:-$X/var/device-a64-probe}
 export X86SIM_STATE=${A64_PROBE_STATE:-$X/var/run-a64-probe}
 export DPREFIX=${A64_PROBE_DPREFIX:-$X86SIM_SCRATCH/a64probeprefix}

@@ -43,7 +43,7 @@ pub fn devices() -> Vec<(String, PathBuf)> {
 /// The RuntimeRoot a device boots on: its `runtime` file (a runtimes/ dir name, device-a64.py create --ios), else 27.0
 pub fn device_runtime(dev: &Path) -> PathBuf {
     let d = std::fs::read_to_string(dev.join("runtime")).map(|s| s.trim().to_string()).unwrap_or_default();
-    let d = if d.is_empty() { "ios-27.0-24A434-arm64".to_string() } else { d };
+    let d = if d.is_empty() { "ios-27.2-24B8117-arm64".to_string() } else { d };
     repo_root().join("runtimes").join(d).join("RuntimeRoot")
 }
 
@@ -65,7 +65,7 @@ pub fn runtime_short(runtime_root: &Path) -> String {
     }
 }
 
-/// "ios-27.0-24A434-arm64" -> "iOS 27.0 (24A434)"
+/// "ios-27.2-24B8117-arm64" -> "iOS 27.2 (24B8117)"
 fn runtime_label(dir: &str) -> String {
     match dir.split('-').collect::<Vec<_>>()[..] {
         ["ios", ver, build, ..] => format!("iOS {ver} ({build})"),
