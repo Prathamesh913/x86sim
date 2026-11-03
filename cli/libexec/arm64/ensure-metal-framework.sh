@@ -24,7 +24,7 @@ if ! command -v ipsw >/dev/null 2>&1; then
 	echo "ensure-metal-framework: need ipsw (dyld extract)" >&2
 	exit 1
 fi
-TMP=${X86SIM_SCRATCH:-/home/bobby/scratch/x86code}/metal-framework-extract
+TMP=${X86SIM_SCRATCH:-$HOME/scratch/x86code}/metal-framework-extract
 rm -rf "$TMP"
 mkdir -p "$TMP"
 echo "ensure-metal-framework: extracting Metal from dyld cache..." >&2

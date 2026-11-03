@@ -28,6 +28,7 @@ typedef uint32_t IOOptionBits;
 #include <sys/un.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -90,7 +91,12 @@ static void slog(const char* fmt, ...) {
 	fprintf(stderr, "simhid: "); vfprintf(stderr, fmt, ap); fprintf(stderr, "\n");
 	if (!g_logf) {
 		const char* p = getenv("SIMHID_LOG");
-		if (!p || !*p) p = "/Volumes/SystemRoot/home/bobby/scratch/x86code/simhid.log";
+		char def[512];
+		if (!p || !*p) {  // Linux user's scratch, seen through Darling's SystemRoot (same user name)
+			struct passwd* pw = getpwuid(getuid());
+			snprintf(def, sizeof def, "/Volumes/SystemRoot/home/%s/scratch/x86code/simhid.log", pw ? pw->pw_name : "");
+			p = def;
+		}
 		g_logf = fopen(p, "a");
 		if (g_logf) setvbuf(g_logf, NULL, _IOLBF, 0);
 	}

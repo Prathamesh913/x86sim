@@ -52,7 +52,7 @@ pub fn repo_root() -> PathBuf {
 }
 
 pub fn scratch() -> PathBuf {
-    std::env::var("X86SIM_SCRATCH").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/home/bobby/scratch/x86code"))
+    std::env::var("X86SIM_SCRATCH").map(PathBuf::from).unwrap_or_else(|_| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("scratch/x86code"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

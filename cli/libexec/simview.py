@@ -183,7 +183,8 @@ def on_activate(app):
         root = os.path.dirname(here)
         dirs = os.environ.get("SIMVIEW_LOGS") or ":".join([
             os.path.join(booted_device() or os.path.join(os.path.dirname(root), "var/device-a64"), "data/var/log"),
-            "/home/bobby/scratch/x86code/a64prefix/private/var/tmp/x86code-a64",
+            os.path.join(os.environ.get("X86SIM_SCRATCH") or os.path.expanduser("~/scratch/x86code"),
+                         "a64prefix/private/var/tmp/x86code-a64"),
             os.path.join(x86config.data(), "var/log")])
         offs = {}
 

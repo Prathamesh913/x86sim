@@ -485,13 +485,14 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     else { signal(sig, SIG_DFL); raise(sig); }
 }
 // SIGABRT from native code (Darling's libsystem, dynarmic asserts): native and guest backtraces, then the default.
+static const char *g_scratch_abrt = "";  // scratch_dir(), resolved before the handler is installed
 static void on_abrt(int, siginfo_t *si, void *uc) {
     // Scratch breadcrumb (survives when per-pid logs truncate): real RIP from ucontext + maps line.
     u64 rip = 0;
     if (uc) rip = (u64)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RIP];
     {
-        char path[128];
-        snprintf(path, sizeof path, "/home/bobby/scratch/x86code/abrt-%d-%ld.txt", (int)getpid(), (long)syscall(SYS_gettid));
+        char path[512];
+        snprintf(path, sizeof path, "%s/abrt-%d-%ld.txt", g_scratch_abrt, (int)getpid(), (long)syscall(SYS_gettid));
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (fd >= 0) {
             char line[512];
@@ -627,6 +628,7 @@ static void start_memlog() {
 static void install_fault_report() {
     start_memlog();
     hook_native_abort();
+    g_scratch_abrt = scratch_dir().c_str();
     { struct sigaction sa{}; sa.sa_sigaction = on_abrt; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigaction(SIGABRT, &sa, nullptr); }
     struct sigaction sa{};
     // SA_NODEFER: a fault inside the report re-enters on_fault (depth guard: one log line, then kill); with SIGSEGV
@@ -696,12 +698,12 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     // RunningBoard assertions stay satisfied (process alive) without translating Spotlight/WidgetRenderer
     // (~0.5–1.5 GB PSS each). Replaces the kill-every-5s slim-reaper thrash.
     // Park list: env X86CODE_A64_SLIM_PARK, or file (launchd does not pass env to jobs).
-    // File default: /home/bobby/scratch/x86code/a64-slim-park (written by boot-a64.sh).
+    // File default: <scratch_dir()>/a64-slim-park (written by boot-a64.sh).
     {
         std::string park;
         if (const char *e = getenv("X86CODE_A64_SLIM_PARK")) park = e;
         if (park.empty()) {
-            if (FILE *f = fopen("/home/bobby/scratch/x86code/a64-slim-park", "r")) {
+            if (FILE *f = fopen((scratch_dir() + "/a64-slim-park").c_str(), "r")) {
                 char buf[512];
                 if (fgets(buf, sizeof buf, f)) {
                     park = buf;
@@ -820,7 +822,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
 }
 
 // Speed 29 debug: per-process environment from a file, applied before every other static initializer of this library
-// (many knobs are read once into static consts). File: $X86CODE_A64_PENV_FILE or /home/bobby/scratch/x86code/a64-penv,
+// (many knobs are read once into static consts). File: $X86CODE_A64_PENV_FILE or <scratch_dir()>/a64-penv,
 // lines "<program basename> K=V [K=V...]" ('#' comments). Used to bisect one app's knobs without rebooting the phone.
 __attribute__((constructor(101))) static void a64_penv() {
     // (g_penv_applied: declared above main's environment loop)
@@ -829,7 +831,7 @@ __attribute__((constructor(101))) static void a64_penv() {
     const char *b = strrchr(exe, '/');
     b = b ? b + 1 : exe;
     const char *fn = getenv("X86CODE_A64_PENV_FILE");
-    FILE *f = fopen(fn ? fn : "/home/bobby/scratch/x86code/a64-penv", "r");
+    FILE *f = fopen(fn ? fn : (scratch_dir() + "/a64-penv").c_str(), "r");
     if (!f) return;
     char line[1024];
     while (fgets(line, sizeof line, f)) {

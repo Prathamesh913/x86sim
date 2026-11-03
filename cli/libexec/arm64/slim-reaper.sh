@@ -11,8 +11,8 @@ set -euo pipefail
 INTERVAL=${A64_SLIM_SECS:-5}
 # comm names (kernel TASK_COMM_LEN=16 including NUL → 15 visible chars)
 TARGETS='Spotlight WidgetRenderer_ pkd'
-PREFIX=${A64_DPREFIX:-/home/bobby/scratch/x86code/a64prefix}
-LOG=${A64_STATE:-/home/bobby/Projects/x86Code/var/run-a64}/slim-reaper.log
+PREFIX=${A64_DPREFIX:-${X86SIM_SCRATCH:-$HOME/scratch/x86code}/a64prefix}
+LOG=${A64_STATE:-${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}/var/run-a64}/slim-reaper.log
 mkdir -p "$(dirname "$LOG")"
 echo "$(date -Iseconds) slim-reaper start interval=${INTERVAL}s targets=$TARGETS" >>"$LOG"
 

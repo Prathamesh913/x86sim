@@ -295,10 +295,10 @@ if [ "${A64_SLIM:-1}" = 1 ] && [ "${A64_JOBS:-std}" != full ]; then
 		echo "X86CODE_A64_SLIM_PARK=$PARK_LIST" >>"$D/sim.env"
 	fi
 	# File fallback: launchd does not pass sim.env into job environ; arm64host reads this path.
-	mkdir -p /home/bobby/scratch/x86code
-	echo "$PARK_LIST" > /home/bobby/scratch/x86code/a64-slim-park
+	mkdir -p "${X86SIM_SCRATCH:-$HOME/scratch/x86code}"
+	echo "$PARK_LIST" > "${X86SIM_SCRATCH:-$HOME/scratch/x86code}/a64-slim-park"
 else
-	rm -f /home/bobby/scratch/x86code/a64-slim-park
+	rm -f "${X86SIM_SCRATCH:-$HOME/scratch/x86code}/a64-slim-park"
 fi
 ENVS=$(sed 's/^/"/; s/$/"/' "$D/sim.env" | tr '\n' ' ')
 ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86CODE_A64_TRACE=1)

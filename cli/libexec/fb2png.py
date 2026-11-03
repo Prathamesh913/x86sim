@@ -9,7 +9,7 @@ import x86config  # noqa: E402
 import fbring
 
 src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(x86config.data(), "framebuffer.bgra")
-dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.environ.get("X86SIM_SCRATCH", "/home/bobby/scratch/x86code"), "frame.png")
+dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86code")), "frame.png")
 div = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 # x86Code: framebuffer.bgra is only rewritten every 2 s now; the ring has every frame.
 # Arm64 boots: pass /dev/shm/x86code-a64-simfb.ring (or set SIMFB_RING_LINUX and use "ring").

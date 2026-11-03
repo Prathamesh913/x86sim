@@ -56,7 +56,7 @@ def main():
     assert abs(slope - 10.0) < 0.05, slope
 
     # fb2png refuses a short buffer (tight-only bytes with a padded stride header)
-    scratch = os.environ.get("X86SIM_SCRATCH", "/home/bobby/scratch/x86code")
+    scratch = os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86code"))
     root = os.path.join(os.path.dirname(__file__), "../..")
     fb2png = os.path.join(root, "cli/libexec/fb2png.py")
     with tempfile.TemporaryDirectory(dir=scratch) as td:

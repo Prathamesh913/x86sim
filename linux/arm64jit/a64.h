@@ -166,6 +166,7 @@ void swiftconf_step(GuestThread &t);
 void swiftconf_verify(GuestThread &t);
 std::optional<u32> swifttype_read_code(u64 a);  // swiftscan.cpp: svc at the type-by-name conformance walk
 void swifttype_step(GuestThread &t);
+const std::string &scratch_dir();  // jitcache.cpp: $X86SIM_SCRATCH, else <real user home>/scratch/x86code
 const std::string &jitcache_cache_file();  // jitcache.cpp: the main dyld cache file
 u32 swift_text_word(u64 a);  // swiftscan.cpp: a code word of the cache, read from its file
 u64 swift_text_find(const u32 *words, const u32 *mask, size_t n);  // swiftscan.cpp: code pattern in libswiftCore

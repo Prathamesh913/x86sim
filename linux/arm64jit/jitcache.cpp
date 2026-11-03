@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <pwd.h>
 #include <signal.h>
 #include <pthread.h>
 #include <sys/syscall.h>
@@ -70,10 +71,26 @@ std::string g_path;
 std::string g_cache_file;  // the main dyld cache file (Linux path)
 std::weak_ptr<Dynarmic::A64::Jit::SharedCode> g_shared;
 
+}  // namespace
+
+// Simulator scratch dir: $X86SIM_SCRATCH, else <home>/scratch/x86code. launchd jobs get no sim.env, so the home comes
+// from the passwd entry of the real uid (HOME may be scrubbed or the guest's), then $HOME.
+const std::string &scratch_dir() {
+    static const std::string d = [] {
+        if (const char *s = getenv("X86SIM_SCRATCH"); s && *s) return std::string(s);
+        const char *home = nullptr;
+        if (struct passwd *pw = getpwuid(getuid())) home = pw->pw_dir;
+        if (!home || !*home) home = getenv("HOME");
+        return std::string(home ? home : "") + "/scratch/x86code";
+    }();
+    return d;
+}
+
+namespace {
 std::string default_dir() {
     if (const char *d = getenv("X86CODE_A64_JITCACHE_DIR")) return d;
     if (const char *s = getenv("X86SIM_SCRATCH")) return std::string(s) + "/jitcache";
-    return "/home/bobby/scratch/x86code/jitcache";
+    return scratch_dir() + "/jitcache";
 }
 
 // Speed 14: placement.txt lines "addr slot fsize mtime key" (hex addr/slot; key = path from RuntimeRoot/ on, or the
