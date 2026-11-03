@@ -39,6 +39,14 @@ clang|clang++|cc|c++)
 		set -- -target "$arch-apple-$os$ver$env" "$@"
 	fi
 	case $tool in clang++|c++) cc=clang++ ;; *) cc=clang ;; esac
+	# arm64: no pointer authentication (see A64_NOPAUTH in build/linux-env.sh: upstream clang emits XPACI, which
+	# dynarmic does not implement; Apple clang emits no PAC code for non-arm64e)
+	nopauth=; prev=
+	for a; do
+		case $a in arm64-*|--target=arm64-*) [ "$prev" = -target ] || [ "${a#--target=}" != "$a" ] && nopauth=1 ;; esac
+		prev=$a
+	done
+	[ -n "$nopauth" ] && set -- -Xclang -target-feature -Xclang -pauth "$@"
 	exec $cc -isysroot "$SDK" -fuse-ld=lld -Wno-unused-command-line-argument -Wno-error=incompatible-pointer-types "$@" ;;
 swiftc) need linux-swiftc.sh; exec "$X/build/linux-swiftc.sh" -sdk "$SDK" "$@" ;;
 metal|metallib) need linux-metal.sh; exec "$X/build/linux-metal.sh" "$@" ;;
