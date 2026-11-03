@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+# x86Code: Linux stand-in for tests/apps/icon-gen.swift (a macOS binary on the Mac): mkicon <out.png> <size> <letter> <rrggbb>
+# Same picture: a solid square of the colour, the letter in white bold sans centred. Needs Pillow (python-pillow).
+import sys
+from PIL import Image, ImageDraw, ImageFont
+out, n, letter, hexc = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+img = Image.new("RGB", (n, n), "#" + hexc)
+d = ImageDraw.Draw(img)
+font = None
+for f in ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+          "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"):
+    try: font = ImageFont.truetype(f, int(n * 0.6)); break
+    except OSError: pass
+font = font or ImageFont.load_default(size=int(n * 0.6))
+l, t, r, b = d.textbbox((0, 0), letter, font=font)
+d.text(((n - (r - l)) / 2 - l, (n - (b - t)) / 2 - t), letter, font=font, fill="white")
+img.save(out, "PNG")

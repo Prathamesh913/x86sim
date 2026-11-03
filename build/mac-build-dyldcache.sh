@@ -5,6 +5,7 @@
 # the Mac copy. The Mac's own CoreSimulator cache for this runtime is arm64 only. See docs/notebook/FINDINGS.md (dyld shared cache).
 #   build/mac-build-dyldcache.sh
 set -e
+X86SIM_BUILD=mac   # Mac only: the runtime's update_dyld_sim_shared_cache is a macOS binary
 . "$(dirname "$0")/mac-env.sh"
 OUT=$X/runtimes/dyld-cache-23F73-x86_64
 [ -f "$OUT/dyld_sim_shared_cache_x86_64" ] && { echo "$OUT already has a cache (remove it to rebuild)" >&2; exit 1; }

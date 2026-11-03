@@ -1,0 +1,47 @@
+#!/bin/sh
+# x86Code: xcrun for the Linux build (build/linux-env.sh). Maps `xcrun [-sdk iphonesimulator|macosx] <tool> args` to
+#   clang    Linux clang + ld64.lld with -isysroot sdks/<sdk>; without -target, one is made from -arch and
+#            -mios-simulator-version-min / -mmacosx-version-min (defaults x86_64, iOS 17.0 / macOS 10.15)
+#   swiftc   build/linux-swiftc.sh -sdk sdks/<sdk> args
+#   metal, metallib   build/linux-metal.sh args
+#   lipo, otool, nm, install_name_tool, strip, size   llvm-*
+X=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
+sdk=macosx
+while :; do case $1 in
+	-sdk|--sdk) sdk=$2; shift 2 ;;
+	-r|--run) shift ;;
+	-f|--find) echo "$2"; exit 0 ;;
+	--show-sdk-path) case $sdk in iphonesimulator*) echo "$X/sdks/iPhoneSimulator.sdk" ;; *) echo "$X/sdks/MacOSX.sdk" ;; esac; exit 0 ;;
+	*) break ;;
+esac; done
+case $sdk in
+	iphonesimulator*) SDK=${SDK_IOS:-$X/sdks/iPhoneSimulator.sdk}; os=ios; ver=17.0; env=-simulator ;;
+	macosx*) SDK=${SDK_MAC:-$X/sdks/MacOSX.sdk}; os=macos; ver=10.15; env= ;;
+	*) echo "xcrun (linux): unsupported sdk $sdk" >&2; exit 1 ;;
+esac
+tool=$1; shift
+need() { [ -x "$X/build/$1" ] || { echo "xcrun (linux): build/$1 does not exist yet: SKIPPED this $tool step" >&2; exit 0; }; }
+case $tool in
+clang|clang++|cc|c++)
+	arch=x86_64; tgt=
+	for a; do case $a in -target|--target=*) tgt=1 ;; esac; done
+	if [ -z "$tgt" ]; then
+		# -arch and the version-min flag become the triple (clang on Linux needs an apple triple)
+		n=$#; i=0; prev=
+		while [ $i -lt $n ]; do a=$1; shift; i=$((i+1))
+			if [ "$prev" = -arch ]; then arch=$a; prev=; continue; fi
+			case $a in
+				-arch) prev=-arch; continue ;;
+				-mios-simulator-version-min=*|-mios-version-min=*|-mmacosx-version-min=*|-mmacos-version-min=*) ver=${a#*=}; continue ;;
+			esac
+			set -- "$@" "$a"
+		done
+		set -- -target "$arch-apple-$os$ver$env" "$@"
+	fi
+	case $tool in clang++|c++) cc=clang++ ;; *) cc=clang ;; esac
+	exec $cc -isysroot "$SDK" -fuse-ld=lld -Wno-unused-command-line-argument -Wno-error=incompatible-pointer-types "$@" ;;
+swiftc) need linux-swiftc.sh; exec "$X/build/linux-swiftc.sh" -sdk "$SDK" "$@" ;;
+metal|metallib) need linux-metal.sh; exec "$X/build/linux-metal.sh" "$@" ;;
+lipo|otool|nm|install_name_tool|strip|size|objdump) exec "llvm-$(echo $tool | tr _ -)" "$@" ;;
+*) echo "xcrun (linux): no Linux equivalent for $tool" >&2; exit 1 ;;
+esac

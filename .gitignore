@@ -28,17 +28,8 @@ core.[0-9]*
 /tests/metal/shaders/probe.air
 /tests/metal/shaders/probe.ll
 /tests/metal/shaders/probe.metallib
-# Mach-O binaries built on the Mac (build/mac-build-*.sh); see README "Simulator-side binaries"
-/host/fpsim2host/fpsim2host
-/host/fseventsd/fseventsd
-/host/iosurfaced/iosurfaced
-/host/metalhostd/metalhostd
-/host/netconfig/netconfig
-/host/openurl/openurl
+# Mach-O probes built by hand on the Mac (the outputs of build/mac-build-*.sh are committed, see the end of this file)
 /host/debugserver/debugserver
-/host/simhost/simhost
-/tests/iosurface/iosprobe
-/tests/metal/mtlprobe
 /tests/probes/bulkprobe
 /tests/probes/clockprobe
 /tests/probes/csprobe
@@ -63,9 +54,6 @@ core.[0-9]*
 /tests/probes/netprobe
 /tests/probes/nsdprobe
 /tests/probes/pathprobe
-/tests/probes/prefs
-/tests/probes/fsevprobe
-/tests/probes/fsevhist
 /tests/probes/probe
 /tests/probes/rcvdieprobe
 /tests/probes/shmprobe
@@ -117,12 +105,21 @@ core.[0-9]*
 !/docs/screens/96-spritedemo.png
 !/docs/screens/97-home-installed-apps.png
 !/docs/screens/98-apple-sample-queries.png
-# built test apps (tests/apps/<Name>, build/mac-build-apps.sh)
-/tests/apps/build/
 *.profraw
 !/docs/screens/99-devtools-push-location.png
 !/docs/screens/100-photos-addmedia.png
 /host/arm64host/arm64host
 
-# built arm64 test binaries (sources are the .c files beside them)
-tests/arm64/*.sim
+/sdks/
+# x86Code: our own simulator-side binaries, the outputs of build/mac-build-*.sh (built on Linux with build/linux-env.sh
+# or on the Mac), are committed. Not debugserver (LLVM's, ignored above); never sdks/, runtimes/ or Apple binaries.
+!/host/simaudio/libsimaudio.dylib
+!/host/simaudio/arm64/libsimaudio.dylib
+!/host/simshim/compat/libsimshim.dylib
+!/host/simshim/arm64/compat/libsimshim.dylib
+!/host/simshim/diag/lib*.dylib
+!/host/simshim/diag/arm64/lib*.dylib
+!/host/simfb/SimFramebuffer.framework/
+!/host/simfb/arm64/SimFramebuffer.framework/
+!/host/simhid/SimulatorHID.framework/
+!/host/simhid/arm64/SimulatorHID.framework/

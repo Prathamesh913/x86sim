@@ -5,6 +5,7 @@
 # Darling's /usr/lib/libc++.1.dylib doesn't have (std::bad_function_call's destructor). It runs inside the Darling
 # container as a macOS process and attaches to simulator apps (x86sim debug). Everything on the Mac is removed after.
 set -e
+X86SIM_BUILD=mac   # Mac only: xcodebuild of the debugserver project
 . "$(dirname "$0")/mac-env.sh"
 LLVM_TAG=${LLVM_TAG:-llvmorg-21.1.0}
 mac "set -e; rm -rf /tmp/x86dbg && mkdir -p /tmp/x86dbg && cd /tmp/x86dbg &&

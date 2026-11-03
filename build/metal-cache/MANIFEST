@@ -1,0 +1,1 @@
+2026-11-03T02:18:47Z 295e3cdec65eedd4efc75144ad0f14ba78157769.metallib metal -target air64-apple-ios26.5-simulator probe.metal@2e1086cdb265ae69 (seeded from tests/metal/shaders/probe_metallib.h, Xcode 27.1 build)

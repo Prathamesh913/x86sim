@@ -19,7 +19,8 @@ cat > "$W/remote.sh" <<'REMOTE'
 set -e
 trap 'cd / && rm -rf /tmp/x86apps' EXIT
 TGT=x86_64-apple-ios26.0-simulator
-xcrun -sdk macosx swiftc -O -o mkicon icon-gen.swift >&2
+# x86Code: on Linux (build/linux-env.sh) the icons come from build/linux-bin/mkicon (Pillow), not a macOS binary
+if command -v mkicon >/dev/null; then cp "$(command -v mkicon)" mkicon; else xcrun -sdk macosx swiftc -O -o mkicon icon-gen.swift >&2; fi
 mkdir -p out
 for app in $(cat apps.txt); do
 	src=$app

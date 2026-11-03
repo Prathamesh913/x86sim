@@ -1,0 +1,30 @@
+#!/bin/sh
+# x86Code: codesign for the Linux build (build/linux-env.sh), ad-hoc only, via rcodesign (cargo install apple-codesign).
+#   codesign -s - [--force] [--entitlements f.plist] <path>     codesign --verify [--strict] <path>
+command -v rcodesign >/dev/null || PATH=$PATH:$HOME/.cargo/bin
+command -v rcodesign >/dev/null || { echo "codesign (linux): rcodesign not found (cargo install apple-codesign)" >&2; exit 1; }
+verify= ent= path=
+while [ $# -gt 0 ]; do case $1 in
+	-s|--sign) [ "$2" = - ] || { echo "codesign (linux): only ad-hoc (-s -)" >&2; exit 1; }; shift 2 ;;
+	--entitlements) ent=$2; shift 2 ;;
+	-f|--force|--strict|--deep|--timestamp=none) shift ;;
+	-v|--verify) verify=1; shift ;;
+	-*) echo "codesign (linux): unsupported option $1" >&2; exit 1 ;;
+	*) path=$1; shift ;;
+esac; done
+if [ -n "$verify" ]; then
+	# rcodesign verifies Mach-O files only: for a bundle, verify its main executable (CFBundleExecutable)
+	if [ -d "$path" ]; then
+		exe=$(python3 -I -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleExecutable"])' "$path/Info.plist") || exit 1
+		path=$path/$exe
+	fi
+	# rcodesign also wants a CMS (certificate) blob, which an ad-hoc signature never has: accept an ADHOC signature
+	# whose only reported problem is that missing CMS (the code directory hashes are still checked).
+	out=$(rcodesign verify "$path" 2>&1) && exit 0
+	if printf '%s\n' "$out" | grep -v -e 'CMS error' -e 'problems reported during verification' | grep -q -i 'error'; then
+		printf '%s\n' "$out" >&2; exit 1
+	fi
+	rcodesign print-signature-info "$path" 2>/dev/null | grep -q 'flags: CodeSignatureFlags(.*ADHOC' && exit 0
+	printf '%s\n' "$out" >&2; exit 1
+fi
+exec rcodesign sign ${ent:+--entitlements-xml-file "$ent"} "$path"

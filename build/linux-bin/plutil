@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+# x86Code: plutil for the Linux build (build/linux-env.sh): -lint <f>, -extract <key> raw <f>
+import plistlib, sys
+a = sys.argv[1:]
+if a[:1] == ["-lint"]:
+    for f in a[1:]:
+        plistlib.load(open(f, "rb")); print(f"{f}: OK")
+elif a[:1] == ["-extract"] and len(a) == 4 and a[2] == "raw":
+    print(plistlib.load(open(a[3], "rb"))[a[1]])
+else:
+    sys.exit("plutil (linux): unsupported " + " ".join(a))
