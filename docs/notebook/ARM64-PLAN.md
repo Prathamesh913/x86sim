@@ -2365,3 +2365,30 @@ Own phone var/device-a64-ram3 (own prefix a64prefix-ram3, state var/run-a64-ram3
   into darling-prefix/libexec/darling/sbin/launchd; containers started before keep the old launchd.
 - Open: stale containers survive a phone's reboot (pid 1 of ram2's 13:26 boot and older ones from 12:31-12:57 still run
   with live orphan daemons): stop_prefix's `darling shutdown` does not always end the old container.
+
+## Safari black screen fixed: Darling suspension at safe points; tagged LSE atomics (2026-11-03, ram2)
+- **Cause** (see "App suite + Safari black screen"): Darling's thread_suspend/task_suspend = SIGRTMIN (34) to the Linux
+  thread, handled wherever it is. The suspender here is JavaScriptCore's bmalloc/libpas thread suspender (lr in
+  JavaScriptCore near bmalloc::Mutex::lockSlowCase: thread_suspend, os_unfair_lock_trylock..., thread_resume; no register
+  read). A target stopped inside the translator / dispatcher / a libarm64jit callback (shared emitter mutex, glibc malloc
+  lock) blocked the suspender's next translation -> nothing ever resumed Safari's main thread.
+- **Fix** (linux/arm64jit signals.cpp, jit.cpp): libarm64jit wraps Darling's SIGRTMIN handler (re-checked per new
+  GuestThread). Interrupted in Darling's native code (RIP outside every ELF object, not in guest code: a thunk's native
+  callee, e.g. blocked in mach_msg) -> Darling parks it at once. Anywhere else (guest code, JIT, ELF callback) -> pending +
+  HaltExecution; it parks at the next safe point: Run() returning to call(), a thunk's entry, or its return to guest code;
+  a per-thread 1 ms POSIX timer re-sends the signal (a thread that went from ELF code into a blocking native call is
+  parked there; after 2 s without a safe point it is parked where it is). At every park the guest registers are in the Jit.
+  X86CODE_A64_SUSP_DEFER=0: old behaviour. Log line "suspend: N parked at a safe point (deferred N), M in native code".
+- thread_get_state / thread_set_state (ARM flavors 1/6/17) and thread_get_register_pointer_values of a guest thread of the
+  same process (found by its mach port, TSD slot 3) are now answered from its Jit (waits <= 200 ms for the park); Darling
+  answered with x86 state / the host stack pointer. Not called by Safari/WebContent in these runs (first-call log lines).
+- **darlingserver 56d837b**: thread_suspended/sigprocess of a process SIGKILLed meanwhile threw in loadStateFromUser ->
+  darlingserver abort -> whole phone down (hit on the first ram2 run). Now logged; installed.
+- **Verified** (ram2, cycle.sh now uses a per-run URL tag: same URLs were served from WebKit's cache, served=0 was not a
+  hang): 20 + 20 + 20 + 12 cycles, no black screen, every page loaded; a JS-heavy page (15 s allocation/Map/JSON) rendered
+  "DONE"; no new crashes. threads.sim OK. tests/arm64/signals.sim hangs in sigsuspend with the old library too (open,
+  pre-existing; run.sh's timeout doesn't kill it either).
+- **LSE atomics / CAS / CASP on a tagged pointer** (dynarmic af2df077): address copied to a scratch register and the top
+  byte cleared inline (shl 8; shr 8). Codegen 0x1c (jitcache.cpp, key.rs), AOT image rebuilt. tests/arm64/fastmem:
+  atomics.s (LDADD, SWP, LDSMAX, LDCLRAL, CAS, CASP) for tags 0/5a/ff/01 in both modes = the untagged run (asserted
+  before); PASS. frint PASS, guestlibc 20000/0.

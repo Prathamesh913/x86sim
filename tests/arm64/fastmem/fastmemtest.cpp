@@ -23,6 +23,9 @@ static const u32 kGuest[] = {
 
 // a loop of tagged loads/stores: past A64EmitX64::kCheckAfterFaults faults its block is retranslated with the check
 static const u32 kLoop[] = {0xd2800283u,0xd2800004u,0xf9400002u,0x8b020084u,0xf9000404u,0xf1000463u,0x54ffff81u,0xd4000001u};
+// LSE atomics and CAS/CASP on x0 (maybe tagged): atomics.s
+static const u32 kAtomics[] = {0x91030009u,0xd28000f0u,0xf8300131u,0xf8308132u,0xf8304133u,0xf8f01134u,0xaa1f03f5u,0xc8b57d30u,
+0x91038009u,0xf9400122u,0xf9400523u,0xd28000a4u,0xd28000c5u,0x48227d24u,0xd4000001u};
 static const u32* g_code = kGuest;
 static size_t g_code_n = std::size(kGuest);
 
@@ -131,6 +134,22 @@ int main() {
         std::printf("loop tag %016llx: %s, sum %llx, callbacks %ld / %ld\n", (unsigned long long)tag, same ? "same" : "DIFFERENT",
                     (unsigned long long)b.x[4], a.calls, b.calls);
         fails += !same;
+    }
+    // atomics: no callback, no fault, same result for every tag in both modes (as the untagged run)
+    g_code = kAtomics; g_code_n = std::size(kAtomics);
+    Result ref{};
+    for (u64 tag : {0ull, 0x5aull << 56, 0xffull << 56, 0x01ull << 56}) {
+        for (bool unchecked : {false, true}) {
+            Result r = Run(unchecked, tag, buf, buf2);
+            r.x[0] = 0; r.x[9] &= kTbi;
+            if (!tag && !unchecked) ref = r;
+            const bool same = r.x == ref.x && r.mem == ref.mem;
+            std::printf("atomics tag %016llx %s: %s, ldadd old %llx cas %llx casp %llx:%llx\n", (unsigned long long)tag,
+                        unchecked ? "unchecked" : "checked", same ? "same" : "DIFFERENT", (unsigned long long)r.x[17],
+                        (unsigned long long)r.x[21], (unsigned long long)r.x[2], (unsigned long long)r.x[3]);
+            if (!same) for (int i = 0; i < 31; i++) if (r.x[i] != ref.x[i]) std::printf("  x%d %llx vs %llx\n", i, (unsigned long long)r.x[i], (unsigned long long)ref.x[i]);
+            fails += !same;
+        }
     }
     std::printf("%s\n", fails ? "FAIL" : "PASS");
     return fails != 0;

@@ -612,16 +612,17 @@ GuestThread::GuestThread() {
     stack_size = 8u << 20;
     stack_base = (u64)mmap(nullptr, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (stack_base == (u64)MAP_FAILED) die("cannot allocate a guest stack");
+    susp_thread_init(*this);
 }
 // After a longjmp out of call() (pthread_exit) the Jit still counts as executing: its state is abandoned (leaked,
 // destroying it could assert) and the thread gets a fresh one for whatever guest code still runs on it (TSD
 // destructors at thread exit).
 void GuestThread::reset_after_unwind() {
-    depth = 0; done = nullptr; in_thunk = -1;
+    depth = 0; done = nullptr; in_thunk = -1; native = false;
     (void)jit.release();
     jit = make_jit(cfg);
 }
-GuestThread::~GuestThread() { gsample_forget(this); g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
+GuestThread::~GuestThread() { susp_thread_fini(*this); gsample_forget(this); g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
 
 NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int nfps) {
     struct Saved {
@@ -642,6 +643,8 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
     bool *outer_done = done;
     done = &finished;
     depth++;
+    const bool outer_native = native;
+    native = false;
     // X86CODE_A64_EXEC_LOCK=1: one process-wide mutex around every Run (bisect: cache/linking race vs
     // per-thread state leak). Shared-mode only; huge slowdown, for experiments.
     static std::mutex *exec_lock = []() -> std::mutex * {
@@ -657,7 +660,9 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
             jit->Run();
         }
         if (sig_pending.load(std::memory_order_relaxed)) deliver_signals(*this);
+        susp_safe_point();
     }
+    native = outer_native;
     depth--;
     done = outer_done;
     NRet r{jit->GetRegister(0), jit->GetRegister(1), jit->GetVector(0)[0], jit->GetVector(1)[0]};
@@ -877,7 +882,9 @@ void GuestThread::CallSVC(uint32_t swi) {
                 }
             }
         }
+        susp_safe_point();  // registers are in the Jit at an svc
         int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
+        native = true;
         tsd_to_native();
         // Speed 29: X86CODE_A64_MSG_STATS=1: mach_msg* thunk calls and wall time inside them (blocking receives
         // included), logged cumulatively every 512 calls with a CLOCK_MONOTONIC stamp (diff lines around a tap)
@@ -922,8 +929,10 @@ void GuestThread::CallSVC(uint32_t swi) {
                 logf("msgstats t=%lld.%03lld n=%llu inside_ms=%llu", (long long)m1.tv_sec, (long long)m1.tv_nsec / 1000000,
                      (unsigned long long)n, (unsigned long long)(ns / 1000000));
         }
+        native = false;
         tsd_from_native();
         in_thunk = outer_thunk;
+        susp_safe_point();
         if (svc_time) {
             u64 dt = __builtin_ia32_rdtsc() - t0;
             u64 n = svc_timed.fetch_add(1, std::memory_order_relaxed) + 1;

@@ -22,7 +22,7 @@
     add  x13, x13, #1
     stxr w14, x13, [x12]
     ldr  x15, [x12]
-    // LSE atomics have no fastmem fallback (a tagged address faults in either mode): untagged x1 only
+    // LSE atomics on the untagged x1 (tagged ones: atomics.s)
     add  x28, x1, #16
     mov  x16, #7
     ldadd x16, x17, [x28]

@@ -765,6 +765,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_mach_vm_deallocate", h_vm_deallocate}, {"_vm_deallocate", h_vm_deallocate}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite}, {"_mach_msg", h_mach_msg},
         {"__exit", h_exit}, {"___exit", h_exit}, {"_abort_with_payload", h_abort_with}, {"_abort_with_reason", h_abort_with}, {"_pthread_exit", h_pthread_exit}, {"___pthread_kill", h_kill_like}, {"_pthread_kill", h_kill_like},
         {"___kill", h_kill_like}, {"_kill", h_kill_like},
+        {"_thread_get_state", h_thread_get_state}, {"_thread_set_state", h_thread_set_state}, {"_thread_get_register_pointer_values", h_thread_get_register_pointer_values},
         {"___abort_with_payload", h_abort_with},
         {"_exception_raise_state", h_stack_args<8>}, {"_exception_raise_state_identity", h_stack_args<4, 8, 8>},
         {"_host_swap_exception_ports", h_stack_args<8, 8>}, {"_task_swap_exception_ports", h_stack_args<8, 8>},

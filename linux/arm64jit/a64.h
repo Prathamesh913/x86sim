@@ -58,6 +58,13 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     int32_t in_thunk = -1;  // thunk running on this thread (crash reports)
     std::atomic<uint32_t> sig_pending{0};  // async signals recorded by the native handler (signals.cpp)
     uint8_t sig_info[32][104];            // their Darwin siginfo
+    // Darling's thread suspension (SIGRTMIN, thread_suspend / task_suspend) deferred to a safe point (signals.cpp)
+    bool native = false;                  // inside a thunk handler (not in a nested call())
+    int tid = 0;
+    std::atomic<int> susp_pending{0}, susp_at_safe{0}, susp_parked{0};
+    int susp_tries = 0;
+    void *susp_timer = nullptr;
+    void susp_safe_point();               // parks here if a suspension is pending
 
     GuestThread();
     void reset_after_unwind();  // after a longjmp out of call() (pthread_exit)
@@ -200,6 +207,11 @@ extern "C" void a64_tramp_entry();           // callconv.S
 void h_sigaction(GuestThread &t, u32 i);  // signals.cpp
 void h_platform_sigaction(GuestThread &t, u32 i);
 void deliver_signals(GuestThread &t);
+void susp_thread_init(GuestThread &t);  // signals.cpp: suspension wrapper, timer, port registry
+void susp_thread_fini(GuestThread &t);
+void h_thread_get_state(GuestThread &t, u32 i);
+void h_thread_set_state(GuestThread &t, u32 i);
+void h_thread_get_register_pointer_values(GuestThread &t, u32 i);
 Handler special_handler(const std::string &name, int *nfixed, const char **native_name);
 bool special_needs_native(const std::string &name);
 bool is_guest_code_export(const std::string &name);  // setjmp family: emitted as arm64 code in the stub dylib
