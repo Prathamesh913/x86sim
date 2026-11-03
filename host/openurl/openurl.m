@@ -377,6 +377,26 @@ static long linux_syscall3(long n, long a, long b, long c) {
 
 static volatile BOOL wake;
 
+// x86Code (RAM 2): the frontmost application, for cli/libexec/jetsam.py. RunningBoard never backgrounds or suspends an
+// app that keeps a background mode (Maps), so the Linux side can't tell it left the screen; SpringBoard can. A request
+// is <data>/tmp/x86code-frontmost.req (any content; its own file, so it never races the openurl trigger); the answer
+// <data>/tmp/x86code-frontmost is one line: the bundle id, empty at the home screen (written .new, then renamed).
+static void frontmost(NSString* home) {
+	static NSString* (*copyFront)(void);
+	static BOOL looked;
+	if (!looked) {
+		looked = YES;
+		void* h = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
+		if (h) copyFront = (NSString* (*)(void))dlsym(h, "SBSCopyFrontmostApplicationDisplayIdentifier");
+		if (!copyFront) { fprintf(logf_, "openurl: no SBSCopyFrontmostApplicationDisplayIdentifier\n"); fflush(logf_); }
+	}
+	NSString* bid = copyFront ? CFBridgingRelease((__bridge CFTypeRef)copyFront()) : nil;
+	NSString* out = [home stringByAppendingString:@"/tmp/x86code-frontmost"];
+	NSString* tmp = [out stringByAppendingString:@".new"];
+	[[NSString stringWithFormat:@"%@\n", bid ?: (copyFront ? @"" : @"?")] writeToFile:tmp atomically:NO encoding:NSUTF8StringEncoding error:nil];
+	rename(tmp.UTF8String, out.UTF8String);
+}
+
 // x86Code: waits for the request file to be renamed into place (see main)
 static void* watchThread(void* arg) {
 	long ifd = (long)arg;
@@ -439,6 +459,9 @@ int main(void) {
 					[[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
 						beforeDate:[NSDate dateWithTimeIntervalSinceNow:ifd >= 0 ? 5.0 : 0.3]];
 				wake = NO;
+				NSString* freq = [home stringByAppendingString:@"/tmp/x86code-frontmost.req"];
+				if (unlink(freq.UTF8String) == 0)
+					frontmost(home);
 				NSString* s = [NSString stringWithContentsOfFile:@(path) encoding:NSUTF8StringEncoding error:nil];
 				if (!s) continue;
 				unlink(path);

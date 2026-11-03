@@ -1985,3 +1985,73 @@ floor is NVIDIA's: libnvidia-glcore/libcuda pages and its device chunks.
 Speed (fresh boots, before / after / before): Settings cold open 3.52 / 3.51 / 3.53 s (3.68 in a 4th run), warm
 0.56 / 0.57 / 0.57 s; Settings 6-swipe scroll 61 fps peak, p50 16.5 ms, 371-376 frames in 8.3 s in every run.
 Screenshots of home/Settings/Maps/home after the fixes: correct.
+
+## RAM 2 (guest/process set) (2026-11-03): idle exit as on iOS, background apps reclaimed, leftover widget
+
+Own phone var/device-a64-ram2 (own prefix, state dir, ring and mtlvk), same scenario before and after: fresh boot,
+home idle 2.5 min, Settings opened, Maps opened, home, Maps left in the background 2 min, then 10 min idle
+(~/scratch/ram2/scen.sh + snap.sh, memcat --json). PSS of this phone with its own mtlvk (in brackets without it).
+The "after" also has the other agents' JIT/mtlvk work of the same day in it (anon/rwxp went away as a category); the
+savings per change below come from the process lists.
+
+| scenario | before | after |
+|---|---|---|
+| home idle | 3412 MB (3077), 65 procs | 1917 MB (1706), 51 procs |
+| Settings open | 3458 MB (3105), 66 | 2116 MB (1890), 52 |
+| Maps open | 4125 MB (3640), 69 | 2845 MB (2514), 58 |
+| Maps in the background 2 min | 4216 MB (3771), 69 | 2099 MB (1803), 49 |
+| home idle 10 min later | - | 1841 MB (1537), 38 |
+
+- **Nothing was ever reclaimed but suspended extensions.** On a device memorystatus keeps a band per process and kills
+  clean idle-exit daemons and background apps first; all of Darling's memorystatus calls returned 0 and did nothing.
+  libsystem_kernel (xnu fork, process/memorystatus.c) now records per process, in
+  /private/var/run/x86code-jetsam/<pid>: the band (memorystatus_control SET_PRIORITY_PROPERTIES, posix_spawn's jetsam
+  attributes), the dirty state (proc_info dirtycontrol: track / set / get / clear, with real proc_get_dirty answers),
+  RunningBoard's PRIO_DARWIN_BG and PRIO_DARWIN_ROLE (role now returns 0 instead of Linux's EINVAL). launchd_sim
+  dirty-tracks every job, marks EnablePressuredExit ones "allows idle exit", and libxpc flips the dirty bit with its
+  transactions: exactly iOS's contract for what may be killed. The simulator's RunningBoard sets no bands.
+- **cli/libexec/jetsam.py** (rewritten policy): extensions suspended 10 s (as before); background apps (suspended,
+  PRIO_DARWIN_BG, role NON_UI, or not SpringBoard's frontmost app) after 30 s, the most recent one after 90 s;
+  idle-exit daemons clean and CPU-idle for 30 s, the ones every app launch / the home screen talks to (HOT:
+  containermanagerd, trustd, securityd, iconservicesagent, fontservicesd, pkd, tccd, appprotectiond, systemstatusd,
+  usernotificationsd, sleepd, diagnosticd, nsurlsessiond, cloudd, ...) after 10 min, every daemon gets the 10 min while an
+  app is in the foreground; DEMAND: on-demand daemons without EnablePressuredExit that only a feature in use needs
+  (passd, mobileassetd, assistant_cdmd, siriactionsd, ContextService, STExtractionService, localspeechrecognition,
+  datamigrator, MobileAsset.DownloadService, ...) once clean. "Came back within 60 s of its kill: keep it forever" is
+  gone: a quick relaunch doubles that executable's grace (up to 30 min), so nothing loops and nothing is pinned
+  (Preferences, Maps and the widgets were pinned before). The container's pid namespace is now the one most of
+  darlingserver's children are in (taking the first child found saw 1 process: init's own namespace).
+  At home this reclaims ~19 daemons in the first minute (~800-1000 MB: siri*, corespeechd, mobileassetd, passd,
+  financed, geod, mobiletimerd, nanoregistryd, ...) and the HOT ones after 10 idle minutes (38 procs).
+  `jetsam.py --status` shows what is due when. X86SIM_JETSAM_DAEMONS=0 leaves daemons alone.
+- **Maps in the background**: RunningBoard never suspends or backgrounds it (it holds a background-mode running
+  assertion; its role stays UI_FOCAL), so nothing on the Linux side could tell it was off screen. com.x86code.openurl
+  answers <data>/tmp/x86code-frontmost.req with SpringBoard's frontmost app (SBSCopyFrontmostApplicationDisplayIdentifier),
+  asked only while an app has stayed "foreground" past 30 s (its own request file: never races the gate's openurl
+  trigger). Maps (~400-550 MB) is now reclaimed 90 s after leaving it. (With the role call succeeding, Maps sometimes
+  exits by itself ~40 s after going home; no crash logged.)
+- **Leftover widget**: the IconState strip missed the Shortcuts widget (elementType shortcutsSingle, no
+  widgetIdentifier). Stripped now, which puts Settings back in row 2: openm/perfopen/nonimage find labelled icons by OCR
+  (lib.sh icon_xy; the coordinate table is the fallback) instead of assuming one layout.
+- **Speed**: Settings cold open after the daemons were reclaimed 3.50 / 3.82 s vs 3.46 / 3.57 s with them resident
+  (openm N=2, same boot); warm 0.76-0.79 vs 0.74-0.75 s. Gate on this phone: every check passed; the one failure was
+  fileproviderd's libdispatch trap (__dispatch_log brk from CoreServices' LS extension code in FileProviderDaemon),
+  which the main phone hit too, before these changes (06:55): not caused here, still open.
+- **Not changed, and why**:
+  - runtime-files (1502 MB PSS / 157 private on the main phone): clean page cache of the runtime's files, shared by
+    every process and every phone, reclaimable by the kernel; PSS overstates it (64 KB fault-around maps ~15x the pages
+    touched, see RAM 1). The private part is COW'd __DATA/__AUTH pages of the shared cache images (ObjC/Swift fixups,
+    binds), per process as on a device.
+  - heap (glibc brk) and the 64 MB-aligned host anon blocks (SpringBoard 38 MB, a glibc arena): host-side C++ of
+    libarm64jit/dynarmic (JIT metadata, the JIT agent's area). Guest malloc is libarm64jit's gheap (libsystem_malloc is
+    replaced), so libmalloc's env (MallocNanoZone, magazines, scribble) does nothing here; its tuning is in gheap.cpp.
+  - iokitd ~85 MB on every phone (NVIDIA driver mapped, three large anon reservations): skipping its unused EGL display
+    saved nothing measurable (reverted); something else loads the driver. Open.
+  - shm 49 MB (backboardd): the simfb frame ring. memfd memory entries: IOSurface/CA backing (Maps' tiles), freed with
+    the app.
+  - Leak check: home vs 10 min later, the long-lived processes grew 0-10% (SpringBoard 380 -> 407, backboardd 143 ->
+    155 MB, mtlvk 211 -> 304); the total fell as daemons were reclaimed. Nothing that looks like a leak in 10 min.
+- **User's call**: the feature defaults (siri, wallet, health, maps, photos, spotlight on): what is left at home is
+  SpringBoard ~380, backboardd ~145, Spotlight ~120, searchd ~100 (dirty: an open transaction), assistantd ~90
+  (keyboard dictation), InputUI ~45, iokitd ~85 and mtlvk ~210-300 MB. <1 GB with one app open needs the per-process
+  costs (JIT, SpringBoard, mtlvk) down too; turning spotlight off (~220 MB) is the largest switch left.

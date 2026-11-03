@@ -14,6 +14,8 @@ declare -A XY=([Settings]="1020 967" [Messages]="744 2444" [Health]="188 967" [W
 declare -A PROC=([Settings]=Preferences [Messages]=MobileSMS [Health]=Health [Wallet]=Passbook [Maps]=Maps
 	[Calendar]=MobileCal [Photos]=MobileSlideShow [News]=News [Safari]=MobileSafari [x86ui]=x86ui [Cadence]=Cadence)
 APPS=("$@"); [ ${#APPS[@]} = 0 ] && APPS=(Settings Messages Health Wallet Maps)
+# RAM 2: labelled icons are found on the home screen (lib.sh icon_xy); the table is the fallback (and the dock)
+home 4; for a in "${APPS[@]}"; do case ${XY[$a]} in id*) ;; *) XY[$a]=$(icon_xy "$a" "${XY[$a]}") ;; esac; done
 measure() { # LABEL X Y
 	python3 cli/libexec/simrecord.py capture "$O/m.frames" "${SECS:-16}" 4 >/dev/null & local cp=$!; sleep 0.8
 	local t0

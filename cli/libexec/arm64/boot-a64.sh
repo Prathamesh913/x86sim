@@ -231,7 +231,11 @@ def strip(obj):
 	if isinstance(obj, list):
 		out = []
 		for x in obj:
-			if isinstance(x, dict) and (x.get("elementType") == "widget" or "widgetIdentifier" in x):
+			# RAM 2: also the Shortcuts widget (elementType shortcutsSingle / shortcutsStack, no widgetIdentifier),
+			# and any other custom grid element that is not a folder or a widget stack (all are widgets)
+			if isinstance(x, dict) and (x.get("elementType") in ("widget", "shortcutsSingle", "shortcutsStack")
+					or "widgetIdentifier" in x
+					or (x.get("iconType") == "custom" and x.get("elementType") not in (None, "folder", "stack"))):
 				continue
 			# drop emptied widget stacks / custom placeholders
 			if isinstance(x, dict) and x.get("iconType") == "custom" and not x.get("elements") and "widgetIdentifier" not in x and x.get("elementType") != "folder":
@@ -333,7 +337,7 @@ rm -f "$ST/mdns.pid" "$ST/mDNSResponder"
 rm -f "$ST/simaudio.pid"
 [ "${A64_STOP_ONLY:-0}" = 1 ] && exit 0  # Speed 10: stop this device's container only
 # the marks of the last boot (Darling pids are reused)
-rm -rf "$DPREFIX/private/var/run/x86code-suspended"
+rm -rf "$DPREFIX/private/var/run/x86code-suspended" "$DPREFIX/private/var/run/x86code-jetsam"
 # the Darling pieces our build fixed (libsystem_kernel ...), also into a recreated prefix: cli/libexec/arm64/prefix-heal.sh
 [ "${A64_PREFIX_HEAL:-1}" != 0 ] && sh "$X/cli/libexec/arm64/prefix-heal.sh" "$DPREFIX"
 # Speed 27: frameworks a Mac host has in /System/Library/Frameworks that the simulator opens there by absolute path (not

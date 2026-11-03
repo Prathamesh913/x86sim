@@ -9,6 +9,7 @@ declare -A XY=([Settings]="1020 967" [Maps]="744 668" [Health]="188 967" [x86ui]
 declare -A PROC=([Settings]=Preferences [Maps]=Maps [Health]=Health [x86ui]=x86ui [Cadence]=Cadence)
 for p in $(pids_of "${PROC[$A]}"); do kill -9 "$p"; done
 home 6
+case ${XY[$A]} in id*) ;; *) XY[$A]=$(icon_xy "$A" "${XY[$A]}") ;; esac  # RAM 2: lib.sh icon_xy
 set -- ${XY[$A]}
 if [ "$1" = id ]; then app "$2"; else touch_ tap $1 $2 & fi
 for i in $(seq 1 200); do p=$(pid_of "${PROC[$A]}"); [ -n "$p" ] && break; sleep 0.025; done

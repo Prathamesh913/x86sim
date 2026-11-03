@@ -12,6 +12,7 @@
 # it is compared and installed.
 # Speed 27: libsystem_c (Darling's libkqueue is linked into it) and libkqueue_sim (the simulator's kqueue) joined: the
 # close() knote fix (libkqueue kqueue_closed_fd) lives in both.
+# RAM 2: libsystem_kernel records jetsam state (process/memorystatus.c) for cli/libexec/jetsam.py.
 # Usage: prefix-heal.sh <prefix dir>        (A64_PREFIX_HEAL=0 in boot-a64.sh: skip)
 X=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 P=$1

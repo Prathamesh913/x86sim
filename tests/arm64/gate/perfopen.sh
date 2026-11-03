@@ -5,12 +5,13 @@
 O=${GATE_OUT:-$SCR/gate}/$1; mkdir -p "$O"; L=$O/perf.log
 EV=cycles,instructions,bp_l1_tlb_miss_l2_tlb_hit,bp_l1_tlb_miss_l2_tlb_miss.all,bp_l1_tlb_miss_l2_tlb_miss.if2m,ic_tag_hit_miss.instruction_cache_miss
 home 4
+SXY=$(icon_xy Settings "1020 967")
 echo "== SpringBoard idle 5 s" >>"$L"
 perf stat -x, -e $EV -p "$(pid_of SpringBoard)" -- sleep 5 2>>"$L"
 for r in 1 2; do
 	for p in $(pids_of Preferences); do kill -9 "$p"; done
 	home 6
-	touch_ tap 1020 967 &
+	touch_ tap $SXY &
 	for i in $(seq 1 100); do p=$(pid_of Preferences); [ -n "$p" ] && break; sleep 0.05; done
 	echo "== Preferences cold $r (pid $p)" >>"$L"
 	perf stat -x, -e $EV -p "$p" -- sleep 6 2>>"$L"

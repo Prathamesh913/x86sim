@@ -112,6 +112,19 @@ proc_for() {
 	esac
 }
 pss() { "$AOT" sim status 2>/dev/null | grep -o 'procs [0-9]*\|PSS [0-9]* MB' | paste -sd' '; }
+# icon_xy LABEL "X Y": a home-screen icon's centre from its label (OCR of the current frame; the icon is 134 px above the
+# label's centre), else the given default. RAM 2: the layout moves with what is on the home screen (the Shortcuts
+# widget that boot-a64.sh now strips put Settings in row 3; without it Settings is in row 2), so taps no longer assume
+# one layout. Cached per run in $O/.iconxy (call it on the home screen). Dock icons have no label: use the default.
+icon_xy() {
+	local c; c=$(awk -v n="$1" '$1==n{print $2, $3}' "$O/.iconxy" 2>/dev/null | head -1)
+	[ -n "$c" ] && { echo "$c"; return; }
+	shot "$O/icons.png"
+	c=$(timeout 20 tesseract "$O/icons.png" stdout -c tessedit_create_tsv=1 2>/dev/null |
+		awk -F'\t' -v n="$1" '$12==n && $8 > 200 {printf "%d %d\n", $7 + $9 / 2, $8 + $10 / 2 - 134; exit}')
+	[ -n "$c" ] || c=$2
+	echo "$1 $c" >> "$O/.iconxy"; echo "$c"
+}
 # tap_word WORD: OCR the current frame (TSV) and tap the centre of the first word equal to WORD; 1 if not on screen
 tap_word() {
 	shot "$O/now.png"
