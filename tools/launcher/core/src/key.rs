@@ -8,10 +8,16 @@ use std::path::{Path, PathBuf};
 /// Fallback only: kCodegenVersion when neither the installed libarm64jit.so nor jitcache.cpp can be read. Everything
 /// asks `codegen()`, which reads the value from the translator itself, so a launcher built against an older value can't
 /// disagree with the builder (it once showed 0x16 parts as stale while the builder and the image were 0x17).
-pub const CODEGEN_VERSION: u64 = 0x1a;
+pub const CODEGEN_VERSION: u64 = 0x1b;
 /// inline objc (bit 17) and the Apple timebase (bit 18), the defaults; fuse_svc (bit 16) and the strict exclusive
-/// monitor (bit 19) are off.
+/// monitor (bit 19) and the inline memory address check (bit 20, X86CODE_A64_MEMCHECK=1) are off.
 pub const FLAGS: u64 = 0x6 << 16;
+/// FLAGS plus the code-shaping flags set in the environment (inherited by the builder): X86CODE_A64_MEMCHECK=1 (bit
+/// 20) builds and names an image with the inline memory address check, for A/B against the default.
+pub fn flags() -> u64 {
+    let memcheck = std::env::var("X86CODE_A64_MEMCHECK").map(|v| v.trim() == "1").unwrap_or(false);
+    FLAGS | (memcheck as u64) << 20
+}
 
 /// The installed translator (what boots and what the builder runs).
 pub fn translator() -> PathBuf {
@@ -147,7 +153,7 @@ pub fn placement_hash(path: &Path) -> u32 {
 }
 
 pub fn build_id(placement: &Path) -> u64 {
-    codegen() | FLAGS | (placement_hash(placement) as u64) << 32
+    codegen() | flags() | (placement_hash(placement) as u64) << 32
 }
 
 pub fn image_name(cache_uuid: &str, build: u64) -> String {
@@ -160,7 +166,7 @@ pub fn chunk_key(name: &str, ident: &str, addr: u64) -> String {
     h.str(ident);
     h.u64(addr);
     h.u64(codegen());
-    h.u64(FLAGS);
+    h.u64(flags());
     format!("{:016x}", h.finish())
 }
 

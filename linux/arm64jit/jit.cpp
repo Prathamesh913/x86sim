@@ -494,6 +494,7 @@ FixedData &fixed_data() {
     return *fd;
 }
 
+static Dynarmic::A64::Jit::SharedCode *g_shared_code;  // for memlog from host threads (never freed)
 static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmic::A64::UserConfig &thread_cfg) {
     static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> code = [&] {
         static_assert(sizeof(Forward) <= sizeof(FixedData::callbacks));
@@ -548,10 +549,16 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         if (const u64 b = code_cache_base()) Dynarmic::A64::Jit::SetCodeCacheAddress(b);
         auto sc = Dynarmic::A64::Jit::MakeSharedCode(c);
         jitcache_set_shared(sc);
+        g_shared_code = sc.get();
         jitcache_try_load(*sc);
         return sc;
     }();
     return code;
+}
+
+bool memcheck() {
+    static const bool v = getenv("X86CODE_A64_MEMCHECK") && atoi(getenv("X86CODE_A64_MEMCHECK")) == 1;
+    return v;
 }
 
 static std::unique_ptr<Dynarmic::A64::Jit> make_jit(const Dynarmic::A64::UserConfig &cfg) {
@@ -578,6 +585,10 @@ GuestThread::GuestThread() {
     c.fastmem_address_space_bits = 47;   // x86-64 user space
     c.silently_mirror_fastmem = false;
     c.fastmem_exclusive_access = true;
+    // RAM 3: no inline address check: an address above 47 bits (a top-byte tag) is non-canonical and faults into the
+    // fastmem handler, which calls the callback (drops the tag). X86CODE_A64_MEMCHECK=1: the old mov/shr 47/jnz +
+    // stub per access (code-shaping: key bit 20).
+    c.fastmem_unchecked = !memcheck();
     c.enable_cycle_counting = false;
     c.wall_clock_cntpct = true;
     c.cntfrq_el0 = timebase_apple() ? 24000000 : 1000000000;  // ns like Darling's mach time (1/1), or 24 MHz (125/3)
@@ -685,7 +696,16 @@ static void profile_tick() {
 
 // Called from host.cpp memlog_once / SIGUSR1. Safe when this tid has no GuestThread.
 void memlog_shared_stats() {
-    if (!shared_translations() || !GuestThread::current()) return;
+    if (!shared_translations()) return;
+    if (!GuestThread::current()) {  // RAM 3: a host thread (SIGUSR1 lands on one mostly): the maps line only
+        if (!g_shared_code) return;
+        auto st = Dynarmic::A64::Jit::GetSharedStats(*g_shared_code);
+        logf("memlog: shared blocks %llu insns %llu code %.1f MB translate %.1fs lookups %llu threads %d",
+             (unsigned long long)st.blocks, (unsigned long long)st.guest_instructions, st.code_bytes / 1048576.0,
+             st.translate_ns / 1e9, (unsigned long long)st.lookups, g_live_threads.load());
+        logf("memlog: maps (MB) %s", Dynarmic::A64::Jit::GetMemoryReport(*g_shared_code).c_str());
+        return;
+    }
     auto st = Dynarmic::A64::Jit::GetSharedStats(*shared_code(GuestThread::self().cfg));
     logf("memlog: shared blocks %llu insns %llu code %.1f MB translate %.1fs lookups %llu threads %d",
          (unsigned long long)st.blocks, (unsigned long long)st.guest_instructions,

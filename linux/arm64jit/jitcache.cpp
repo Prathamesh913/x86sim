@@ -57,7 +57,7 @@ constexpr u64 kCacheHi = 0x2c0000000ull;
 // the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
 // alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
 // Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
-constexpr u64 kCodegenVersion = 0x0000001aull;  // Speed 35: inline FRINTA/FRINTX, FCVTAS/FCVTAU in image chunks (0x19: Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
+constexpr u64 kCodegenVersion = 0x0000001bull;  // RAM 3: unchecked fastmem (no inline address check, r13 allocatable) (0x1a: Speed 35: inline FRINTA/FRINTX, FCVTAS/FCVTAU in image chunks (0x19: Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
 // kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kCodegenVersion;
@@ -209,7 +209,7 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     auto on = [](const char *e, bool dflt) { const char *v = getenv(e); return v ? atoi(v) == 1 : dflt; };
     g_build = kCodegenVersion | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
               (u64)timebase_apple() << 18 |
-              (u64)strict_monitor() << 19;  // CNTFRQ and the Swift deadline patch are in the code
+              (u64)strict_monitor() << 19 | (u64)memcheck() << 20;  // CNTFRQ and the Swift deadline patch are in the code
     if (u32 ph = placement_load(g_dir)) {
         g_build |= (u64)ph << 32;
         if (getenv("X86CODE_A64_STATS")) logf("placement: %zu files, table %08x", g_place.size(), ph);

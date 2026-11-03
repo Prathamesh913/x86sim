@@ -394,6 +394,13 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
             return;
         }
     }
+    // RAM 3: unchecked fastmem: a guest access with a tagged (non-canonical) address is a #GP in JIT code (SI_KERNEL,
+    // no address). Dynarmic's fastmem handler calls the access's callback (which drops the tag); nothing to report.
+    if (sig == SIGSEGV && si->si_code == SI_KERNEL && Dynarmic::Backend::IsJitCodeAddress((u64)ctx->uc_mcontext.gregs[REG_RIP]) &&
+        (g_old_segv.sa_flags & SA_SIGINFO)) {
+        g_old_segv.sa_sigaction(sig, si, uc);
+        return;
+    }
     if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86CODE_A64_FAULTLOG")) {
         struct sigaction *old = &g_old_segv;
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }

@@ -2220,6 +2220,52 @@ fine; B stopped -> mtlvk ended; single-phone boot -> fresh mtlvk, home, Settings
   vm_deallocate trim) in the last seconds of ram2 boots 3 and 4, while boot-a64 was stopping the prefix. No file
   watches on that path; not seen while running.
 
+## RAM 3 / codegen (2026-11-03): no inline address check per guest access (codegen 0x1b)
+
+- **Before** (every load/store; RAM 2 Q2): `mov tmp, vaddr; shr tmp, 47; jnz abort` (13 bytes) + `mov reg,
+  [r13+vaddr]` (r13 = fastmem base 0, reserved) + an out-of-line stub per site (`abort: call fallback; jmp end`,
+  ~10 bytes). Guest memory is identity-mapped (guest address == host address), so the check only catches addresses
+  above 47 bits: Darwin's top-byte tags (Swift _StringObject).
+- **After** (`UserConfig::fastmem_unchecked`, default; `X86CODE_A64_MEMCHECK=1` = old code, key bit 20): `mov reg,
+  [vaddr]`, nothing else. A tagged address is non-canonical: #GP -> SIGSEGV (SI_KERNEL) -> host.cpp forwards it to
+  dynarmic's fastmem handler without a report -> the site's fallback (drops the tag) -> resumes after the access. r13
+  is an allocatable register. A site that keeps faulting (a handful of Swift string accessors: 144k faults in
+  SpringBoard's boot, 2 sites) gets its block retranslated with the inline check after 8 faults
+  (A64EmitX64::OnFastmemFault, under the emitter lock in the handler; live code, image block killed): 262 faults /
+  7 checked blocks per SpringBoard boot.
+- **Loader bug found and fixed**: LoadPersistentCache re-pointed `call rel32` at resume-5 whenever that byte was 0xE8.
+  With no stub, those bytes are the access itself (`[rax-0x18]` has disp8 0xE8): reused .bin / image code was
+  corrupted (launchd_sim / xpcproxy died). Now only when resume - fault > 15 and the old target is in the prelude.
+- **Size**: live code 212 -> 167 B/block (SpringBoard, all live), 52.0 -> 40.7 B per arm64 insn (backboardd 225 ->
+  175, Spotlight 221 -> 172). Image (same training, built for both keys): 219.7 -> 170.8 B/block; the 1080 MB slab now
+  holds the whole hot set, 5.26M blocks (checked: 4.12M); image file 1432 -> 1568 MB (more blocks).
+- **A/B** (interleaved fresh boots, 3 per arm, main phone; checked arm = MEMCHECK=1 with its own image built from the
+  same training; ~/scratch/x86code/ram3c/ab.sh):
+
+| | unchecked (default) | checked |
+|---|---|---|
+| boot to home s | 16.6 / 15.4 / 15.8 | 19.6 / 17.6 / 17.4 |
+| fresh Settings content s | 3.97 / 4.14 / 4.25 | 6.39 / 5.07 / 4.63 |
+| first Maps content s | 3.08 / 2.72 / 3.20 | 3.75 / 4.19 / 3.76 |
+| killed-cold Settings s | 3.58 / 4.10 / 3.66 | 4.58 / 4.40 |
+| a64:codecache PSS idle / Settings / Maps MB | 25 / 35 / 44 | 110 / 128 / 148 |
+| Private_Dirty idle / Settings / Maps MB | ~950 / ~1140 / ~1350 | ~1300 / ~1530 / ~1780 |
+
+  SpringBoard live code at idle 8 MB (was 37). PSS totals move with what the other phones map of the shared image
+  (1560-2478 vs 2332-2368 idle), so Private_Dirty is the comparable number. Warm opens equal (0.67-0.78 s).
+- Tests: tests/arm64/fastmem (checked vs unchecked, tagged/untagged, exclusives, retranslation; PASS), frint PASS.
+- Open: LSE atomics (LDADD/SWP/...) and CAS/CASP on a tagged pointer have no fallback in either mode (dynarmic asserts
+  "not a fastmem patch location"); pre-existing, not seen in logs. Remaining bloat is not memory access: cbz/cbnz via
+  setz+spill (~35 B), halt checks and link-site padding per terminal, lea+access (folding disp: ~1%, not done).
+- **A/B (3 interleaved fresh boots per arm, main phone):** boot to home 15.4-16.6 s vs 17.4-19.6 s checked; fresh Settings
+  3.97-4.25 vs 4.63-6.39 s; first Maps 2.72-3.20 vs 3.75-4.19 s; live code PSS home/Settings/Maps 25/35/44 vs ~110/128/148 MB;
+  Private_Dirty ~950/1140/1350 vs ~1300/1530/1780 MB. Warm opens equal, no crashes. Made the default.
+- **Gate (not 3x clean):** r3g1 void (a ram2 boot re-pointed /dev/shm/x86code-a64-simfb.ring to its own ring); r3h1 in-gate
+  maps-route + swipe-up/switcher ("Preserve Settings" screen); control r3ctl1 (checked code + checked image) fails the in-gate
+  maps-route the same way; r3i1 clean; r3i2 Maps cold/warm timed out (Maps reopened the previous route view despite gate.sh
+  clearing its state; no crash). mapsroute.sh alone 3/3. Maps flakiness is open, not caused by 0x1b.
+- Open: LSE atomics / CAS on a tagged pointer have no fallback (dynarmic assert) in either mode (pre-existing).
+
 ## App suite + Safari black screen (2026-11-03, ram2)
 - **tests/apps/run.sh**: PASS on ram2 (run-20261103-114838, -123841 after the 0x1b loader fix, -132828). build.sh now
   builds on Linux (build/mac-env.sh: X86SIM_BUILD=linux when sdks/ exists; linux-swiftc.sh), not only over ssh.
