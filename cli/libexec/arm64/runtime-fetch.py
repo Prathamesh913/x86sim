@@ -110,10 +110,17 @@ def fetch(build):
                       "Contents/Resources/RuntimeRoot")
     if not os.path.isdir(os.path.join(dst, rr)):
         sys.exit(f"runtime-fetch: no {rr} after unpacking")
-    # 7z refuses a link that goes through another link (FINDINGS); the one known case
-    lw = os.path.join(dst, rr, "usr/lib/swift/libswiftWebKit.dylib")
-    if not os.path.lexists(lw):
-        os.symlink("../../../System/Library/Frameworks/WebKit.framework/WebKit", lw)
+    # 7z writes some links as empty files (a link through another link) and others as absolute host paths missing
+    # RuntimeRoot (180 of 261 on 24A434/24B8117: lsd then registered no apps, SpringBoard aborted on
+    # "Got nil for _systemAppInfo"). Remake every link from the image's listing, then verify.
+    ext = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "..", "tools", "runtime", "extract-runtime.py")
+    ext = os.path.normpath(ext)
+    subprocess.run([sys.executable, "-I", ext, "--links", dmg, os.path.join(dst, "extracted")], check=True)
+    chk = subprocess.run([sys.executable, "-I", ext, "--check", dmg, os.path.join(dst, "extracted")],
+                         capture_output=True, text=True)
+    if chk.returncode != 0 or not chk.stdout.rstrip().endswith(" 0 wrong"):
+        sys.exit("runtime-fetch: symlinks still wrong after repair:\n" + chk.stdout[-2000:])
     os.unlink(aar)  # the image is kept (bundle/AssetData/Restore/*.dmg), the 8 GB download and decrypt are not
     for d in (out, dl):
         try:

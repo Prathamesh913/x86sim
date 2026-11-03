@@ -33,7 +33,8 @@ mtlvk:
 darling-configure:
 	@test -f "$(DBUILD)/build.ninja" || cmake -S external/darling -B "$(DBUILD)" -G Ninja \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_INSTALL_PREFIX="$(PREFIX)" -DTARGET_i386=OFF -DCOMPONENTS=stock
+		-DCMAKE_INSTALL_PREFIX="$(PREFIX)" -DTARGET_i386=OFF -DCOMPONENTS=stock -DENABLE_METAL=OFF \
+		-DCMAKE_C_FLAGS=-fno-objc-constant-literals -DCMAKE_CXX_FLAGS=-fno-objc-constant-literals
 
 darling: darling-configure
 	ninja -C "$(DBUILD)"

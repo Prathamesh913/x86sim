@@ -6,7 +6,7 @@
 #   Without it geod had no active tile group and Maps drew a bare globe grid, requesting no tiles.
 # Usage: cli/libexec/arm64/fetch-macos-host.sh
 set -e
-X=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
+X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}; X=$X86SIM_ROOT
 . "$X/build/mac-env.sh"
 H=$X/runtimes/macos-host
 mkdir -p "$H/System/Library"

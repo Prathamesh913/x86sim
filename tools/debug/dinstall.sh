@@ -8,7 +8,7 @@ D=$X86SIM_DARLING
 s() { x86sim_sudo "$@"; }
 cd "$X86SIM_DARLING_BUILD" && ninja > $X86SIM_SCRATCH/dbuild.log 2>&1 || { grep -E 'FAILED|error:' $X86SIM_SCRATCH/dbuild.log | head; exit 1; }
 $D shutdown 2>/dev/null || true
-s chown "$(id -u):$(id -g)" $D
+[ ! -e "$D" ] || s chown "$(id -u):$(id -g)" $D
 ninja install > $X86SIM_SCRATCH/dinst.log 2>&1 || echo "install failed, see $X86SIM_SCRATCH/dinst.log"
 # Helpers injected into iOS simulator processes must carry the iOS-simulator platform
 # macOS has /private/var/tmp; launchd_sim keeps its state there
