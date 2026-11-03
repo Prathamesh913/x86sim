@@ -285,7 +285,18 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
             sources.push(pf.source);
         }
     }
-    let ratio = p.load_manifest().static_ratio.unwrap_or(DEFAULT_STATIC_RATIO);
+    let man0 = p.load_manifest();
+    let ratio = man0.static_ratio.unwrap_or(DEFAULT_STATIC_RATIO);
+    // RAM 2 (JIT): x86 bytes per hot block from the chunks built so far (per library, else the image's mean) instead
+    // of a fixed 260 (measured 2026-11-03: 218 on average): the fixed figure plus a 1/4 margin left 330 of 1088 MB of
+    // slots empty while 969 libraries were out of the image.
+    let built: Vec<&ChunkRec> = man0.chunks.values().filter(|r| r.blocks >= 256 && r.used > 0 && r.state == "built").collect();
+    let mean_bpb = if built.is_empty() {
+        HOT_BYTES_PER_BLOCK
+    } else {
+        built.iter().map(|r| r.used).sum::<u64>() as f64 / built.iter().map(|r| r.blocks).sum::<u64>() as f64
+    };
+    let bpb: HashMap<String, f64> = built.iter().map(|r| (r.name.clone(), r.used as f64 / r.blocks as f64)).collect();
     // a measurement (x86code-aot measure: every chunk translated without a size limit) gives real sizes
     let measured: HashMap<String, (u64, u64)> = std::fs::read(p.aot.join("measure.json"))
         .ok()
@@ -303,7 +314,7 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
             let (est_hot, est_full) = match measured.get(&src.name) {
                 Some(&(hu, fu)) => (hu, fu.max(hu)),
                 None => {
-                    let eh = (h.len() as f64 * HOT_BYTES_PER_BLOCK) as u64;
+                    let eh = (h.len() as f64 * bpb.get(&src.name).copied().unwrap_or(mean_bpb)) as u64;
                     (eh, ((src.code_bytes as f64 * ratio) as u64).max(eh))
                 }
             };
@@ -334,6 +345,9 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
         split_hot_cold(&mut chunks, cfg.hot_split_pct);
     }
     allocate(&mut chunks, cfg);
+    if cfg.scope == "hot" && trim_to_slab(&mut chunks) {
+        allocate(&mut chunks, cfg);
+    }
     if cfg.hot_split_pct > 0 && cfg.scope == "hot" {
         // allocate() orders by hot blocks; keep every hot head before every cold tail (stable: hottest first within)
         chunks.sort_by_key(|c| c.src.name.ends_with(COLD_SUFFIX));
@@ -343,6 +357,63 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
 }
 
 pub const COLD_SUFFIX: &str = "#cold";
+
+/// RAM 2 (JIT): when the hot set does not fit the slab (less FULL_LIVE_ROOM_MB), keep the highest-ranked blocks over
+/// all libraries (hot::rank: most programs first) and cut each library's hot list at that line, instead of leaving
+/// whole libraries out at build time. The training set may keep growing (every boot adds .live blocks); what grows
+/// is its tail of blocks one program ran, and that tail is what stays out. Returns whether anything was cut.
+fn trim_to_slab(chunks: &mut Vec<PlanChunk>) -> bool {
+    let room = (SLAB_MB - FULL_LIVE_ROOM_MB - 8) << 20;
+    let total: u64 = chunks.iter().map(|c| c.want).sum();
+    if total <= room {
+        return false;
+    }
+    // fixed part: app chunks (translated whole) and each library slot's alignment / margin over its blocks' bytes
+    let mut fixed = 0u64;
+    let mut cand: Vec<(u32, usize, f64)> = vec![];
+    for (i, c) in chunks.iter().enumerate() {
+        if c.src.kind == Kind::App || c.hot.is_empty() {
+            fixed += c.want;
+            continue;
+        }
+        let per = c.est_hot as f64 / c.hot.len() as f64;
+        fixed += c.want - c.est_hot - c.est_hot / 8;
+        cand.extend(c.hot.iter().map(|h| (h.1, i, per * 9.0 / 8.0)));
+    }
+    cand.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut left = room.saturating_sub(fixed) as f64;
+    let mut keep = vec![0usize; chunks.len()];
+    let mut cut_rank = 0;
+    for &(r, i, b) in &cand {
+        if left < b {
+            cut_rank = r;
+            break;
+        }
+        left -= b;
+        keep[i] += 1;
+    }
+    let before: usize = chunks.iter().map(|c| c.hot.len()).sum();
+    for (i, c) in chunks.iter_mut().enumerate() {
+        if c.src.kind == Kind::App || c.hot.is_empty() {
+            continue;
+        }
+        let n = c.hot.len() as u64;
+        // c.hot is hottest first (Hot::in_ranges)
+        c.hot.truncate(keep[i]);
+        c.est_hot = c.est_hot * keep[i] as u64 / n;
+        c.est_full = c.est_full.max(c.est_hot);
+    }
+    chunks.retain(|c| !c.hot.is_empty() || c.src.kind == Kind::App);
+    let after: usize = chunks.iter().map(|c| c.hot.len()).sum();
+    eprintln!(
+        "x86code-aot: hot set wants {} MB, slab holds {} MB: kept {after} of {before} hot blocks (cut at {} programs{})",
+        total >> 20,
+        room >> 20,
+        hot::exes(cut_rank),
+        if hot::is_live(cut_rank) { ", live-translated" } else { "" }
+    );
+    true
+}
 
 /// Speed 32: see Config::hot_split_pct. The cut is one global profile-count threshold: a block is hot when its count
 /// is among the top pct% of all trained blocks (ties stay hot).
@@ -400,7 +471,7 @@ fn allocate(chunks: &mut [PlanChunk], cfg: &Config) {
     let align = |v: u64| v.div_ceil(SLOT_ALIGN) * SLOT_ALIGN;
     let mut used = 0u64;
     for c in chunks.iter_mut() {
-        c.want = if c.hot.is_empty() { 0 } else { align(c.est_hot + c.est_hot / 4 + (64 << 10)) };
+        c.want = if c.hot.is_empty() { 0 } else { align(c.est_hot + c.est_hot / 8 + (64 << 10)) };
         used += c.want;
     }
     // Speed 31: app-tier chunks get their whole static code (function starts etc.), whatever the scope
@@ -503,7 +574,7 @@ fn chunk_state(p: &Paths, m: &Manifest, c: &PlanChunk) -> (String, Vec<String>) 
         // Speed 31: blocks processes on the image had to translate themselves (.live files) that this chunk lacks:
         // rebuild it into its slot (they rank first, see hot::LIVE_RANK). Other training growth does not make a
         // chunk stale (that would grow the image past what each process needs free for its own code).
-        let live: Vec<u64> = c.hot.iter().filter(|h| h.1 >= hot::LIVE_RANK).map(|h| h.0).collect();
+        let live: Vec<u64> = c.hot.iter().filter(|h| hot::is_live(h.1)).map(|h| h.0).collect();
         if live.len() as u64 >= r.live_seen + 32 {
             if let Some(f) = r.file.as_ref() {
                 let have: HashSet<u64> = hot::read_descs(&p.chunks().join(f)).unwrap_or_default().into_iter().collect();
@@ -754,8 +825,14 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
         };
         let mut need: Vec<&&PlanChunk> = todo.iter().filter(|c| !slots.contains_key(&c.src.name)).collect();
         need.sort_by_key(|c| std::cmp::Reverse(c.want));
+        // RAM 2 (JIT): a library chunk that finds no room evicts only chunks colder than itself (rank per slot byte);
+        // otherwise it stays out (lazy) until a full build. Before, any new chunk evicted the coldest, and each
+        // feedback update traded more shared libraries for one program's: 420 chunks after the last full build, 66
+        // a day of updates later (Foundation, libobjc, libdispatch out).
+        let mut lazy: Vec<String> = vec![];
         for c in need {
             let size = c.want;
+            let mine = heat(&c.src.name, size);
             loop {
                 if let Some(at) = fit(&mut occ, size) {
                     slots.insert(c.src.name.clone(), (at, size));
@@ -769,12 +846,22 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                     .filter(|(_, o)| !todo_names.contains(o.2.as_str()) && live_names.get(o.2.as_str()).is_some_and(|c| c.src.kind != Kind::App))
                     .min_by(|a, b| heat(&a.1 .2, a.1 .1).total_cmp(&heat(&b.1 .2, b.1 .1)))
                     .map(|(i, _)| i);
+                let victim = victim.filter(|&i| c.src.kind == Kind::App || heat(&occ[i].2, occ[i].1) < mine);
                 let Some(i) = victim else {
+                    if c.src.kind != Kind::App {
+                        lazy.push(c.src.name.clone());
+                        break;
+                    }
                     bail!("the slab is full ({} MB used) and nothing is left to evict: run a full rebuild (x86code-aot build --full)", limit >> 20);
                 };
                 let (_, _, n) = occ.remove(i);
                 evicted.push(n);
             }
+        }
+        if !lazy.is_empty() {
+            eprintln!("x86code-aot: slab full, {} library chunks stay lazy (colder than every chunk in the image): {}", lazy.len(), lazy.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+            todo.retain(|c| !lazy.contains(&c.src.name));
+            prog.chunks_total = todo.len();
         }
         // Speed 34: chunks evicted by an earlier update come back when space has freed (dropped / pruned /
         // re-keyed chunks left gaps): hottest per byte first, only into free space (never evicting for them), not
@@ -1024,7 +1111,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                                     secs: v["secs"].as_f64().unwrap_or(0.0),
                                     pool: v["pool"].as_u64().unwrap_or(0),
                                     built_at: now(),
-                                    live_seen: c.hot.iter().filter(|h| h.1 >= hot::LIVE_RANK).count() as u64,
+                                    live_seen: c.hot.iter().filter(|h| hot::is_live(h.1)).count() as u64,
                                 },
                             );
                             write_json(&p.manifest(), &man)?; // resumable: every finished chunk is recorded

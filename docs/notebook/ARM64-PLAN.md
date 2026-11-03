@@ -1930,6 +1930,82 @@ Means of 3 boots each (scope hot image, 1216 MB):
   v_setProperty burst ends ~75-130 ms after attach, before UIKit's session is back, so the 1500 ms settle stays.
 - Widgets and wallpaper off by default (features-def.json).
 
+## RAM 2 (JIT) (2026-11-03): the image holds what processes share, JIT memory attributable, bounded training
+
+Same scenario each time on the main phone: fresh boot, home idle (40 s), Settings opened, then Maps opened
+(memcat after each; ~/scratch/x86code/ram2j/run.sh). PSS of this phone only (memcat used to add every phone's mtlvk:
+fixed; the base numbers below have the other phones' mtlvk taken out). PSS of shared files moves with what the other
+phones on the host map, so Private_Dirty is given too where measured.
+
+- **Why 64-140 MB of live code per process with a "current" image**: the image left out whole libraries. A full
+  build that did not fit the slab, and every feedback update after it, evicted the "coldest library chunks" by summed
+  profile rank per byte, where one .live block weighed 1M and sharing nothing. After a day of updates the image had
+  66 of 1035 libraries (UIKitCore, WebCore, VectorKit, JSC, MIL...) and Foundation, libobjc, libdispatch, CFNetwork,
+  libsqlite3, SpringBoardHome, GeoServices were out: every daemon translated them itself. passd: 190k live blocks
+  (39 MB) vs 23k from the image; SpringBoard 556k live (112 MB) vs 347k. Not JSC output, not budget/staleness: 2.70M
+  of the 6.19M trained blocks were in evicted libraries. Of the 2.49M .live blocks the image lacked, 83% of the
+  per-process translations were blocks two or more programs ran (230k blocks in 10+ programs).
+- **Fix (tools/launcher hot.rs, aot.rs)**: a block's rank = number of distinct programs that ran it (.bin and .live
+  of one program count once), then "translated live", then sampled hits. When the hot set does not fit, the cut is
+  per block over all libraries (most-shared first, each library's list cut at that line), not whole libraries. An
+  update evicts a chunk only for a hotter one (else the new chunk stays lazy). Slot sizes from the measured bytes
+  per block of the built chunks (was a fixed 260 + 1/4: 330 of 1088 MB of slots were empty). Result: 613 libraries,
+  3.95M blocks (was 66 / 3.49M), cut inside the "one program" tier; 1040 MB of slots, 850 used.
+- **Code bloat (Q2)**: live and image code are the same emitter and flags: 215 B per block (image), 195-215 B per
+  live block, ~53 x86 bytes per arm64 instruction (3.8-4.2 instructions per block). Per memory access a 13-byte
+  canonical-address check (mov/shr 47/jne) plus an out-of-line fallback (~2 sites per block), guest registers stored
+  back to the JIT state per block, 1.2 patchable link sites per block. Not changed this round (a codegen change
+  rebuilds the image; the address check could become a fault-handled access).
+- **.bin files (Q3)**: processes on the image never load their .bin; the image is mapped MAP_PRIVATE from the shared
+  .map (7-20 MB private of it is link patches). Only launchd_sim (off the image) copies its .bin into private code
+  (9 MB). Cross-process sharing of live code is what the image is; with it covering the shared blocks it was not
+  worth a second shared cache. Bug fixed: SIGUSR1 (memlog) in an image process wrote a whole-slab .bin (1.2-1.3 GB,
+  every registered image block) over that program's training .bin; it saves only its .live now.
+- **Metadata (Q4)**: named now (default; X86CODE_A64_VMANAME=0 off): a64:meta:blocks / links / fastmem / relocs /
+  ranges (an allocator that gives arrays of 64 KB+ their own named mapping and unmaps them when a table grows),
+  besides a64:codecache / fastdispatch / lfmap / slmap. Per live block ~200 B of metadata on top of ~200 B of code
+  (SpringBoard before: blocks 32 + links 33 + lfmap 16 + fastmem 7 + relocs 2 + ranges 1 MB for 556k blocks). Nothing
+  per process is sized by the whole image any more (the static bitsets are NORESERVE since e03ec2aa; slmap scales with
+  the image blocks a process runs). fastdispatch is a fixed 1 MB (daemons) / 4 MB table, all touched (66 MB total).
+  memcat prints a "JIT memory by process" table and Private_Dirty totals.
+- **Training growth (Q5)**: .live is now "what this program used in its last 8 sessions": its live translations and
+  the image blocks it ran (format 2: per entry flags + age; Jit::GetUsedImageDescriptors), instead of the union of
+  every session forever (SpringBoard.live 1.2M). Old files are read as format 1 and age out. With the per-block cut,
+  growth only adds to the one-program tail that the slab leaves out; shared blocks are never displaced.
+
+| (MB) | base idle | base Settings | base Maps | new idle | new Settings | new Maps |
+|---|---|---|---|---|---|---|
+| PSS total | 3938 | 4260 | 4904 | 2565 | 2827 | 3130 |
+| live code (anon rwxp / a64:codecache) | 792 | 838 | 944 | 137 | 150 | 170 |
+| JIT metadata + dispatch tables (in anon rw-p before; base column = old image, new library) | 682 | 718 | 799 | 204 | 220 | 250 |
+| anon rw-p without the JIT (guest heaps, Darling) | 602 | 652 | 801 | 602 | 666 | 809 |
+| aot.map + idx (shared, clean) | 195 | 300 | 456 | 457 | 527 | 481 |
+| runtime-files (shared dyld cache) | 932 | 986 | 1073 | 474 | 523 | 564 |
+
+Per process, PSS / Private_Dirty MB (base -> new): SpringBoard idle 587/316 -> 437/188; passd 129/88 -> 64/34;
+Spotlight 208/92 -> 129/44; backboardd 186/138 -> 143/100; with Maps open: Maps 571/240 -> 462/176, Preferences
+288/128 -> 172/78. JIT per process (new, idle): SpringBoard 70 MB (code 33, was 99 + ~95 metadata), passd 4.3 MB of
+code (was 36.5). memlog: SpringBoard 169k live blocks (was 556k), passd 22k (was 190k).
+
+Speed (single fresh-boot runs, base -> new): boot to home 20.8 (22.2 with only the new library) -> 16.2 s; first
+Settings content 5.39 -> 3.93 s; Settings cold 5.24 / 4.46 -> 3.55 / 3.46; first Maps 6.27 -> 3.88; Maps cold
+5.60 / 5.39 -> 5.13 / 3.53; warm Settings 0.71 / 0.70 -> 0.74 / 0.74, warm Maps 1.17 / 1.16 -> 1.25 / 1.21 (warm
+opens translate almost nothing; within run-to-run spread).
+
+Gate: r2p1-3 3 consecutive clean (X86SIM_JETSAM=0), r2n1-2 clean with jetsam on. The other runs of the new image, and
+why they failed: r2n3 "Maps gone at route": the jetsam.py then uncommitted in the tree killed Maps in the foreground
+("app in the background 90 s"); r2k1 route: the search text never reached Maps (simhid: "unknown command: key
+return"); r2j1 / r2m1: fileproviderd crashed at launch ~90 s after boot ("BUG in libdispatch client: kevent vnode
+monitor", EBADF, in LaunchServices' dispatch_once), r2j1 also a black Maps warm resume. The control (old image, same
+library) was clean once, 3 idle boots of the new image had no crash, and the 5 gates after r2m1 had no fileproviderd
+crash. Open: watch for it. (gate.sh's pss() prints only "procs": the x86code-aot sim status format changed.)
+- Commits: dynarmic c3409f42 (named metadata, MetaAlloc, GetUsedImageDescriptors); libarm64jit (.live format 2,
+  memlog save fix); tools/launcher (per-block cut, measured slot sizes, no eviction for colder chunks); memcat. The
+  image was rebuilt with `x86code-aot build --full --device var/device-a64` (every phone of this runtime uses it).
+- Next: JIT memory left at idle is ~340 MB (code 137, fastdispatch 66, slmap 32, metadata 76); SpringBoard keeps
+  169k live blocks of its own. A rebuild after more format-2 .live sessions moves the shared part in. Code size (the
+  per-access address check) is the next lever for both image and live code.
+
 ## RAM 2 (mtlvk) (2026-11-03): where mtlvk's memory goes, ray tracing withheld, small system blocks, trims
 
 Own phone var/device-a64-ram3 (iPhone 17, iOS 27.2) with its own mtlvk. Scenario (var/ram3/scenario.sh, not

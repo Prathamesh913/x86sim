@@ -44,6 +44,7 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
+#include <unordered_map>
 #include <thread>
 
 namespace a64 {
@@ -315,27 +316,54 @@ static bool live_on() {
     return live_env() && g_aot_loaded && g_uuid_ok && !getenv("X86CODE_A64_AOT_BUILD");
 }
 std::atomic<u64> g_live_saved{0};
+// RAM 2 (JIT): the .live file was the union of every session's live translations, forever (SpringBoard.live: 1.2M
+// descriptors; the training set grew ~400 MB a day, so each full build left more out). Now it is what this program
+// used in its last kLiveKeep sessions: its live translations and the image blocks it ran (both are training, the
+// image blocks keep their place), each entry with the number of sessions since it was last used. Entries: u64
+// descriptor, u32 flags (bit 0: translated live at some point), u32 age; header byte 48 = 2 ("A64JC06" files of
+// format 1 have zeros there and only live translations: read with flags 1, age 0). Several processes of one program
+// (WebContent) share the file: the last writer's view wins.
+constexpr u32 kLiveKeep = 8;
+struct LiveEnt {
+    u32 flags, age;
+};
+static std::mutex g_live_mu;
+static std::unordered_map<u64, LiveEnt> *g_live_set;  // this session's view (file entries aged once + what it used)
 static void save_live(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
     if (!live_on()) return;
     const u64 n = Dynarmic::A64::Jit::GetSharedStats(sc).blocks;
     if (n < g_live_saved.load() + 500) return;
+    std::lock_guard lk(g_live_mu);
     g_live_saved = n;
-    std::vector<u64> d = Dynarmic::A64::Jit::GetDynamicDescriptors(sc, kCacheLo, kCacheHi);
     std::string path = g_path.substr(0, g_path.size() - 4) + ".live";
-    size_t had = 0;
-    if (FILE *f = fopen(path.c_str(), "rb")) {
-        uint8_t h[160];
-        u64 m = 0;
-        if (fread(h, 1, 160, f) == 160 && !memcmp(h, "A64JC06", 8) && (memcpy(&m, h + 40, 8), m < (1u << 26))) {
-            uint8_t e[24];
-            for (u64 i = 0; i < m && fread(e, 1, 24, f) == 24; i++) { u64 x; memcpy(&x, e, 8); d.push_back(x); }
-            had = m;
+    if (!g_live_set) {
+        g_live_set = new std::unordered_map<u64, LiveEnt>;
+        if (FILE *f = fopen(path.c_str(), "rb")) {
+            uint8_t h[160];
+            u64 m = 0;
+            if (fread(h, 1, 160, f) == 160 && !memcmp(h, "A64JC06", 8) && (memcpy(&m, h + 40, 8), m < (1u << 26))) {
+                const bool v2 = h[48] == 2;
+                g_live_set->reserve(m);
+                uint8_t e[24];
+                for (u64 i = 0; i < m && fread(e, 1, 24, f) == 24; i++) {
+                    u64 x;
+                    LiveEnt le{1, 0};
+                    memcpy(&x, e, 8);
+                    if (v2) memcpy(&le, e + 8, 8);
+                    le.age++;  // one more session; reset below for what this one uses
+                    if (le.age <= kLiveKeep) (*g_live_set)[x] = le;
+                }
+            }
+            fclose(f);
         }
-        fclose(f);
     }
-    std::sort(d.begin(), d.end());
-    d.erase(std::unique(d.begin(), d.end()), d.end());
-    if (d.size() == had) return;
+    for (u64 d : Dynarmic::A64::Jit::GetDynamicDescriptors(sc, kCacheLo, kCacheHi)) (*g_live_set)[d] = {1, 0};
+    for (u64 d : Dynarmic::A64::Jit::GetUsedImageDescriptors(sc, kCacheLo, kCacheHi)) {
+        auto [it, fresh] = g_live_set->try_emplace(d, LiveEnt{0, 0});
+        if (!fresh) it->second.age = 0;
+    }
+    std::vector<std::pair<u64, LiveEnt>> d(g_live_set->begin(), g_live_set->end());
+    std::sort(d.begin(), d.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
     const std::string tmp = path + ".tmp." + std::to_string(getpid());
     FILE *f = fopen(tmp.c_str(), "wb");
     if (!f) return;
@@ -345,12 +373,20 @@ static void save_live(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
     memcpy(h + 24, &g_build, 8);
     const u64 cnt = d.size();
     memcpy(h + 40, &cnt, 8);
+    h[48] = 2;
     fwrite(h, 1, 160, f);
     uint8_t e[24]{};
-    for (u64 x : d) { memcpy(e, &x, 8); fwrite(e, 1, 24, f); }
+    size_t live_n = 0, cur = 0;
+    for (const auto &[x, le] : d) {
+        memcpy(e, &x, 8);
+        memcpy(e + 8, &le, 8);
+        fwrite(e, 1, 24, f);
+        live_n += le.flags & 1;
+        cur += le.age == 0;
+    }
     const bool ok = fclose(f) == 0;
     if (ok && rename(tmp.c_str(), path.c_str()) == 0)
-        logf("jitcache: %s live save: %zu descriptors (%zu new) to %s", why, d.size(), d.size() - had, path.c_str());
+        logf("jitcache: %s live save: %zu descriptors (%zu used this session, %zu ever translated live) to %s", why, d.size(), cur, live_n, path.c_str());
     else
         unlink(tmp.c_str());
 }
@@ -632,6 +668,12 @@ void jitcache_aot_build(GuestThread &t) {
 }
 
 void jitcache_save_if_shared() {
+    // RAM 2 (JIT): SIGUSR1 (memlog) in a process on the AOT image wrote a whole-slab .bin (1.2-1.3 GB: every image
+    // block it had registered) over its training profile; it saves only its .live there, like the autosave thread.
+    if (g_aot_loaded && !autosave_on()) {
+        if (auto sp = g_shared.lock()) save_live(*sp, "memlog");
+        return;
+    }
     if (auto sp = g_shared.lock()) {
         jitcache_try_save(*sp);
         g_saved_blocks = Dynarmic::A64::Jit::GetSharedStats(*sp).blocks;

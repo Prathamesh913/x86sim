@@ -10,8 +10,11 @@ The sim = the darlingserver of A64_DPREFIX (default $X86SIM_SCRATCH/a64prefix) a
   heap            glibc's brk heap (libarm64jit/dynarmic/mldr; mtlvk)
   nvidia-*        the NVIDIA driver (mtlvk)
   memfd:*         Darling memory entries (IOSurfaces), frozen vm_remap copies, libsystem stubs
-  a64:* / glibc:* named anonymous mappings when the sim runs with X86CODE_A64_VMANAME=1 and/or
-                  A64_GLIBC_TUNABLES_EXTRA=glibc.mem.decorate_maps=1 (diagnostics)
+  a64:*           the JIT's own anonymous memory (named by default since RAM 2; X86CODE_A64_VMANAME=0 off):
+                  a64:codecache = code each process translated itself (the part of the code cache the image does not
+                  cover), a64:fastdispatch / lfmap / slmap = dispatch tables, a64:meta:blocks / links / fastmem /
+                  relocs / ranges = the emitter's per-block metadata
+  glibc:*         with A64_GLIBC_TUNABLES_EXTRA=glibc.mem.decorate_maps=1 (diagnostics)
 Columns: PSS MB, SwapPss MB, pd = Private_Dirty MB (memory only this process has written).
 Note (RAM 1): file-backed PSS is the page cache that processes have mapped; every read fault maps a 64 KB
 fault-around window, so it is ~15x the pages actually touched (see docs/notebook/rounds/ram1.md).
@@ -58,7 +61,11 @@ def sim_pids():
             if len(a) > 1 and os.path.realpath(a[1].decode()) == os.path.realpath(PREFIX):
                 root = pid
         if c == "mtlvk":
-            extra.append(pid)
+            # RAM 2: only this phone's mtlvk (every phone on the host runs one; A64_DPREFIX unset = the default prefix)
+            env = dict(l.split(b"=", 1) for l in rd(f"/proc/{pid}/environ").split(b"\0") if b"=" in l)
+            dp = env.get(b"A64_DPREFIX", os.path.join(SCR, "a64prefix").encode()).decode()
+            if os.path.realpath(dp) == os.path.realpath(PREFIX):
+                extra.append(pid)
     pids, work = [], [root] if root else []
     while work:
         p = work.pop()
@@ -77,7 +84,9 @@ def category(name, perm):
     if name.startswith("[anon:"):
         inner = name[6:-1].strip()
         parts = [s.strip() for s in inner.split(":")]
-        return ":".join(parts[:2]).split(" ")[0] if len(parts) > 1 else inner
+        # a64:meta:<what> (RAM 2: the emitter's per-block containers) keeps its third part
+        n = 3 if parts[:2] == ["a64", "meta"] else 2
+        return ":".join(parts[:n]).split(" ")[0] if len(parts) > 1 else inner
     if "dyld_sim_shared_cache" in name or "/runtimes/" in name or "RuntimeRoot" in name:
         return "runtime-files"
     if ".aot." in name and name.endswith(".map"):
@@ -135,7 +144,9 @@ def main():
     M = 1024
     tp = sum(v.get("Pss", 0) for v in byproc.values())
     ts = sum(v.get("SwapPss", 0) for v in byproc.values())
-    print(f"procs {len(byproc)}  PSS {tp / M:.0f} MB  SwapPss {ts / M:.0f} MB  PSS+Swap {(tp + ts) / M:.0f} MB")
+    td = sum(v.get("Private_Dirty", 0) for v in byproc.values())
+    # RAM 2: Private_Dirty does not move with what other phones on the host map (PSS splits shared file pages)
+    print(f"procs {len(byproc)}  PSS {tp / M:.0f} MB  SwapPss {ts / M:.0f} MB  PSS+Swap {(tp + ts) / M:.0f} MB  Private_Dirty {td / M:.0f} MB")
     print("\n-- by category (PSS MB, SwapPss MB, pd = Private_Dirty MB)")
     for c, v in bycat.most_common():
         if v < 512:
@@ -145,6 +156,16 @@ def main():
     print("\n-- by process (PSS MB, SwapPss MB, Private_Dirty MB)")
     for n, v in sorted(byproc.items(), key=lambda x: -x[1].get("Pss", 0))[:int(os.environ.get("TOP", "25"))]:
         print(f"{v.get('Pss', 0) / M:7.0f} {v.get('SwapPss', 0) / M:6.0f} {v.get('Private_Dirty', 0) / M:6.0f}  {n}")
+    # RAM 2 (JIT): the JIT's own memory per process (named a64:* mappings)
+    jit = {c: v for c, v in bycatproc.items() if c.startswith("a64:")}
+    if jit:
+        tot = collections.Counter()
+        for v in jit.values():
+            tot.update(v)
+        cols = sorted(jit, key=lambda c: -sum(jit[c].values()))
+        print("\n-- JIT memory by process (PSS MB): " + "  ".join(f"{c} {sum(jit[c].values()) / M:.0f}" for c in cols))
+        for n, t in tot.most_common(int(os.environ.get("TOP", "25")) // 2):
+            print(f"{t / M:7.0f}  {n:24s} " + " ".join(f"{c[4:]} {jit[c][n] / M:.1f}" for c in cols if jit[c][n] >= 102))
     # RAM 2: tmpfs is RAM whether or not a process maps the page (PSS above counts only mapped pages)
     try:
         hp = [(f, os.stat(os.path.join(HUGE_DIR, f)).st_blocks * 512) for f in os.listdir(HUGE_DIR) if f.endswith(".map")]
