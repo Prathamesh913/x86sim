@@ -5,6 +5,7 @@ The sim = the darlingserver of A64_DPREFIX (default $X86SIM_SCRATCH/a64prefix) a
 (the same set as `x86code-aot sim status`). Categories:
   runtime-files   the runtime's files, mostly the dyld shared cache (clean, shared page cache)
   aot.map/.idx    the AOT image and its index (clean, shared; COW'd link patches show under pd)
+  aot.map(huge)   the image's 2 MB-page copy on tmpfs (X86CODE_A64_AOT_HUGE_DIR); its whole size is RAM
   anon/<perm>     anonymous memory (guest heaps, Darling, libarm64jit/dynarmic); rwxp = JIT code
   heap            glibc's brk heap (libarm64jit/dynarmic/mldr; mtlvk)
   nvidia-*        the NVIDIA driver (mtlvk)
@@ -24,6 +25,7 @@ import sys
 
 SCR = os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86code"))
 PREFIX = os.environ.get("A64_DPREFIX", os.path.join(SCR, "a64prefix"))
+HUGE_DIR = os.environ.get("X86CODE_A64_AOT_HUGE_DIR", "/tmp/x86code-a64-img")
 
 
 def rd(p):
@@ -79,7 +81,8 @@ def category(name, perm):
     if "dyld_sim_shared_cache" in name or "/runtimes/" in name or "RuntimeRoot" in name:
         return "runtime-files"
     if ".aot." in name and name.endswith(".map"):
-        return "aot.map"
+        # RAM 2: the 2 MB-page tmpfs copy (a64hugecopy) is RAM that stays resident whole, unlike the .map's page cache
+        return "aot.map(huge)" if name.startswith(HUGE_DIR + "/") else "aot.map"
     if ".aot." in name and name.endswith(".idx"):
         return "aot.idx"
     if "/dev/nvidia" in name:
@@ -142,6 +145,13 @@ def main():
     print("\n-- by process (PSS MB, SwapPss MB, Private_Dirty MB)")
     for n, v in sorted(byproc.items(), key=lambda x: -x[1].get("Pss", 0))[:int(os.environ.get("TOP", "25"))]:
         print(f"{v.get('Pss', 0) / M:7.0f} {v.get('SwapPss', 0) / M:6.0f} {v.get('Private_Dirty', 0) / M:6.0f}  {n}")
+    # RAM 2: tmpfs is RAM whether or not a process maps the page (PSS above counts only mapped pages)
+    try:
+        hp = [(f, os.stat(os.path.join(HUGE_DIR, f)).st_blocks * 512) for f in os.listdir(HUGE_DIR) if f.endswith(".map")]
+    except OSError:
+        hp = []
+    for f, b in hp:
+        print(f"\n-- huge image copy (tmpfs, resident whole): {b / M / M:.0f} MB  {HUGE_DIR}/{f}")
     if os.environ.get("DETAIL"):
         print("\n-- top mappings by name")
         for n, v in detail.most_common(30):

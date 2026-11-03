@@ -1895,3 +1895,37 @@ phone's memory scope (IN=0 OUT=107).
 - **In-slot split** = today's layout (slots already hottest-first). A layout-only A/B needs a full build with the
   same coverage.
 - Gate s36i1-3 clean, tests/apps PASS. Open: one Safari WebContent stuck at launch (s36h2), not reproduced in 6 opens.
+
+## Defaults round (2026-11-03): opt-in sweep, scope hot, huge copy off, JSC without FTL
+
+Method: interleaved fresh boots (boot-to-home from the boot start; fresh Settings; killed cold + warm Settings / Maps /
+Health x2; 5 warm taps; memcat PSS idle and after Settings). x86ui / Cadence are not installed on this phone and perf
+is not on the host, so measure.sh's app list and counters were replaced (runner in $SCRATCH/defaults/run.sh).
+Means of 3 boots each (scope hot image, 1216 MB):
+
+| arm | home s | fresh Settings | Settings cold | Maps cold | tap SB CPU | PSS idle MB |
+|---|---|---|---|---|---|---|
+| base lib | 17.6-21.0 | 4.17-4.62 | 4.28-4.51 | 4.42-5.22 | 502-532 | 3950-4066 |
+| + dynarmic RAM bitsets + icache gen | 17.8-17.9 | 4.33-4.46 | 4.26-4.32 | 4.49-4.63 | 498-528 | 3903-3918 |
+| + SKIP_RET | 17.8-17.9 | 4.14-4.62 | 4.45-4.57 | 4.41-4.57 | 508-514 | 3907-3919 |
+| + AOT_HUGE=0 | 17.5-17.9 | 4.18-5.07 | 4.34-4.51 | 4.47-4.65 | 510-522 | 3897-3911 (+0 tmpfs) |
+
+- Huge copy: no speed win; it pins the whole image in tmpfs (1216 MB) on top of the PSS above. Now opt-in (AOT_HUGE=1).
+- SKIP_RET: neutral (RSB under shared translations already predicts the svc block's return, Speed 25). Left off.
+- FUSE_SVC: not retested (changes the image build key; superseded by RSB; crashed SpringBoard in Speed 4). NATIVE_OBJC:
+  superseded by the inline probe (enabling it disables INLINE_OBJC and the image key). HUGE_BG: gone since Speed 35's
+  a64hugecopy. AOT_LIVE / APP_AOT: already default since Speed 33. hot_split_pct: measured in Speed 35 (lost).
+  REMAP_FREEZE: a fidelity guard, not speed (Speed 36 fixed the cause in darlingserver).
+- JSC (WebContent, via a64-penv; A64_ENV does not reach launchd jobs): JS bench 2530-2575 ms default, FTL off
+  2061-2097 (one 2335), DFG+FTL off 4280, no JIT 6611-6653; page loads equal (~70-90 ms warm). Default now
+  JSC_useFTLJIT=false (host.cpp; X86CODE_A64_JSC_FTL=1 keeps FTL).
+- icache generation patch: page load / bench equal (~125 ms cold, 2545-2591 ms bench, old and new). A Safari hang
+  (black, no request reaches the server) shows up after repeated SIGKILLs of Safari with both libraries.
+- Scope hot + FULL_LIVE_ROOM 128 MB packed the slab to 1216 MB: Maps' route aborted "shared code cache full" (3/3,
+  old library too). 384 MB: route OK but Settings cold 7.8-8.2 s (172 chunks). 256 MB: route 3/3, Settings cold 4.7,
+  Maps 6.2. Note: the .live training set grows with every boot (full build wanted 1615 -> 2020 MB in a day), so a
+  full build drops more chunks each time; needs a bound.
+- Keyboard (simhid kbidle): viewer kbidle 300 keeps the keyboard over a 45 s pause (no re-attach); scripted clients
+  still detach after 30 s; a touch from a 2nd client lands 0.1 ms after sending during an attach settle. The
+  v_setProperty burst ends ~75-130 ms after attach, before UIKit's session is back, so the 1500 ms settle stays.
+- Widgets and wallpaper off by default (features-def.json).

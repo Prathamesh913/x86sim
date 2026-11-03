@@ -33,8 +33,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// each process's own translations.
 pub const SLAB_MB: u64 = 1344;
 pub const DEFAULT_BUDGET_MB: u64 = SLAB_MB - 384;
-/// Speed 35: slab space a full build leaves for each process's live translations
-pub const FULL_LIVE_ROOM_MB: u64 = 128;
+/// Speed 35: slab space a full build leaves for each process's live translations. 2026-11-03: 384 (was 128), the whole
+/// per-process live allowance (code cache = min(image + 384, 1344) MB): with scope "hot" a full build packed the slab to
+/// 1216 MB and Maps' route (search, place card, directions) aborted "shared code cache full" 3 of 3 times.
+pub const FULL_LIVE_ROOM_MB: u64 = 256;
 const HOT_BYTES_PER_BLOCK: f64 = 260.0;
 /// x86 bytes per arm64 code byte for full static coverage (default until a measurement sets it in the manifest)
 const DEFAULT_STATIC_RATIO: f64 = 3.0;

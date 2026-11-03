@@ -755,6 +755,12 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
         if (!s.compare(0, 22, "DYLD_SHARED_CACHE_DIR=")) cache_dir = s.substr(22);
         genv.push_back(strdup(s.c_str()));
     }
+    // 2026-11-03 defaults: JavaScriptCore without its FTL tier (JSC_useFTLJIT=false) unless the guest env sets it.
+    // FTL's B3 compiles run translated and cost more than they win here: JS bench 2.06-2.10 s vs 2.53-2.58 s with
+    // FTL (DFG off as well: 4.28 s; no JIT: 6.6 s); page loads unchanged. X86CODE_A64_JSC_FTL=1 keeps JSC's default.
+    if (!(getenv("X86CODE_A64_JSC_FTL") && atoi(getenv("X86CODE_A64_JSC_FTL")) == 1) &&
+        std::none_of(genv.begin(), genv.end(), [](const char *v) { return !strncmp(v, "JSC_useFTLJIT=", 14); }))
+        genv.push_back(strdup("JSC_useFTLJIT=false"));
     if (root.empty()) die("DYLD_ROOT_PATH is not set (the arm64 simulator runtime root)");
     if (cache_dir.empty()) {
         cache_dir = root + "/System/Library/Caches/com.apple.dyld/";
