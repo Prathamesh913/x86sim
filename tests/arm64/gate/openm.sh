@@ -4,13 +4,13 @@
 # then tap again (app suspended). All times are from the simhid touch-down, read from the frame ring timestamps
 # (simrecord capture, scale 4): response = first changed frame, black = the launch gap (frames >95% black), content =
 # first frame of the settled screen (simrecord open). Default apps: Settings Messages Health Wallet Maps.
-# iPhone 17 (1206x2622) on the 27.2 home layout of var/device-a64-ios272 (4 icons per row, Messages in the dock).
+# iPhone 17 (1206x2622), 27.2 home with the Shortcuts widget top-left (Nov 2026 layout: Settings 3rd row right).
 # Speed 31: x86ui / Cadence (installed with x86sim install) open by bundle id; t0 = the trigger write.
 # Env: SECS (capture length, default 16), N (cold+warm rounds per app, default 1).
 . "$(dirname "$0")/lib.sh"
 O=${GATE_OUT:-$SCR/gate}/$1; shift; mkdir -p "$O"; HL=$SCR/simhid.log
-declare -A XY=([Settings]="1020 668" [Messages]="744 2444" [Health]="188 668" [Wallet]="464 668" [Maps]="744 368"
-	[x86ui]="id com.x86code.test.x86ui" [Cadence]="id com.designgears.alarm" [Calendar]="188 368" [Photos]="464 368" [News]="1020 368" [Safari]="468 2444")
+declare -A XY=([Settings]="1020 967" [Messages]="744 2444" [Health]="188 967" [Wallet]="464 967" [Maps]="744 668"
+	[x86ui]="id com.x86code.test.x86ui" [Cadence]="id com.designgears.alarm" [Calendar]="744 368" [Photos]="1020 368" [News]="1020 668" [Safari]="468 2444")
 declare -A PROC=([Settings]=Preferences [Messages]=MobileSMS [Health]=Health [Wallet]=Passbook [Maps]=Maps
 	[Calendar]=MobileCal [Photos]=MobileSlideShow [News]=News [Safari]=MobileSafari [x86ui]=x86ui [Cadence]=Cadence)
 APPS=("$@"); [ ${#APPS[@]} = 0 ] && APPS=(Settings Messages Health Wallet Maps)

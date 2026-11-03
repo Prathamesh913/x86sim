@@ -10,7 +10,7 @@ perf stat -x, -e $EV -p "$(pid_of SpringBoard)" -- sleep 5 2>>"$L"
 for r in 1 2; do
 	for p in $(pids_of Preferences); do kill -9 "$p"; done
 	home 6
-	touch_ tap 1020 668 &
+	touch_ tap 1020 967 &
 	for i in $(seq 1 100); do p=$(pid_of Preferences); [ -n "$p" ] && break; sleep 0.05; done
 	echo "== Preferences cold $r (pid $p)" >>"$L"
 	perf stat -x, -e $EV -p "$p" -- sleep 6 2>>"$L"

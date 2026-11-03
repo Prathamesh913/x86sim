@@ -5,7 +5,7 @@
 # other. Output: $SCR/gate/TAG/nonimage.log
 . "$(dirname "$0")/lib.sh"
 O=${GATE_OUT:-$SCR/gate}/$1; mkdir -p "$O"; L=$O/nonimage.log; A=$2; S=${3:-6}
-declare -A XY=([Settings]="1020 668" [Maps]="744 368" [Health]="188 668" [x86ui]="id com.x86code.test.x86ui" [Cadence]="id com.designgears.alarm")
+declare -A XY=([Settings]="1020 967" [Maps]="744 668" [Health]="188 967" [x86ui]="id com.x86code.test.x86ui" [Cadence]="id com.designgears.alarm")
 declare -A PROC=([Settings]=Preferences [Maps]=Maps [Health]=Health [x86ui]=x86ui [Cadence]=Cadence)
 for p in $(pids_of "${PROC[$A]}"); do kill -9 "$p"; done
 home 6

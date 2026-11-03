@@ -9,7 +9,7 @@ c() { awk '{print $14+$15}' "/proc/$SB/stat"; }
 for i in $(seq 1 "${2:-6}"); do
 	home 6
 	python3 cli/libexec/simrecord.py capture "$O/t.frames" 4 3 >/dev/null & cp=$!; sleep 1
-	a=$(c); touch_ tap 1025 683; sleep 2; b=$(c); wait $cp
+	a=$(c); touch_ tap 1025 982; sleep 2; b=$(c); wait $cp
 	t0=$(grep "simhid: touch down" "$HL" | tail -1 | awk '{print $1}')
 	echo "tap $i sbcpu $(( b - a ))0ms $(python3 cli/libexec/simrecord.py open "$O/t.frames" "$t0")" | tee -a "$O/tapm.log"
 done
