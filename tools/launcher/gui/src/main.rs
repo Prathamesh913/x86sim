@@ -17,7 +17,7 @@ use x86code_core::{host, instance, logs};
 
 fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([900.0, 600.0]).with_title("x86Code").with_decorations(false),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([900.0, 600.0]).with_title("x86Code").with_app_id("x86code").with_decorations(false),
         ..Default::default()
     };
     eframe::run_native("x86Code", opts, Box::new(|cc| Ok(Box::new(App::new(cc)))))
