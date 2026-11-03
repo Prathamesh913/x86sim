@@ -2245,3 +2245,41 @@ fine; B stopped -> mtlvk ended; single-phone boot -> fresh mtlvk, home, Settings
 - Open: cloned phones run apps in the base phone's containers: var/db/lsd's csstore holds absolute container paths
   (ram2 Safari HOME=var/device-a64/data/Containers/...). Removing the csstore made lsd rebuild with correct paths, but
   then `x86sim launch` got no reply (reverted). device-a64.py create needs a path rewrite of the store, not a delete.
+
+## RAM 3 / daemons (2026-11-03): iokitd 85 -> 4 MB, searchd idle-exits, backboardd shutdown crash in SimulatorHID
+
+Own phone var/device-a64-ram3 (own prefix a64prefix-ram3, state var/run-a64-ram3, ring, mtlvk).
+- **iokitd ~85 -> ~4 MB PSS** (every phone). Two causes, neither "something else loading the driver":
+  - EGL: iokitd linked EGL+GL and opened an EGL display on the host X server (IOSurfaceRoot) for a GL texture path
+    that is compiled out (surfaces are shared memory). glvnd loaded libEGL_nvidia / libGLX_nvidia / libnvidia-* (72
+    NVIDIA mappings). The RAM 2 attempt skipped only the display; the link alone still pulled libGL/libEGL in. Now no
+    EGL display, no EGL/GL link, and createSurface no longer depends on a display. -> 70 MB, 0 NVIDIA mappings.
+  - Transparent huge pages: the host runs THP "always"; arm64 guests disable it (libarm64jit host.cpp), Darling's
+    own x86_64 processes did not. iokitd's sparse malloc / libdispatch regions were 66 MB of AnonHugePages (a 136 MB
+    region showed 34 MB Rss, all huge pages). mldr now sets PR_SET_THP_DISABLE (inherited by fork/exec): iokitd 4 MB,
+    and the other x86_64 container processes shrink the same way (launchd 24 -> 3, shellspawn 11 -> 3 MB).
+  - Also: iokitd's MIG server sent each out-of-line reply (registry properties, ...) with deallocate = FALSE although
+    each is a fresh vm_allocate (a user-space server leaks them); compiled with deallocate = TRUE now.
+  Screen, touches, keyboard (Spotlight "wifi typed whole"), Settings checked on ram3.
+- **searchd never went clean** (dirty flags 7 for the whole boot, ~100 MB): not busy (5 s CPU in 6 min). A diag
+  interposer (proc_set_dirty / os_transaction / xpc handlers; the connection recovered from the caller's frame) showed
+  the one proc_set_dirty(1) came from a message on searchd's com.apple.xpc.activity listener: launchd_sim ran the
+  plist activity com.apple.searchd.loadtrial (Delay 3600: due at every launch once a device is older than an hour),
+  and libxpc holds a transaction until the process checks that activity in. iOS 27.2's searchd never registers
+  loadtrial (nor defrag / sendmlfeedback: the identifiers are in no binary of the runtime), so it stayed dirty. Checking
+  loadtrial in by hand (XPC_ACTIVITY_CHECK_IN, then DONE) made it clean at once. mksimdevice.py drops these stale
+  activities from searchd's plist (STALE_ACTIVITIES); on a device dasd expires an activity nobody checks in. Now
+  searchd goes clean after its startup work and jetsam.py reclaims it 30 s later ("daemon clean and idle 30 s", ~1 min
+  after boot); it relaunches on demand (Spotlight typing works). Other plists with activity identifiers found in no
+  binary: financed (bankconnect.reboot), siriactionsd (4): DEMAND daemons, reclaimed anyway. cloudd also stays dirty
+  (7), another cause, not looked at.
+- **Spotlight (the app) at home** (~120 MB): resident by design: SpringBoard launches it at boot for the home screen's
+  search pill / pull-down search (Speed 15 un-parked it: the pill showed nothing without it), and jetsam.py's NEVER
+  list keeps it like a device's SpringBoard-managed UI service. Turning the "spotlight" feature off is the switch.
+- **backboardd crash at phone shutdown** (SimulatorHID): guest pc garbage (x16 = 0x8010000000000012) with lr in
+  kb_idle_thread right after its sleep(2), i.e. in the pthread_mutex_lock stub, while the process was being torn down
+  (a vm_deallocate trim just before). The idle-detach thread polled every 2 s for the whole boot; it now sleeps on a
+  condition variable while no keyboard is attached (woken by a key under cmd_mu; it polls only while one is attached:
+  pthread_cond_timedwait never timed out here, the keyboard stayed attached), so nothing of ours wakes up during
+  teardown. 5 boot/stop cycles on ram3: no backboardd crash log. (Also fixed: the
+  x86_64 SimulatorHID did not build: now_ns was inside #if __arm64__ but note_input uses it.)

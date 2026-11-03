@@ -39,7 +39,10 @@ DARLING_VIEW = "/Volumes/SystemRoot"  # Linux / as seen inside Darling
 # and shims without one are left out), no libkqueue_sim (the arm64 process's libsystem_kernel is Darling's own, behind
 # the svc thunks) and no x86_64 dyld cache. Unset: the x86_64 iOS 26.5 device, unchanged.
 ARM64 = os.environ.get("X86SIM_ARCH") == "arm64"
-DEVTYPE = {"model": "iPhone18,3", "class": "V57", "w": "1206", "h": "2622", "json": "devicetype-iphone18,3.json",
+# RAM 3: launchd plist XPC activities no code registers any more (see the job loop): label -> activity identifiers
+STALE_ACTIVITIES = {"com.apple.searchd": ("com.apple.searchd.loadtrial", "com.apple.searchd.defrag",
+                                          "com.apple.searchd.sendmlfeedback")}
+DEVTYPE ={"model": "iPhone18,3", "class": "V57", "w": "1206", "h": "2622", "json": "devicetype-iphone18,3.json",
            "version": "27.0", "build": "24A434", "arch": "arm64"} if ARM64 else \
           {"model": "iPhone17,3", "class": "D47", "w": "1179", "h": "2556", "json": "devicetype-iphone17,3.json",
            "version": "26.5", "build": "23F73", "arch": "x86_64"}
@@ -264,6 +267,13 @@ def main():
             plist.pop("LaunchEvents", None)
             keep = os.environ.get("X86SIM_ASSISTANTD_MACH", "com.apple.assistant.dictation").split(",")
             plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
+        # x86Code RAM 3: XPC activities the plist declares but the daemon's code no longer registers (no
+        # xpc_activity_register of that identifier anywhere in iOS 27.2). launchd_sim runs one once its Delay has passed
+        # (searchd's loadtrial: at every launch after the first hour of a device), libxpc holds a transaction for it
+        # until the process checks it in, which never happens: searchd stayed dirty for good and was never
+        # reclaimed (~100 MB). On a device dasd expires an activity nobody checks in.
+        for act in STALE_ACTIVITIES.get(job, ()):
+            plist.get("LaunchEvents", {}).get("com.apple.xpc.activity", {}).pop(act, None)
         # x86Code: X86SIM_JOBENV="label:K=V;label:K=V": extra environment for runtime jobs (experiments)
         for kv in filter(None, os.environ.get("X86SIM_JOBENV", "").split(";")):
             lab, _, ev = kv.partition(":")

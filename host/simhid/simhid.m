@@ -190,6 +190,8 @@ static void add_service(IOHIDEventSystemRef_ sys, VService* s) {
 	slog("added %s service (id 0x%llx)", s->name, (unsigned long long)s->id);
 }
 
+static uint64_t now_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000000000ull + ts.tv_nsec; }
+
 #if __arm64__
 // Speed 34: detach the keyboard service again after SIMHID_KB_IDLE_S (default 30; 0 = never) without a key, as a
 // hardware keyboard that goes away. While one is attached UIKit runs in hardware-keyboard mode, and SpringBoard's
@@ -202,25 +204,36 @@ static uint64_t kb_last_ns;
 static uint64_t kb_idle_ns;  // idle detach of the client that sent the last key (kbidle, else SIMHID_KB_IDLE_S)
 static uint64_t kb_default_idle_ns;
 static int kb_down;  // keys held (no detach while one is down)
-static uint64_t now_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000000000ull + ts.tv_nsec; }
 static pthread_mutex_t cmd_mu;
+static pthread_cond_t kb_cv = PTHREAD_COND_INITIALIZER;
+// Sleeps on kb_cv while no keyboard is attached (or it never detaches) instead of polling every 2 s for the whole
+// boot: a thread that woke up while backboardd was being torn down at phone shutdown called through a stub that no
+// longer pointed at code (guest pc garbage right after its sleep(2), backboardd crash reports at the end of boots).
+// Woken by a key under cmd_mu. While a keyboard is attached it polls as before (pthread_cond_timedwait never timed
+// out here: the keyboard stayed attached).
 static void* kb_idle_thread(void* arg) {
+	pthread_mutex_lock(&cmd_mu);
 	for (;;) {
+		const uint64_t idle = kb_idle_ns ? kb_idle_ns : kb_default_idle_ns;
+		if (!keyboard_svc.service || !hid_system || kb_idle_ns == ~0ull || idle == ~0ull) {
+			pthread_cond_wait(&kb_cv, &cmd_mu);
+			continue;
+		}
+		pthread_mutex_unlock(&cmd_mu);
 		sleep(2);
 		pthread_mutex_lock(&cmd_mu);
 		// a key-down whose key-up never came (viewer lost focus with a key held) must not keep the keyboard attached
 		// forever (+90 ms per tap): held keys count only for 10 minutes after the last key
-		const uint64_t idle = kb_idle_ns ? kb_idle_ns : kb_default_idle_ns, since = now_ns() - kb_last_ns;
-		if (keyboard_svc.service && hid_system && kb_idle_ns != ~0ull && (kb_down <= 0 || since > 600000000000ull) && since > idle) {
-			IOHIDServiceRef sv = keyboard_svc.service;
-			keyboard_svc.service = NULL;
-			_IOHIDEventSystemRemoveService(hid_system, sv);
-			_IOHIDServiceTerminate(sv);
-			CFRelease(sv);
-			kb_down = 0;
-			slog("keyboard detached (idle)");
-		}
-		pthread_mutex_unlock(&cmd_mu);
+		const uint64_t since = now_ns() - kb_last_ns;
+		if (!keyboard_svc.service || kb_idle_ns == ~0ull || !((kb_down <= 0 || since > 600000000000ull) && since > idle))
+			continue;
+		IOHIDServiceRef sv = keyboard_svc.service;
+		keyboard_svc.service = NULL;
+		_IOHIDEventSystemRemoveService(hid_system, sv);
+		_IOHIDServiceTerminate(sv);
+		CFRelease(sv);
+		kb_down = 0;
+		slog("keyboard detached (idle)");
 	}
 	return NULL;
 }
@@ -361,6 +374,7 @@ static void handle_line(char* line, Client* cl) {
 		kb_idle_ns = cl ? cl->kb_idle_ns : 0;
 		kb_down += !strcmp(a, "down") ? 1 : -1;
 		if (kb_down < 0) kb_down = 0;
+		pthread_cond_signal(&kb_cv);
 #endif
 		send_key(&keyboard_svc, 7, usage, !strcmp(a, "down"));
 		return;
