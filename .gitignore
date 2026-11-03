@@ -123,3 +123,4 @@ core.[0-9]*
 !/host/simfb/arm64/SimFramebuffer.framework/
 !/host/simhid/SimulatorHID.framework/
 !/host/simhid/arm64/SimulatorHID.framework/
+/build/metal-research/toolchain/
