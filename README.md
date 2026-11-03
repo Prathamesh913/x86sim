@@ -10,20 +10,20 @@ the home screen, apps like Settings, and touch input, rendered on your own graph
 <img src="docs/screens/arm64/33-speed2-settings-gpu.png" width="220" alt="iOS 27 Settings">
 </p>
 
-> **Early days.** It works, but it's slow and memory-hungry right now: about three minutes to boot and half a minute
-> to open an app. Making it fast is what we're working on now.
+> **Early days.** It works and it's getting quick: about 20 seconds to boot and a few seconds to open an app. Memory is
+> what we're working on now.
 
 ## Where things stand
 
 | | |
 |---|---|
-| ✅ Boots to the home screen | about 3 minutes |
+| ✅ Boots to the home screen | about 16–22 s |
 | ✅ Graphics on your GPU | Metal → Vulkan, including iOS 27's glass dock and search bar |
 | ✅ Touch and gestures | click and drag in the viewer window |
-| ✅ Apps open and scroll | Settings scrolls at ~50 fps; opening an app takes ~30 s |
+| ✅ Apps open and scroll | Settings scrolls at ~60 fps; an app opens in ~3.5–4 s cold, under 1 s warm |
 | ✅ Quiet when idle | about 1% of one CPU core |
-| 🚧 Memory | about 3.6 GB today; the goal is under 1 GB |
-| 🚧 Not yet | wallpaper, widgets, Files, and installing your own apps on iOS 27 |
+| 🚧 Memory | about 1.8–2.6 GB at the home screen (idle daemons exit, background apps are reclaimed); the goal is under 1 GB |
+| 🚧 Off by default | wallpaper and widgets (they cost ~1 GB); turn them on per phone in the launcher |
 
 ## How it works
 
@@ -47,8 +47,8 @@ The design and every measurement are in [docs/notebook/ARM64-PLAN.md](docs/noteb
 
 ## Try it
 
-Do the one-time setup below first: submodules, Darling, the GPU service, the Mac-built helper binaries
-(`build/mac-build-arm64-shims.sh`), and the iOS 27.0 runtime extracted to `runtimes/ios-27.0-24A434-arm64/`. Then:
+Do the one-time setup below first (no Mac needed). Then start a phone from the launcher
+(`tools/launcher/target/release/x86code-launcher`), or from a shell:
 
 ```sh
 # boot iOS 27 (uses the GPU; A64_JOBS=slim|std|full picks how much of iOS starts)
@@ -91,10 +91,12 @@ and smooth 60 fps. It still works and is frozen as-is. Most of the command refer
 - **Rust** (stable, via rustup) for `linux/mtlvk` and metal2vulkan.
 - **Python 3** with `PIL` (Pillow) and `dnspython`. The viewer needs PyGObject with GTK 4, the stream needs `ffmpeg`
   (NVENC), `x86sim dismiss` needs `tesseract`, `x86sim site` needs `cloudflared`, and `x86sim debug` needs `lldb`.
-- **Apple's simulator runtimes and Xcode**, which are not included: iOS 27.0 (24A434, arm64) for the main path, and
-  iOS 26.5 (23F73, universal) for the frozen x86_64 path, taken from Xcode on a Mac and extracted (see below).
-- **A Mac with Xcode** (reachable over ssh) to compile the small simulator-side binaries in `host/` and `tests/`.
-  These are Mach-O files for the iOS simulator SDK, and only Apple's toolchain builds them. Running needs no Mac.
+- **Apple's iOS 27 simulator runtime**, not included: `runtime-fetch.py` downloads it straight from Apple's catalogue
+  (no Mac, no Apple ID). It needs [`ipsw`](https://github.com/blacktop/ipsw) and 7-Zip. iOS 26.5 (23F73, universal) for
+  the frozen x86_64 path still comes from Xcode on a Mac (see below).
+- **No Mac to run it.** The simulator-side binaries in `host/` and `tests/` are committed. Rebuilding them works on
+  Linux with Apple's SDKs copied once into `sdks/` (see *Simulator-side binaries*); only Metal shader sources still need
+  a Mac to compile.
 
 ## Layout
 
@@ -106,44 +108,45 @@ linux/      native Linux pieces: arm64jit (the JIT host library), mtlvk (Rust, M
 tests/      sample apps (tests/apps, apps.sh), probes (tests/probes), Metal (mtlprobe + shaders) and IOSurface (iosprobe) tests, smoke test
 tools/      debug/: core dumps, stacks, stuck processes, Darling install (dinstall.sh), container cleanup;
             runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux
-build/      Mac build scripts (mac-build-*.sh) for the host/ and tests/ binaries
+build/      build scripts (mac-build-*.sh) for the host/ and tests/ binaries: on Linux by default (linux-env.sh), or a Mac
 docs/       ARCHITECTURE, WORKAROUNDS, METAL, protocols/, REPOS, notebook/ (FINDINGS lab notebook), screens/
-external/   git submodules: darling, dynarmic and metal2vulkan (x86code branches of the designgears forks)
+external/   git submodules: darling, dynarmic and metal2vulkan (x86code branches of the x86code forks)
 ```
 
 ## Setup
 
 1. **Clone with submodules.**
    ```sh
-   git clone git@github.com:designgears/x86code.git && cd x86code
-   make submodules
-   cp x86sim.env.example x86sim.env      # then edit: paths, X86SIM_MAC, GPU settings
+   git clone --recursive https://github.com/x86code/x86code.git && cd x86code
+   cp x86sim.env.example x86sim.env      # then edit if needed: paths, GPU settings
    ```
-2. **Get and extract the runtime.** The runtime Xcode installs by default on Apple silicon is arm64-only; the
-   *universal* variant has the x86_64 slices. On a Mac with Xcode 26 or later:
+2. **Get the iOS 27.2 runtime** straight from Apple (about 8 GB download, ~23 GB unpacked):
    ```sh
-   xcodebuild -downloadPlatform iOS -buildVersion 26.5 -architectureVariant universal -exportPath ~/simrt
+   cli/libexec/arm64/runtime-fetch.py list            # iOS 27.x runtimes in Apple's catalogue
+   cli/libexec/arm64/runtime-fetch.py fetch 24B8117   # iOS 27.2 -> runtimes/ios-27.2-24B8117-arm64/
+   echo ios-27.2-24B8117-arm64 > var/device-a64/runtime
    ```
-   This downloads iOS 26.5 (23F73, about 10 GB) as an exported bundle with `Restore/iOSSimulatorRuntime_Cryptex.dmg`
-   (it also registers the runtime with simctl). Copy the bundle directory to Linux as
-   `runtimes/ios-26.5-23F73-universal/`, then extract it there (7-Zip with APFS support, `7z`; about 23 GB):
-   ```sh
-   tools/runtime/extract-runtime.py runtimes/ios-26.5-23F73-universal runtimes/ios-26.5-23F73-universal/extracted
-   ```
-   The script runs `7z x -snld` and then makes every symlink of the image again from its listing: 7-Zip writes some
-   links as empty files (a link to a link), and absolute links are made relative inside RuntimeRoot.
-   `tools/runtime/extract-runtime.py --check ...` compares an extracted tree with the image without changing it.
-   The default `X86SIM_RUNTIME` (x86sim.env.example) is that tree's `.../iOS 26.5.simruntime/Contents/Resources/RuntimeRoot`.
+   It decrypts Apple's archive (`ipsw`), unpacks the APFS image (`7z`), and remakes every symlink 7-Zip gets wrong
+   (`tools/runtime/extract-runtime.py --links`, then `--check`).
 3. **Build and install Darling** (bin/darling must be setuid root, so this asks for sudo):
    ```sh
    make darling-install                  # configures external/darling -> $X86SIM_PREFIX, builds, installs
    ```
-4. **Build mtlvk:** `make mtlvk`.
-5. **Build the simulator-side binaries on the Mac.** Set `X86SIM_MAC=user@mac.local` (ssh key, BatchMode), then run
-   `make mac`. This sends the sources over ssh, compiles them with `xcrun -sdk iphonesimulator clang` and copies the
-   binaries back next to their sources. Nothing else stays on the Mac. The binaries are not committed. If you have no
-   Mac, copy them from a machine that built them: see *Simulator-side binaries* below.
-6. **Boot:** `cli/x86sim boot`, then `cli/x86sim view`. Put `cli/` on `PATH` or symlink `cli/x86sim` into `~/bin`.
+4. **Build the Linux pieces:**
+   ```sh
+   make mtlvk                            # Metal on Vulkan
+   linux/arm64jit/install.sh             # the arm64 JIT, installed into Darling
+   (cd tools/launcher && cargo build --release)   # launcher, x86code-aot, x86code-mcp
+   ```
+5. **Pre-translate** (optional, much faster boots and app opens):
+   `tools/launcher/target/release/x86code-aot --device $PWD/var/device-a64 build --full`, or the launcher's
+   Pre-translate page.
+6. **Boot:** from the launcher, or `X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh` (see *Try it*).
+
+The x86_64 iOS 26.5 path (`cli/x86sim boot`) needs that runtime from Xcode on a Mac:
+`xcodebuild -downloadPlatform iOS -buildVersion 26.5 -architectureVariant universal -exportPath ~/simrt`, copied to
+`runtimes/ios-26.5-23F73-universal/` and unpacked with
+`tools/runtime/extract-runtime.py runtimes/ios-26.5-23F73-universal runtimes/ios-26.5-23F73-universal/extracted`.
 
 Commands that need root (installing Darling, killing the setuid `darling` launcher, cores) read the password from
 `SUDO_PASS` in the environment or use sudo's prompt or cache. The password is never stored in a file.
@@ -231,11 +234,15 @@ Objective-C class data" is about the dyld shared cache, which this runtime doesn
 ## Simulator-side binaries
 
 The Mach-O files in `host/` and `tests/` (`simhost`, `SimFramebuffer.framework`, `SimulatorHID.framework`,
-`libsimshim.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `fseventsd`, `netconfig`, `openurl`, `prefs`, `debugserver`, `mtlprobe`, `iosprobe`, the
-probes and diagnostic shims) are small and ours, but they are build outputs of Apple's SDK, so they are not committed.
-Build them with `make mac`. To share a build with a machine that has no Mac, pack them:
-`git ls-files --others --ignored --exclude-standard host tests | grep -v '\.new$' | tar czf x86code-host-bin.tgz -T -`,
-then attach the archive to a release or copy it over.
+`libsimshim.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `fseventsd`, `netconfig`, `openurl`, `prefs`, `mtlprobe`,
+`iosprobe`, the probes, diagnostic shims and sample apps) are our own code and are committed, so nothing needs building
+to run. To rebuild them on Linux, copy Apple's SDKs once into `sdks/` (gitignored, never committed:
+`iPhoneSimulator.sdk` and `MacOSX.sdk` from Xcode, plus `swift-6.4.2/` from swift.org and `swift-lib/` from Xcode's
+toolchain for the Swift parts; `cargo install apple-codesign` for signing), then run the usual scripts, e.g. `make mac`
+and `build/mac-build-arm64-shims.sh`: with `sdks/` present they build locally (`build/linux-env.sh`: clang + ld64.lld,
+`build/linux-swiftc.sh`). `X86SIM_BUILD=mac` with `X86SIM_MAC=user@mac` builds on a Mac over ssh instead. Metal shader
+sources are the exception: `build/linux-metal.sh` serves recorded Mac-built libraries (`build/metal-cache`) and a changed
+shader still needs a Mac. `debugserver` and the 26.5 dyld cache are Mac-only.
 
 ## Status of the iOS 26.5 x86_64 path
 

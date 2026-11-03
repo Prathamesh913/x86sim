@@ -25,6 +25,7 @@ help:
 submodules:
 	git submodule sync --recursive
 	git submodule update --init external/metal2vulkan
+	git submodule update --init --recursive external/dynarmic
 	git submodule update --init --recursive external/darling
 
 mtlvk:

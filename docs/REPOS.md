@@ -1,33 +1,34 @@
-# x86Code private repositories
+# x86Code repositories
 
-This repo (`designgears/x86code`) holds our own code; Darling and metal2vulkan are git submodules under
-`external/` pointing at the forks below. All repos are **private** on GitHub account `designgears`. Each is a full-history copy of its
-upstream (not a GitHub fork, since forks of public repos cannot be private). Our work is on branch
-**`x86code`** (the default branch); the upstream default branch (`main`/`master`) is mirrored
-unchanged. In the local checkouts, `origin` = designgears (SSH), `upstream` = original repo.
+Everything lives in the GitHub organization **`x86code`**. This repo (`x86code/x86code`, **private**) holds our own
+code; Darling, dynarmic and metal2vulkan are git submodules under `external/`. The submodule repos are **public GitHub
+forks** of their upstreams (`darlinghq/*`, `azahar-emu/dynarmic`, `steelbrain/metal2vulkan`). Our work is on branch
+**`x86code`**; the upstream default branch (`main`/`master`) is mirrored unchanged. In the local checkouts, `origin` =
+the x86code fork (SSH), `upstream` = the original repo.
 
-| Local path | Private repo | Upstream | Upstream base commit |
+| Local path | Repo | Upstream | Upstream base commit |
 |---|---|---|---|
-| `.` (this repo) | git@github.com:designgears/x86code.git (`main`) | (ours) | - |
-| `external/darling` | git@github.com:designgears/darling.git | darlinghq/darling (`master`) | `60ba801d` |
-| `external/darling/src/external/xnu` | git@github.com:designgears/darling-xnu.git | darlinghq/darling-xnu (`main`) | `fa29287a` |
-| `external/darling/src/external/darlingserver` | git@github.com:designgears/darlingserver.git | darlinghq/darlingserver (`main`) | `89751e64` |
-| `external/darling/src/external/libkqueue` | git@github.com:designgears/darling-libkqueue.git | darlinghq/darling-libkqueue (`master`) | `b0795a2e` |
-| `external/darling/src/external/iokitd` | git@github.com:designgears/darling-iokitd.git | darlinghq/darling-iokitd (`master`) | `5549ac4c` |
-| `external/darling/src/external/libplatform` | git@github.com:designgears/darling-libplatform.git | darlinghq/darling-libplatform (`master`) | `5a3e5b52` |
-| `external/darling/src/external/libpthread` | git@github.com:designgears/darling-libpthread.git | darlinghq/darling-libpthread (`master`) | `f07f265b` |
-| `external/darling/src/external/dyld` | git@github.com:designgears/darling-dyld.git | darlinghq/darling-dyld (`main`) | `63f667cf` |
-| `external/darling/src/external/libunwind` | git@github.com:designgears/darling-libunwind.git | darlinghq/darling-libunwind (`main`) | `a91da1a0` |
-| `external/darling/src/external/objc4` | git@github.com:designgears/darling-objc4.git | darlinghq/darling-objc4 (`master`) | `1a12df76` |
-| `external/darling/src/external/sqlite` | git@github.com:designgears/darling-sqlite.git | darlinghq/darling-sqlite (`master`) | `3472e256` |
-| `external/metal2vulkan` | git@github.com:designgears/metal2vulkan.git | steelbrain/metal2vulkan (`master`) | `f6a96b7d` |
+| `.` (this repo) | git@github.com:x86code/x86code.git (`main`) | (ours) | - |
+| `external/darling` | git@github.com:x86code/darling.git | darlinghq/darling (`master`) | `60ba801d` |
+| `external/darling/src/external/xnu` | git@github.com:x86code/darling-xnu.git | darlinghq/darling-xnu (`main`) | `fa29287a` |
+| `external/darling/src/external/darlingserver` | git@github.com:x86code/darlingserver.git | darlinghq/darlingserver (`main`) | `89751e64` |
+| `external/darling/src/external/libkqueue` | git@github.com:x86code/darling-libkqueue.git | darlinghq/darling-libkqueue (`master`) | `b0795a2e` |
+| `external/darling/src/external/iokitd` | git@github.com:x86code/darling-iokitd.git | darlinghq/darling-iokitd (`master`) | `5549ac4c` |
+| `external/darling/src/external/libplatform` | git@github.com:x86code/darling-libplatform.git | darlinghq/darling-libplatform (`master`) | `5a3e5b52` |
+| `external/darling/src/external/libpthread` | git@github.com:x86code/darling-libpthread.git | darlinghq/darling-libpthread (`master`) | `f07f265b` |
+| `external/darling/src/external/dyld` | git@github.com:x86code/darling-dyld.git | darlinghq/darling-dyld (`main`) | `63f667cf` |
+| `external/darling/src/external/libunwind` | git@github.com:x86code/darling-libunwind.git | darlinghq/darling-libunwind (`main`) | `a91da1a0` |
+| `external/darling/src/external/objc4` | git@github.com:x86code/darling-objc4.git | darlinghq/darling-objc4 (`master`) | `1a12df76` |
+| `external/darling/src/external/sqlite` | git@github.com:x86code/darling-sqlite.git | darlinghq/darling-sqlite (`master`) | `3472e256` |
+| `external/metal2vulkan` | git@github.com:x86code/metal2vulkan.git | steelbrain/metal2vulkan (`master`) | `f6a96b7d` |
+| `external/dynarmic` | git@github.com:x86code/dynarmic.git | azahar-emu/dynarmic | - |
 
 metal2vulkan is dual-licensed GPL-2.0-or-later OR LGPL-3.0-or-later; LICENSE files are kept.
 
-In the top-level darling `.gitmodules` (branch `x86code`) the nine submodules above point at the
-designgears repos (SSH URLs); every other submodule URL was changed from relative `../x.git` to
-the absolute `https://github.com/darlinghq/x.git`, because relative URLs would otherwise resolve
-against designgears.
+In the top-level darling `.gitmodules` (branch `x86code`) every submodule points at an `x86code` fork: the ones we
+modify (above) by SSH, the rest by HTTPS (`https://github.com/x86code/darling-<name>.git`, unmodified forks of
+darlinghq's). Push a modified submodule's `x86code` branch before the parents that point at it (innermost first:
+e.g. darling-xnu, then darling, then this repo); `git push --recurse-submodules=check` refuses otherwise.
 
 ## Commits on `x86code`
 
@@ -75,8 +76,8 @@ against designgears.
 ## Clone
 
 ```sh
-git clone git@github.com:designgears/x86code.git && cd x86code
-make submodules     # external/darling (recursive, x86code branches) and external/metal2vulkan
+git clone git@github.com:x86code/x86code.git && cd x86code
+make submodules     # external/darling (recursive, x86code branches), external/dynarmic and external/metal2vulkan
 # our Darling submodules are checked out detached at the x86code commits; to work on them:
 for d in xnu darlingserver libkqueue iokitd libplatform libpthread dyld libunwind objc4; do
   git -C external/darling/src/external/$d checkout x86code
