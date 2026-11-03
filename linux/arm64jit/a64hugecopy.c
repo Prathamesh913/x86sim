@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -52,6 +53,9 @@ static int take_marker(const char *mk) {
 
 int main(int argc, char **argv) {
     if (argc != 3) { fprintf(stderr, "usage: a64hugecopy MAP HP\n"); return 2; }
+    // Guests run with PR_SET_THP_DISABLE (host.cpp, RAM 1), which a child inherits: it also kept this copy off
+    // 2 MB pages (every boot logged "mostly small pages"). The copy is the one place huge pages are wanted.
+    prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0);
     const char *map = argv[1], *hp = argv[2];
     char dir[4096], mk[4200], small[4200], tmp[4200], lp[4200];
     snprintf(dir, sizeof dir, "%s", hp);
