@@ -419,7 +419,11 @@ def main():
         # x86Code: its own frame ring, so an x86_64 device's viewers are not disturbed
         # Speed 8: in /run/user/<uid> (the arm64 container's /dev/shm is private, X86CODE_PRIVATE_SHM); boot-a64.sh links
         # /dev/shm/x86code-a64-simfb.ring to it for the host's viewers
-        **({"SIMFB_RING": os.environ.get("SIMFB_RING", f"/Volumes/SystemRoot/run/user/{os.getuid()}/x86code-a64-simfb.ring")} if ARM64 else {}),
+        # one ring per phone, named like the launcher's ring_for (instance.rs): device-a64 -> x86code-a64-simfb.ring,
+        # device-a64-<name> -> x86code-a64-<name>-simfb.ring. A shared default let a second phone's boot recreate the
+        # main phone's ring, freezing its screen while its apps ran on.
+        **({"SIMFB_RING": os.environ.get("SIMFB_RING") or "/Volumes/SystemRoot/run/user/%d/x86code-%s-simfb.ring" % (
+            os.getuid(), os.path.basename(device.rstrip("/")).removeprefix("device-"))} if ARM64 else {}),
         # Speed 3: launchd jobs only see Bootstrap.Child, so the JIT flags must be copied here to reach backboardd and
         # SpringBoard. Speed 6: every X86CODE_A64_* flag (was a list that missed new ones, e.g. PERFMAP).
         **({k: v for k, v in os.environ.items()

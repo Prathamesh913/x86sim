@@ -89,7 +89,9 @@ pub fn load(dir: &Path) -> Instance {
     let w = env.get("SIMULATOR_MAINSCREEN_WIDTH").and_then(|v| v.parse().ok()).unwrap_or(1206);
     let h = env.get("SIMULATOR_MAINSCREEN_HEIGHT").and_then(|v| v.parse().ok()).unwrap_or(2622);
     let scale = env.get("SIMULATOR_MAINSCREEN_SCALE").and_then(|v| v.parse().ok()).unwrap_or(3.0);
-    let ring = env.get("SIMFB_RING").map(|r| PathBuf::from(r.strip_prefix("/Volumes/SystemRoot").unwrap_or(r))).unwrap_or_else(|| ring_for(&id));
+    // always the per-phone ring (sim.env may hold a ring copied from another phone; passing it on at start
+    // kept that phone drawing into the other one's ring)
+    let ring = ring_for(&id);
     let prefix_sfx = if is_default { String::new() } else if sfx.starts_with('-') { sfx.to_string() } else { format!("-{sfx}") };
     Instance {
         sock: dir.join("data/simhid.sock"),
