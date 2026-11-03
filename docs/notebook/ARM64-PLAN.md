@@ -2354,7 +2354,7 @@ Own phone var/device-a64-ram3 (own prefix a64prefix-ram3, state var/run-a64-ram3
   `A64_DEVICE=$PWD/var/device-a64-ram3 A64_STATE=$PWD/var/run-a64-ram3 A64_DPREFIX=$HOME/scratch/x86code/a64prefix-ram3 A64_STOP_ONLY=1 cli/libexec/arm64/boot-a64.sh && python3 cli/libexec/arm64/device-repath.py var/device-a64-ram3 var/device-a64`
   (ram2 the same with -ram2). Data an old clone already wrote into the base phone's containers stays there.
 - **Zombies, cause**: not EVFILT_PROC/suspension. A process SIGKILLed while pid_suspend'ed in a live container is reaped
-  by launchd_sim (Maps 1836, Settings 1995 suspended; 10 more unsuspended kills: all reaped, launchd logs "cleaning up").
+  by launchd_sim (Maps x2, Settings suspended; 17 more unsuspended kills of Maps/Settings: all reaped, launchd logs "cleaning up"; RunningBoard suspended rarely in these runs).
   The zombies are orphans: when a launchd_sim dies (boot-a64.sh's stop_prefix SIGKILLs it; ram2's 13:26 container
   outlived its reboot at 14:49 with ~60 live orphans), its children are reparented to the container's pid 1, Darling's
   x86_64 /sbin/launchd, which only waits for its own jobs (XNU reaps orphans of initproc in the kernel:
