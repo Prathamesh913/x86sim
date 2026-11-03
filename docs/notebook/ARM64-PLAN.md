@@ -1929,3 +1929,59 @@ Means of 3 boots each (scope hot image, 1216 MB):
   still detach after 30 s; a touch from a 2nd client lands 0.1 ms after sending during an attach settle. The
   v_setProperty burst ends ~75-130 ms after attach, before UIKit's session is back, so the 1500 ms settle stays.
 - Widgets and wallpaper off by default (features-def.json).
+
+## RAM 2 (mtlvk) (2026-11-03): where mtlvk's memory goes, ray tracing withheld, small system blocks, trims
+
+Own phone var/device-a64-ram3 (iPhone 17, iOS 27.2) with its own mtlvk. Scenario (var/ram3/scenario.sh, not
+committed): boot to home + 20 s; open Settings; open Maps; home; kill -9 Maps and Settings; wait 60 s.
+`MTLVK_MEMSTATS=10` (new, linux/mtlvk/src/memstat.rs) prints every 10 s: PSS by mapping kind, mallinfo2,
+VK_EXT_memory_budget per heap, and per-connection objects by kind (`mtlvk stats: kinds`). The "before" run is the
+same binary with every fix switched back (`MTLVK_RAYTRACING=1 METAL2VULKAN_QUEUES=16 MTLVK_MEMO_MB=256
+MTLVK_TRIM_EVERY=0 METAL2VULKAN_SYSTEM_BLOCK_MIB=64`), each on a fresh boot.
+
+PSS MB, before -> after:
+
+| step | total | malloc (heap+anon) | nvctl 2 MB chunks | nvctl >= 4 MB (sys VkDeviceMemory) | libs | memfd |
+|---|---|---|---|---|---|---|
+| no connection yet | 190 -> 113 | 77 -> 36 | 45 -> 31 | 16 -> 0 | 50 -> 44 | 0 |
+| home | 330 -> 204 | 125 -> 79 | 47 -> 35 | 80 -> 16 | 57 -> 53 | 19 |
+| Settings | 342 -> 223 | 129 -> 90 | 55 -> 43 | 80 -> 16 | 57 -> 54 | 18 |
+| Maps | 483 -> 331 | 170 -> 116 | 109 -> 83 | 80 -> 16 | 62 -> 54 | 59 -> 60 |
+| home | 506 -> 349 | 177 -> 122 | 113 -> 82 | 80 -> 16 | 62 -> 54 | 72 |
+| apps killed, +60 s | 453 -> 295 | 177 -> 121 | 113 -> 82 | 80 -> 16 | 62 -> 54 | 19 |
+
+What it was (where from: LD_PRELOAD mmap tracer with stacks, src/bin/devprobe.rs, the runtime's
+METAL2VULKAN_LOG_MEMORY):
+- **Ray tracing in vkCreateDevice: ~60 MB** (37 MB malloc, libnvidia-rtcore, 18 MB of driver chunks). The runtime
+  enabled VK_KHR_acceleration_structure + ray_query + deferred_host_operations; VKMTL has no acceleration
+  structures. mtlvk now withholds them (`MTLVK_RAYTRACING=1` keeps them). devprobe: device 183 -> 123 MB.
+- **A 64 MB pinned block for 64 KB upload chunks: 64 MB.** keep_room makes a pooled block of the Shared pool
+  (system memory, type 3) at the first command queue; NVIDIA pins all of it. metal2vulkan 7810b507: system-memory
+  blocks are 16 MB (device-local stay 64). The other 64 MB block is ReBAR (type 4, /dev/nvidia0, 0 PSS).
+- **16 VkQueues: ~2.3 MB each.** The runtime takes NVIDIA's whole graphics family. METAL2VULKAN_QUEUES (new), mtlvk
+  sets 8 (metalhostd has 4-6 logical queues at home/in apps): devprobe 124 -> 106 MB.
+- **The pipeline memo: up to 256 MB of malloc**, a copy of what the disk shader cache holds. mtlvk caps it at 32 MB
+  (`MTLVK_MEMO_MB`): malloc in use after the scenario 157 -> 106 MB.
+- **Command memory (the 2 MB /dev/nvidiactl chunks): 24-37 chunks after Maps.** Stacks: the recorder's replays and
+  batches. Spare command pools are kept for good and each holds its last recording. Measured on a bare device:
+  NVIDIA never unmaps command memory, not on reset with RELEASE_RESOURCES, vkTrimCommandPool, vkFreeCommandBuffers
+  or vkDestroyCommandPool: it goes to a cache of the driver's own. So `Device::trim_idle` (resets spares idle
+  10 s with RELEASE_RESOURCES, keeps the newest 4, frees idle descriptor spares) and mtlvk's trim thread (every 5 s,
+  plus malloc_trim) bound the re-growth to the busiest moment; they do not lower it. Only a new device does.
+- **Dead clients: no leak.** After the kills, buffers 222 -> 11 and imported guest pages 117 -> 38 MB; metalhostd
+  sends OBJ_DEL. 50 render pipelines stay (30 at home -> 80): backboardd/SpringBoard's own, kept by CoreAnimation.
+- **VRAM proxies of IOSurfaces were never freed** (shared_vram had no removal; 8 full screens = 96 MB VRAM after
+  Maps). Now dropped with their last proxy texture. VRAM only, not host RAM.
+- **No duplicate copies**: guest buffers and IOSurfaces are imported zero-copy (memfd PSS shared with the guest);
+  guest Shared textures are device-local images (heap1 sys usage = imports + the 16 MB block + driver).
+- Not found: staging buffers left behind (replace_region's staging is per call), descriptor pools (bounded).
+
+Idle floor and sharing: an mtlvk without any connection is 113 MB now (190 before): libs 44, driver chunks 31,
+malloc 36. Another phone on a shared mtlvk (A64_MTLVK_SOCKET, the launcher's default `share_mtlvk`) saves that
+~113 MB plus the 16 MB block per extra phone. The costs: one process for all phones' GPU work (a fault ends both),
+and both phones' logical queues on the 8 VkQueues (set METAL2VULKAN_QUEUES=16 for a shared one). The rest of the
+floor is NVIDIA's: libnvidia-glcore/libcuda pages and its device chunks.
+
+Speed (fresh boots, before / after / before): Settings cold open 3.52 / 3.51 / 3.53 s (3.68 in a 4th run), warm
+0.56 / 0.57 / 0.57 s; Settings 6-swipe scroll 61 fps peak, p50 16.5 ms, 371-376 frames in 8.3 s in every run.
+Screenshots of home/Settings/Maps/home after the fixes: correct.

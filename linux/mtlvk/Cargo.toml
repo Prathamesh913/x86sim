@@ -9,6 +9,7 @@ license = "GPL-2.0-or-later OR LGPL-3.0-or-later"
 metal2vulkan-runtime = { path = "../../external/metal2vulkan/crates/metal2vulkan-runtime" }
 metal2vulkan = { path = "../../external/metal2vulkan/crates/metal2vulkan" }
 libc = "0.2"
+ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
 
 [workspace]
 

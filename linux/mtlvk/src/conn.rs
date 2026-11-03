@@ -130,9 +130,43 @@ pub struct State {
     proxies: HashMap<u64, Texture>,
     proxy_views: HashMap<u64, u64>,
     shared_vram: HashMap<(u64, u64, u64, u64, u64, u64, u32), Texture>,
+    /// x86Code RAM 2: the `shared_vram` key of each proxied texture: the VRAM texture goes with the last proxy of its
+    /// surface (it was kept for good: 8 full-screen surfaces, ~100 MB of VRAM, after Settings and Maps).
+    proxy_keys: HashMap<u64, (u64, u64, u64, u64, u64, u64, u32)>,
     buf_keys: HashMap<u64, (u64, u64, u64)>,
     written: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     stats_seen: u32,
+    /// x86Code RAM 2: what each buffer/texture id is and roughly how many bytes of its own memory it holds
+    /// ([`Kind`]), for the `mtlvk stats:` line.
+    kinds: HashMap<u64, (Kind, u64)>,
+}
+
+/// x86Code RAM 2: where a buffer's or texture's bytes live.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    /// a buffer the runtime allocated (no fd): host-visible system memory
+    BufOwn,
+    /// a guest memfd imported without a copy (VK_EXT_external_memory_host): the guest's pages
+    BufImported,
+    /// a guest memfd the runtime mirrors in its own memory (import refused)
+    BufMirror,
+    /// a snapshot copy metalhostd syncs with BUF_WRITE/BUF_READ
+    BufCopy,
+    /// a texture with memory of its own, Private (VRAM)
+    TexPrivate,
+    /// a texture with memory of its own, host-visible
+    TexShared,
+    /// a texture over a buffer's bytes (an IOSurface plane): no memory of its own
+    TexOverBuf,
+    /// a texture view
+    TexView,
+    /// a VRAM proxy of an IOSurface render target
+    TexProxy,
+}
+
+fn tex_bytes(d: &TextureDescriptor) -> u64 {
+    let base = d.width * d.height * d.depth * d.array_length * d.sample_count * 4;
+    if d.mipmap_level_count > 1 { base * 4 / 3 } else { base }
 }
 
 /// x86Code Speed 7: SIGUSR1 bumps this; each connection prints its object counts on its next request.
@@ -162,6 +196,15 @@ impl State {
         }
         let lib: usize = self.lib_bytes.values().map(|v| v.len()).sum();
         let mirror: usize = self.mirrors.values().map(|m| m.len).sum();
+        let mut by: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+        for (k, b) in self.kinds.values() {
+            let e = by.entry(format!("{k:?}")).or_default();
+            e.0 += 1;
+            e.1 += b;
+        }
+        let shared_vram: u64 = self.shared_vram.values().map(|t| t.width() * t.height() * 4).sum();
+        let kinds: Vec<String> = by.iter().map(|(k, (n, b))| format!("{k} {n}/{}MB", b >> 20)).collect();
+        eprintln!("mtlvk stats: kinds [{}] shared_vram {} MB", kinds.join(", "), shared_vram >> 20);
         eprintln!(
             "mtlvk stats: buf {} ({} MB) tex {} queue {} event {} lib {} func {} pso {} sampler {} rps {} dss {} | lib_bytes {} ({} MB) func_src {} mirrors {} ({} MB) proxies {} shared_vram {}",
             n[0], buf_bytes >> 20, n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], self.lib_bytes.len(), lib >> 20,
@@ -207,8 +250,8 @@ impl State {
             eprintln!("mtlvk: render targets over IOSurfaces are drawn in VRAM (MTLVK_VRAM_TARGETS)");
         }
         Ok(State { device, objs: HashMap::new(), mirrors: HashMap::new(), helper, out, log: std::env::var_os("MTLVK_LOG").is_some(), lib_bytes: HashMap::new(), func_src: HashMap::new(),
-            vram_targets, proxies: HashMap::new(), proxy_views: HashMap::new(), shared_vram: HashMap::new(), buf_keys: HashMap::new(),
-            written: Default::default(), stats_seen: 0 })
+            vram_targets, proxies: HashMap::new(), proxy_views: HashMap::new(), shared_vram: HashMap::new(), proxy_keys: HashMap::new(), buf_keys: HashMap::new(),
+            written: Default::default(), stats_seen: 0, kinds: HashMap::new() })
     }
 
     /// x86Code: note that a command writes texture `id` (a proxied one is copied back at the end of the command
@@ -318,6 +361,12 @@ impl State {
                 // x86Code Speed 7: these were never dropped (a released library kept its bytes for good)
                 self.lib_bytes.remove(&id);
                 self.func_src.remove(&id);
+                self.kinds.remove(&id);
+                if let Some(k) = self.proxy_keys.remove(&id) {
+                    if !self.proxy_keys.values().any(|o| *o == k) {
+                        self.shared_vram.remove(&k);
+                    }
+                }
                 None
             }
             TEX_NEW => {
@@ -548,6 +597,7 @@ impl State {
         let Some(fd) = fd else {
             let b = self.device.new_buffer(length.max(1), shared_opts).map_err(err("new_buffer"))?;
             self.objs.insert(id, Obj::Buf(b));
+            self.kinds.insert(id, (Kind::BufOwn, length));
             return Ok(false);
         };
         if self.vram_targets {
@@ -587,6 +637,7 @@ impl State {
                         eprintln!("mtlvk: buffer {id:#x}: {length} bytes imported without a copy");
                     }
                     self.objs.insert(id, Obj::Buf(b));
+                    self.kinds.insert(id, (Kind::BufImported, length));
                     return Ok(false);
                 }
                 Err(e) => eprintln!("mtlvk: buffer {id:#x}: import refused ({e}); mirroring it"),
@@ -596,6 +647,7 @@ impl State {
         let m = Mirror { buffer: b.clone(), map, ptr: ptr as usize, len: length as usize };
         m.to_gpu();
         self.objs.insert(id, Obj::Buf(b));
+        self.kinds.insert(id, (if shared { Kind::BufMirror } else { Kind::BufCopy }, length));
         if shared {
             self.mirrors.insert(id, m);
             Ok(false)
@@ -680,6 +732,8 @@ impl State {
             eprintln!("mtlvk: texture {id:#x}: {:?} {}x{}x{} mips {} usage {:?} sample count {}", desc.pixel_format, desc.width,
                 desc.height, desc.depth, desc.mipmap_level_count, desc.usage, desc.sample_count);
         }
+        let k = if desc.resource_options.raw() & 0xf0 == 0x20 { Kind::TexPrivate } else { Kind::TexShared };
+        self.kinds.insert(id, (k, tex_bytes(&desc)));
         self.objs.insert(id, Obj::Tex(t));
         Ok(0)
     }
@@ -724,18 +778,21 @@ impl State {
                 Ok(v) => {
                     if let Some(k) = key {
                         self.shared_vram.insert(k, v.clone());
+                        self.proxy_keys.insert(id, k);
                     }
                     if self.log {
                         eprintln!("mtlvk: texture {id:#x}: drawn in VRAM, copied to the surface after each command buffer");
                     }
                     self.proxies.insert(id, t);
                     self.objs.insert(id, Obj::Tex(v));
+                    self.kinds.insert(id, (Kind::TexProxy, 0));
                     return Ok(0);
                 }
                 Err(e) => eprintln!("mtlvk: texture {id:#x}: no VRAM proxy ({e}); drawing into the surface"),
             }
         }
         self.objs.insert(id, Obj::Tex(t));
+        self.kinds.insert(id, (Kind::TexOverBuf, 0));
         Ok(0)
     }
 
@@ -765,6 +822,7 @@ impl State {
             eprintln!("mtlvk: texture view {id:#x} of {parent:#x}: {pf:?} {tt:?} levels {l0}+{ln} slices {s0}+{sn}");
         }
         self.objs.insert(id, Obj::Tex(v));
+        self.kinds.insert(id, (Kind::TexView, 0));
         Ok(())
     }
 

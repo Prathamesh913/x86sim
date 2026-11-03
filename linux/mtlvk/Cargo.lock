@@ -122,6 +122,7 @@ dependencies = [
 name = "mtlvk"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "libc",
  "metal2vulkan",
  "metal2vulkan-runtime",
