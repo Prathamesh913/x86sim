@@ -51,7 +51,9 @@ fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // a phone brings its iOS version, and with it the cache dir (27.0: the default one, others jc-<build>)
     // --device: a path, a folder (device-a64-qa) or a phone's name ("QA")
-    let dev = take(&mut args, "--device").map(|d| if std::path::Path::new(&d).exists() { PathBuf::from(&d) } else { instance::find(&d).map(|i| i.dir).unwrap_or_else(|| PathBuf::from(&d)) });
+    // an existing path is made absolute: it ends up inside Darling under /Volumes/SystemRoot, where a relative
+    // "var/device-a64" became "/Volumes/SystemRootvar/device-a64" and launchd_sim aborted on the missing plist
+    let dev = take(&mut args, "--device").map(|d| if std::path::Path::new(&d).exists() { std::fs::canonicalize(&d).unwrap_or_else(|_| PathBuf::from(&d)) } else { instance::find(&d).map(|i| i.dir).unwrap_or_else(|| PathBuf::from(&d)) });
     let rt = dev.as_deref().map(sim::device_runtime);
     let jc = take(&mut args, "--jc").map(PathBuf::from).or_else(|| rt.as_deref().map(sim::jc_for)).unwrap_or_else(aot::Paths::default_jc);
     let p = aot::Paths::new(&jc);

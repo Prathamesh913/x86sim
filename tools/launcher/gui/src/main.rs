@@ -408,7 +408,7 @@ impl eframe::App for App {
         egui::SidePanel::left("nav")
             .resizable(false)
             .exact_width(212.0)
-            .frame(egui::Frame::new().fill(WINDOW).inner_margin(egui::Margin { left: 10, right: 10, top: 16, bottom: 14 }).stroke(egui::Stroke::new(1.0_f32, BORDER)))
+            .frame(egui::Frame::new().fill(WINDOW).inner_margin(egui::Margin { left: 10, right: 10, top: 16, bottom: 14 }))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_space(6.0);
@@ -507,12 +507,16 @@ impl eframe::App for App {
 /// The window's own title bar (the app is undecorated: tiling compositors such as Hyprland draw none): drag to move,
 /// double-click to maximize, and minimize / maximize / close buttons on the right.
 fn title_bar(ctx: &egui::Context) {
-    const H: f32 = 34.0;
+    const H: f32 = 40.0;
+    // no frame stroke and no panel separator: either leaves a 1 px gap above the content; one bottom rule instead
     egui::TopBottomPanel::top("title-bar")
         .exact_height(H)
-        .frame(egui::Frame::new().fill(WINDOW).stroke(egui::Stroke::new(1.0_f32, BORDER)))
+        .show_separator_line(false)
+        .frame(egui::Frame::new().fill(WINDOW).inner_margin(0).outer_margin(0))
         .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
             let rect = ui.max_rect();
+            ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0_f32, BORDER));
             // the whole bar drags the window; the buttons, added after, take their clicks first
             let bar = ui.interact(rect, egui::Id::new("title-bar-drag"), egui::Sense::click_and_drag());
             let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
