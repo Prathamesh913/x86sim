@@ -377,11 +377,18 @@ static long linux_syscall3(long n, long a, long b, long c) {
 
 static volatile BOOL wake;
 
-// x86Code (RAM 2): the frontmost application, for cli/libexec/jetsam.py. RunningBoard never backgrounds or suspends an
-// app that keeps a background mode (Maps), so the Linux side can't tell it left the screen; SpringBoard can. A request
-// is <data>/tmp/x86code-frontmost.req (any content; its own file, so it never races the openurl trigger); the answer
-// <data>/tmp/x86code-frontmost is one line: the bundle id, empty at the home screen (written .new, then renamed).
-static void frontmost(NSString* home) {
+// x86Code (RAM 2): what is on screen, for cli/libexec/jetsam.py. RunningBoard never backgrounds or suspends an app
+// that keeps a background mode (Maps: its darwin role stays UI_FOCAL at the home screen), so the Linux side can't tell
+// it left the screen; FrontBoard can. A request is <data>/tmp/x86code-frontmost.req (its own file, so it never races
+// the openurl trigger), optionally with Darling pids, one per line; the answer <data>/tmp/x86code-frontmost (written
+// .new, then renamed):
+//   line 1        SBSCopyFrontmostApplicationDisplayIdentifier (empty: nil, "?": not found). It answers nil for every
+//                 app here (also with Maps on screen), so jetsam.py no longer uses it; kept for diagnosis.
+//   (An FBSDisplayLayoutMonitor was tried too: it delivered one nil layout and nothing after it; not kept.)
+//   pid <pid> <visible> <task state>   per requested pid: RunningBoard's state (RBSProcessHandle currentState):
+//                 visible = 1 with the com.apple.frontboard.visibility endowment (FrontBoard shows the process),
+//                 0 without, -1 unknown; task state RBSTaskState (-1 unknown).
+static void frontmost(NSString* home, NSString* req) {
 	static NSString* (*copyFront)(void);
 	static BOOL looked;
 	if (!looked) {
@@ -389,11 +396,28 @@ static void frontmost(NSString* home) {
 		void* h = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
 		if (h) copyFront = (NSString* (*)(void))dlsym(h, "SBSCopyFrontmostApplicationDisplayIdentifier");
 		if (!copyFront) { fprintf(logf_, "openurl: no SBSCopyFrontmostApplicationDisplayIdentifier\n"); fflush(logf_); }
+		dlopen("/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices", RTLD_NOW);
 	}
 	NSString* bid = copyFront ? CFBridgingRelease((__bridge CFTypeRef)copyFront()) : nil;
+	NSMutableString* o = [NSMutableString stringWithFormat:@"%@\n", bid ?: (copyFront ? @"" : @"?")];
+	Class idc = NSClassFromString(@"RBSProcessIdentifier"), hc = NSClassFromString(@"RBSProcessHandle");
+	for (NSString* line in [req componentsSeparatedByString:@"\n"]) {
+		int pid = line.intValue;
+		if (pid <= 0) continue;
+		long vis = -1, task = -1;
+		id ident = idc ? MSG(id, id, SEL, int)(idc, sel_getUid("identifierWithPid:"), pid) : nil;
+		id h = ident ? MSG(id, id, SEL, id, id*)(hc, sel_getUid("handleForIdentifier:error:"), ident, NULL) : nil;
+		id st = h ? MSG(id, id, SEL)(h, sel_getUid("currentState")) : nil;
+		if (st) {
+			NSSet* en = MSG(id, id, SEL)(st, sel_getUid("endowmentNamespaces"));
+			vis = [en containsObject:@"com.apple.frontboard.visibility"] ? 1 : 0;
+			task = (long)MSG(unsigned char, id, SEL)(st, sel_getUid("taskState"));
+		}
+		[o appendFormat:@"pid %d %ld %ld\n", pid, vis, task];
+	}
 	NSString* out = [home stringByAppendingString:@"/tmp/x86code-frontmost"];
 	NSString* tmp = [out stringByAppendingString:@".new"];
-	[[NSString stringWithFormat:@"%@\n", bid ?: (copyFront ? @"" : @"?")] writeToFile:tmp atomically:NO encoding:NSUTF8StringEncoding error:nil];
+	[o writeToFile:tmp atomically:NO encoding:NSUTF8StringEncoding error:nil];
 	rename(tmp.UTF8String, out.UTF8String);
 }
 
@@ -460,8 +484,9 @@ int main(void) {
 						beforeDate:[NSDate dateWithTimeIntervalSinceNow:ifd >= 0 ? 5.0 : 0.3]];
 				wake = NO;
 				NSString* freq = [home stringByAppendingString:@"/tmp/x86code-frontmost.req"];
+				NSString* fr = [NSString stringWithContentsOfFile:freq encoding:NSUTF8StringEncoding error:nil];
 				if (unlink(freq.UTF8String) == 0)
-					frontmost(home);
+					frontmost(home, fr ?: @"");
 				NSString* s = [NSString stringWithContentsOfFile:@(path) encoding:NSUTF8StringEncoding error:nil];
 				if (!s) continue;
 				unlink(path);

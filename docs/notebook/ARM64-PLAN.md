@@ -2156,3 +2156,36 @@ restart (which they recover from), not a permanent hang. METAL2VULKAN_QUEUES sta
 them; 2 phones measured fine). Verified: 3 A restarts with share off while B had Maps open: "reusing mtlvk", B's
 connection and its metalhostd/backboardd/SpringBoard kept, B renders and opens Settings; A stopped -> mtlvk kept, B
 fine; B stopped -> mtlvk ended; single-phone boot -> fresh mtlvk, home, Settings.
+
+## RAM 2 follow-up (2026-11-03): jetsam never reclaims the foreground app; Maps' "self exit" was jetsam
+
+- **Cause (Maps killed in the gate's route test, r2n3; Maps "exiting by itself" ~40 s after home)**: both were
+  jetsam.py. SBSCopyFrontmostApplicationDisplayIdentifier answers nil to com.x86code.openurl for every app (Maps on
+  screen too; checked 4 ways), openurl wrote that as "" (= home), so every app "foreground" past 30 s was taken for a
+  background one and SIGKILLed 90 s later (LAST): mid-route, or ~40 s after going home when Maps had been open ~50 s
+  (ram2's jetsam.log has the "killed Maps ... 90 s" line; no crash, since it was a SIGKILL). With jetsam off Maps stays
+  alive at home (watched 5 min): no exit of our own, and not RunningBoard.
+- **What RunningBoard says here**: Maps at home keeps role UI_FOCAL (1), the com.apple.frontboard.visibility endowment
+  and task state running (4), also Settings at home: nothing tells an app at the home screen from one on screen.
+  Once another app opens, the previous one is suspended (suspended mark, role 6, not visible, RBS task state 3) ~5-25 s
+  later. FBSDisplayLayoutMonitor from openurl delivered one nil layout and nothing more (tried, removed).
+- **Fix, cli/libexec/jetsam.py**: apps are reclaimed only on a positive background signal (suspended mark,
+  PRIO_DARWIN_BG, role NON_UI/DARWIN_BG, RunningBoard state not visible / suspended, a non-empty frontmost id of another
+  app). Vetoes: RunningBoard visible, SpringBoard's frontmost = the app, and input: simhid now touches
+  <data>/tmp/x86code-input at each touch/key/button (at most 1/s), and an app that was in the foreground at the last
+  input is kept X86SIM_JETSAM_INPUT s (60). Right before a kill a fresh openurl answer is fetched (up to 4 s) and the
+  marks re-read; anything foreground then is "kept" (logged). openurl's frontmost request now takes Darling pids and
+  answers "pid <pid> <visible> <RBSTaskState>" per pid (RBSProcessHandle currentState). Consequence: Maps left at the
+  home screen is reclaimed only after another app was opened (RunningBoard suspends it then), not 90 s after home.
+  Verified: Maps foreground 2.5 min with jetsam on: alive; then Settings opened: Maps killed 91 s later "(suspended,
+  role 6, not visible, rb suspended)".
+- gate pss(): `x86code-aot sim status` prints a table now; read `--json`, this phone's entry ("PSS 3018 MB, 69 procs").
+- mapsroute's Enter (`touch_ key return`, simtouch `key` takes names) works, so the route search completes and Maps
+  saves a zoomed 3D Eiffel Tower camera: the next boot's maps-tiles found no water (js1). gate.sh removes Maps' saved
+  application state before each boot.
+- **Gate: not proven clean.** From 09:18 every boot's apps stopped drawing (frame ring frozen ~20 s after the first
+  app, apps alive in futex waits, launches time out: jt1/ju1/jv1). 09:18:40 is when another agent's uncommitted
+  libkqueue vnode work (src/linux/vnode.c, kqueue.c) and libSystem.B were built and installed into
+  darling-prefix (prefix-heal.sh's manifest gained libSystem.B); jt1's hang began exactly then, with Maps the first
+  process launched after it. js1 (booted 09:10, old libraries) passed everything through the keyboard check (it was
+  cut by an edit of gate.sh while running). Rerun gates.sh 3 + mapsroute 3/3 once that work is fixed.

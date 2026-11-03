@@ -111,7 +111,10 @@ proc_for() {
 		com.apple.MobileSMS) echo MobileSMS ;; com.apple.news) echo News ;; com.apple.mobilesafari) echo MobileSafari ;;
 	esac
 }
-pss() { "$AOT" sim status 2>/dev/null | grep -o 'procs [0-9]*\|PSS [0-9]* MB' | paste -sd' '; }
+# RAM 2: `sim status` prints a table now ("... running  7664 MB  2% CPU  97 procs"); read its --json, this phone's entry
+pss() { "$AOT" sim status --json 2>/dev/null | python3 -c 'import json,os,sys
+d=[e for e in json.load(sys.stdin) if os.path.realpath(e.get("path") or "")==os.path.realpath(sys.argv[1])]
+print("PSS %.0f MB, %d procs" % (d[0]["memory_mb"], d[0]["processes"]) if d else "?")' "$DEV"; }
 # icon_xy LABEL "X Y": a home-screen icon's centre from its label (OCR of the current frame; the icon is 134 px above the
 # label's centre), else the given default. RAM 2: the layout moves with what is on the home screen (the Shortcuts
 # widget that boot-a64.sh now strips put Settings in row 3; without it Settings is in row 2), so taps no longer assume

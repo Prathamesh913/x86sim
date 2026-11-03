@@ -211,7 +211,10 @@ def main(a):
     elif a[0] in ("home", "lock"):
         send(s, "button %s down" % a[0]); time.sleep(0.1); send(s, "button %s up" % a[0])
     elif a[0] == "key":
-        u = int(a[1], 0)
+        # a usage (page 7: 0x28 = return) or a name
+        named = {"return": 0x28, "enter": 0x28, "escape": 0x29, "esc": 0x29, "delete": 0x2a, "backspace": 0x2a,
+                 "tab": 0x2b, "space": 0x2c, "right": 0x4f, "left": 0x50, "down": 0x51, "up": 0x52}
+        u = named[a[1].lower()] if a[1].lower() in named else int(a[1], 0)
         send(s, "key down %d" % u, "key up %d" % u)
     elif a[0] == "text":
         for c in " ".join(a[1:]):

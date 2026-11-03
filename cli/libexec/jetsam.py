@@ -16,10 +16,18 @@ libsystem_kernel records it in the container, cleared at each boot):
       (PRIO_DARWIN_ROLE) 3 = off screen (NON_UI), 6 = DARWIN_BG, 1/2/4 = on screen.
 Kills (SIGKILL, as jetsam; launchd / RunningBoard relaunch what is needed on the next lookup or open):
   - an app extension (.appex) suspended for more than X86SIM_JETSAM_EXT s (default 10)
-  - a background app (.app: suspended, backgrounded, or off screen: Maps, which keeps a background mode, is never
-    suspended or PRIO_DARWIN_BG'd; its role goes to NON_UI when the user leaves it) after
-    X86SIM_JETSAM_APP s (default 30); the most recently backgrounded one after X86SIM_JETSAM_LAST s (default 90),
-    so switching back to the last app soon is a warm resume. X86SIM_JETSAM_KEEP (default 1): how many get the longer time.
+  - a background app (.app) after X86SIM_JETSAM_APP s (default 30); the most recently backgrounded one after
+    X86SIM_JETSAM_LAST s (default 90), so switching back to the last app soon is a warm resume. X86SIM_JETSAM_KEEP
+    (default 1): how many get the longer time. Only on a positive "this is background" signal, never by inference:
+    RunningBoard suspended it, PRIO_DARWIN_BG, darwin role NON_UI / DARWIN_BG, or RunningBoard's state of the process
+    (com.x86code.openurl answers it: host/openurl frontmost()) without the frontboard visibility endowment or suspended.
+    Never killed (checked again, with a fresh answer, right before the kill): an app RunningBoard reports visible,
+    one in SpringBoard's display layout or reported frontmost, and one that was in the foreground when the user last
+    touched or typed (<data>/tmp/x86code-input, simhid) within X86SIM_JETSAM_INPUT s (default 60).
+    (RAM 2 fix: SBSCopyFrontmostApplicationDisplayIdentifier answers nil for every app here, which read as "home": every
+    app in the foreground past 30 s was taken for a background one and killed 90 s later, Maps in the middle of the
+    gate's route test. Maps at the home screen keeps visibility and role UI_FOCAL here, so it is reclaimed only once
+    RunningBoard suspends it, i.e. after another app was opened.)
   - an idle-exit daemon (tracked, allows idle exit, clean) that has been clean and used no CPU for X86SIM_JETSAM_IDLE s
     (default 30); the daemons every app launch talks to (HOT, X86SIM_JETSAM_HOT) after X86SIM_JETSAM_IDLE_HOT s
     (default 600), so app opens don't pay their relaunch. While an app is in the foreground every daemon gets the HOT
@@ -54,12 +62,16 @@ DEMAND = set(os.environ.get("X86SIM_JETSAM_DEMAND", "passd,mobileassetd,assistan
                             "com.apple.MobileAsset.DownloadService.Builtin,UserFontManager,siriactionsd,"
                             "assetsubscriptiond,AppIntentsLiveEntityService").split(",")) - {""}
 POLL = 2.0
-# RAM 2: an app RunningBoard never backgrounds (Maps keeps a background mode) is asked about: com.x86code.openurl writes
-# SpringBoard's frontmost app on request (host/openurl). Asked only while such an app has been "foreground" past APP s.
+# RAM 2: RunningBoard's and SpringBoard's view of the apps, from com.x86code.openurl (host/openurl frontmost()): the
+# request lists the apps' Darling pids, the answer has per pid "pid <pid> <visible> <task state>", "layout <n> <ids>"
+# and SpringBoard's frontmost id on line 1. Asked every FRONT_EVERY s, and again right before an app is killed.
 DEVDATA = os.path.join(os.environ.get("X86SIM_DEVICE", ""), "data")
 FRONT_REQ = os.path.join(DEVDATA, "tmp/x86code-frontmost.req")
 FRONT = os.path.join(DEVDATA, "tmp/x86code-frontmost")
+INPUT = os.path.join(DEVDATA, "tmp/x86code-input")   # simhid: mtime = the last touch / key / button
+INPUT_KEEP = float(os.environ.get("X86SIM_JETSAM_INPUT", "60"))
 FRONT_EVERY = 10.0
+RB_SUSPENDED = 3   # RBSTaskStateRunningSuspended
 _front = {"asked": 0.0}
 _bundle_ids = {}
 CPU_IDLE = 0.2   # CPU seconds a process may use per CPU_WIN and still count as idle
@@ -154,6 +166,15 @@ def marks(d):
     return out
 
 
+def _start_of(lpid):
+    """A Linux process's start time (epoch s), 0 if gone."""
+    try:
+        with open("/proc/%d/stat" % lpid) as f:
+            return BOOT + int(f.read().rsplit(")", 1)[1].split()[19]) / CLK
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
 def name_of(exe):
     return exe.rstrip("/").split("/")[-1]
 
@@ -171,22 +192,86 @@ def bundle_id(exe):
     return _bundle_ids[exe]
 
 
-def frontmost(now):
-    """SpringBoard's frontmost app id ("" at home), None when unknown. Asks openurl at most every FRONT_EVERY s."""
+def ask_front(pids, now):
+    """Asks openurl about these Darling pids (and the layout); returns the request time."""
+    _front["asked"] = now
     try:
-        st = os.stat(FRONT)
-        val = open(FRONT).read().strip()
+        with open(FRONT_REQ + ".new", "w") as f:
+            f.write("".join("%d\n" % p for p in pids))
+        os.rename(FRONT_REQ + ".new", FRONT_REQ)
     except OSError:
-        st, val = None, None
-    if now - _front["asked"] > FRONT_EVERY:
-        _front["asked"] = now
-        try:
-            open(FRONT_REQ, "w").close()
-        except OSError:
-            pass
-    if st is None or val == "?" or now - st.st_mtime > 3 * FRONT_EVERY:
+        pass
+    return now
+
+
+def front_state(newer_than=0.0):
+    """openurl's last answer: {"front": id or None, "layout": set or None, "pids": {pid: (visible, task)}}, or None
+    when there is none (or it is stale / older than newer_than)."""
+    try:
+        mt = os.stat(FRONT).st_mtime
+        lines = open(FRONT).read().split("\n")
+    except OSError:
         return None
-    return val
+    if time.time() - mt > 3 * FRONT_EVERY or mt < newer_than:
+        return None
+    out = {"front": lines[0].strip() or None if lines else None, "layout": None, "pids": {}}
+    if out["front"] == "?":
+        out["front"] = None
+    for l in lines[1:]:
+        f = l.split()
+        try:
+            if f[:1] == ["layout"] and int(f[1]) >= 0:
+                out["layout"] = set(f[2:])
+            elif f[:1] == ["pid"]:
+                out["pids"][int(f[1])] = (int(f[2]), int(f[3]))
+        except (IndexError, ValueError):
+            pass
+    return out
+
+
+def wait_front(pids, timeout=4.0):
+    """A fresh answer for these pids (right before a kill), None if openurl gives none in time."""
+    t = ask_front(pids, time.time())
+    while time.time() < t + timeout:
+        fs = front_state(newer_than=t)
+        if fs is not None:
+            return fs
+        time.sleep(0.2)
+    return None
+
+
+def app_view(exe, dpid, sm, jm, fs):
+    """(background, foreground) evidence for an app: positive signals only. foreground wins over background."""
+    bg = jm[1][3] if jm and len(jm[1]) > 3 else -1
+    role = jm[1][4] if jm and len(jm[1]) > 4 else -1
+    back, fore = [], []
+    if sm:
+        back.append("suspended")
+    if bg == 1:
+        back.append("darwin bg")
+    if role in (3, 6):
+        back.append("role %d" % role)
+    if fs is not None:
+        bid = bundle_id(exe)
+        vis, task = fs["pids"].get(dpid, (-1, -1))
+        if vis == 1:
+            fore.append("visible")
+        elif vis == 0:
+            back.append("not visible")
+        if task == RB_SUSPENDED:
+            back.append("rb suspended")
+        if fs["layout"] is not None and bid:
+            (fore if bid in fs["layout"] else back).append("layout")
+        if fs["front"] and bid:
+            (fore if fs["front"] == bid else back).append("frontmost %s" % fs["front"])
+    return back, fore
+
+
+def last_input():
+    try:
+        return os.stat(INPUT).st_mtime
+    except OSError:
+        return 0.0
 
 
 def grace(exe, base):
@@ -230,30 +315,47 @@ def sweep(verbose=False, status=False):
         rows.append((dpid, lpid, exe, st, sm, jm, cpu_idle(st, now, cpu)))
     apps, killed = [], []
     fg_app = False
-    for dpid, lpid, exe, st, sm, jm, idle in rows:
-        if ".app/" not in exe or ".appex/" in exe or any(k in exe for k in NEVER):
+    app_rows = [r for r in rows if ".app/" in r[2] and ".appex/" not in r[2] and not any(k in r[2] for k in NEVER)]
+    if app_rows and now - _front["asked"] > FRONT_EVERY:
+        ask_front([r[0] for r in app_rows], now)
+    fs = front_state()
+    inp = last_input()
+    for dpid, lpid, exe, st, sm, jm, idle in app_rows:
+        back, fore = app_view(exe, dpid, sm, jm, fs)
+        if back and not fore:
+            since = st.setdefault("bg", sm[0] if sm else now)
+            st["why"] = ", ".join(back)
+            apps.append((since, lpid, dpid, exe, st))
             continue
-        bg = jm[1][3] if jm and len(jm[1]) > 3 else -1
-        role = jm[1][4] if jm and len(jm[1]) > 4 else -1
-        if sm or bg == 1 or role in (3, 6):
-            apps.append((min(sm[0] if sm else now, st.setdefault("bg", now) if (bg == 1 or role in (3, 6)) else now), lpid, dpid, exe))
-            continue
-        # not backgrounded by RunningBoard: in the foreground, unless SpringBoard says another app (or home) is
-        if now - st.setdefault("fg", now) > APP:
-            front = frontmost(now)
-            if front is not None and front != bundle_id(exe):
-                apps.append((st.setdefault("off", now), lpid, dpid, exe))
-                continue
-        st.pop("off", None)
         st.pop("bg", None)
+        st["fg_seen"] = now
         fg_app = True
-    apps.sort(reverse=True)   # most recently backgrounded first
-    for i, (since, lpid, dpid, exe) in enumerate(apps):
+    apps.sort(key=lambda a: a[0], reverse=True)   # most recently backgrounded first
+    due = []
+    for i, (since, lpid, dpid, exe, st) in enumerate(apps):
         g = grace(exe, LAST if i < KEEP else APP)
-        if now - since > g:
-            killed.append((lpid, dpid, exe, "app in the background %.0f s" % (now - since)))
+        # the user touched or typed while this app was in the foreground: not reclaimed for INPUT_KEEP s
+        used = inp and now - inp < INPUT_KEEP and st.get("fg_seen", 0) >= inp - 2 * POLL
+        if now - since > g and not used:
+            due.append((lpid, dpid, exe, st, "app in the background %.0f s (%s)" % (now - since, st.get("why"))))
         elif status:
-            print("  app    %-40s %5.0f s of %.0f" % (name_of(exe), now - since, g))
+            print("  app    %-40s %5.0f s of %.0f (%s)%s" % (name_of(exe), now - since, g, st.get("why"),
+                                                         ", in use" if used else ""))
+    if due and not status:
+        # right before the kill: RunningBoard's / SpringBoard's state again, fresh; anything foreground now is kept
+        fresh = wait_front([d[1] for d in due])
+        susp2, js2 = marks(DIR), marks(JDIR)
+        for lpid, dpid, exe, st, why in due:
+            sm2, jm2 = susp2.get(dpid), js2.get(dpid)
+            sm2 = sm2 if sm2 is not None and sm2[0] + 1 >= _start_of(lpid) else None
+            jm2 = jm2 if jm2 is not None and jm2[0] + 1 >= _start_of(lpid) else None
+            back, fore = app_view(exe, dpid, sm2, jm2, fresh if fresh is not None else fs)
+            if fore or not back:
+                print("%s jetsam: kept %s (pid %d): %s" % (time.strftime("%H:%M:%S"), name_of(exe), dpid,
+                      "foreground (%s)" % ", ".join(fore) if fore else "no background signal any more"), flush=True)
+                st.pop("bg", None)
+                continue
+            killed.append((lpid, dpid, exe, why))
     for dpid, lpid, exe, st, sm, jm, idle in rows:
         if ".appex/" in exe:
             if sm and now - sm[0] > grace(exe, EXT):

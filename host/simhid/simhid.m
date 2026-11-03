@@ -31,6 +31,7 @@ typedef uint32_t IOOptionBits;
 #include <sys/un.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <time.h>
@@ -304,10 +305,28 @@ static void send_key(VService* s, uint32_t page, uint32_t usage, bool down) {
 
 typedef struct { int fd; uint64_t kb_idle_ns; } Client;  // kb_idle_ns 0: default
 
+// x86Code (RAM 2): the time of the last user input, for cli/libexec/jetsam.py (an app the user is touching or typing
+// into is never reclaimed): <SIMULATOR_SHARED_RESOURCES_DIRECTORY>/tmp/x86code-input, its mtime touched at each touch,
+// key or button command (at most once a second).
+static void note_input(void) {
+	static uint64_t last;
+	static char path[256];
+	uint64_t t = now_ns();
+	if (last && t - last < 1000000000ull) return;
+	last = t;
+	if (!*path) {
+		const char* dir = getenv("SIMULATOR_SHARED_RESOURCES_DIRECTORY") ?: getenv("HOME") ?: "/tmp";
+		snprintf(path, sizeof(path), "%s/tmp/x86code-input", dir);
+	}
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd >= 0) { (void)!write(fd, "1\n", 2); close(fd); }
+}
+
 static void handle_line(char* line, Client* cl) {
 	char a[16] = "", b[16] = "";
 	double x = 0, y = 0;
 	double x2 = 0, y2 = 0;
+	if (!strncmp(line, "touch", 5) || !strncmp(line, "key ", 4) || !strncmp(line, "button ", 7)) note_input();
 	if (sscanf(line, "touch2 %15s %lf %lf %lf %lf", a, &x, &y, &x2, &y2) == 5) { send_touch2(a, x, y, x2, y2); return; }
 	if (sscanf(line, "touch %15s %lf %lf %15s", a, &x, &y, b) >= 3) {
 		static const char* edges[5] = { "none", "top", "left", "bottom", "right" };

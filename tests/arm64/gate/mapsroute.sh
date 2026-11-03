@@ -8,7 +8,7 @@ L=${1:-mapsroute}; O=${O:-$SCR/gate/$L}; mkdir -p "$O"; mark_logs
 alive() { local s; s=$(proc_state Maps); [ "$s" = alive ] || { say "FAIL $L: Maps $s at $1"; exit 1; }; }
 kill -9 $(pid_of Maps) 2>/dev/null; sleep 2
 app com.apple.Maps; wait_proc "$L" Maps 60 || exit 1; sleep 25; alive open; touch_ dismiss
-touch_ tap 500 1575; sleep 5; touch_ text "Eiffel Tower"; sleep 6; touch_ raw "key return"; sleep 15; alive search
+touch_ tap 500 1575; sleep 5; touch_ text "Eiffel Tower"; sleep 6; touch_ key return; sleep 15; alive search
 touch_ tap 500 520; sleep 20; alive place; touch_ dismiss; sleep 3
 # Speed 36: confirm the Directions sheet (a Plan tap once landed on the place card's "Add a Note"); else close and retry
 for i in 1 2 3 4 5; do
