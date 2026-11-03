@@ -2131,3 +2131,28 @@ savings per change below come from the process lists.
   SpringBoard ~380, backboardd ~145, Spotlight ~120, searchd ~100 (dirty: an open transaction), assistantd ~90
   (keyboard dictation), InputUI ~45, iokitd ~85 and mtlvk ~210-300 MB. <1 GB with one app open needs the per-process
   costs (JIT, SpringBoard, mtlvk) down too; turning spotlight off (~220 MB) is the largest switch left.
+
+## Shared mtlvk lifetime (2026-11-03): an mtlvk lives as long as its clients, not its starting phone
+
+Bug: a launcher phone B sharing phone A's mtlvk "hung" when A restarted. Repro (ram3 = A with its own mtlvk, ram4 = B
+with A64_MTLVK_SOCKET=A's socket, launcher core's `sim restart` on A): with A's "share" setting off (or A booted by
+boot-a64.sh from a shell, or any non-KEEP boot's exit) boot-a64.sh's `stop_a64_mtlvk` killed A's mtlvk although B was
+connected. B's metalhostd lost its connection and exited (vkmtl.m), backboardd and SpringBoard crashed with it and every
+open app was lost: black screen with a spinner for ~30-60 s until launchd's new metalhostd found the new mtlvk A's boot
+had put on the same path (4/4 runs recovered; with no mtlvk at the path B's UI comes back on software rendering via
+metalhostd's refusing mode). With the launcher's default (share on) A's restart already reused its own live mtlvk
+(`shared_mtlvk` prefers it) and B was unaffected. No stale-state problem in mtlvk itself: object tables are per
+connection, and the runtime never hands a host-settable event wait to a shared VkQueue (event_timeline.rs), so a
+client dying mid-frame does not stall the others' queues.
+Fix: boot-a64.sh counts the other phones' darlingservers whose environment names this boot's socket
+(`a64_mtlvk_users`; its own prefix excluded): `stop_a64_mtlvk` keeps a used mtlvk, and a boot whose earlier mtlvk is
+used reuses it instead of starting a fresh one (an unused one is still replaced, so a single phone's boot is as
+before). Launcher: `stop` also runs `stop_gpu_helpers` (every phone's state-dir mtlvk with no running client and older
+than 2 min, since a boot starts mtlvk before its darlingserver exists) so the last client to leave ends a kept mtlvk;
+`shared_mtlvk` also offers a kept mtlvk of an off phone (before, B's next boot started a second one and the kept one
+leaked ~370 MB).
+Default stays shared: ~130 MB per extra phone, and a crash of the shared mtlvk now costs the other phones a UI
+restart (which they recover from), not a permanent hang. METAL2VULKAN_QUEUES stays 8 (logical queues round-robin over
+them; 2 phones measured fine). Verified: 3 A restarts with share off while B had Maps open: "reusing mtlvk", B's
+connection and its metalhostd/backboardd/SpringBoard kept, B renders and opens Settings; A stopped -> mtlvk kept, B
+fine; B stopped -> mtlvk ended; single-phone boot -> fresh mtlvk, home, Settings.

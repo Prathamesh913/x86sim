@@ -39,9 +39,35 @@ rm -rf "$D"/data/var/log/*.log
 # Speed 1: start this boot's mtlvk when Metal is requested. Own socket + pidfile under var/run-a64.
 # Speed 8: A64_MTLVK_SOCKET=<path of a running mtlvk's socket> shares that mtlvk (one per host for several devices; it
 # keeps an object table per connection): this boot neither starts nor stops it.
+# Shared mtlvk: its lifetime is its clients'. Other phones' darlingservers whose environment names this boot's socket
+# (X86CODE_MTLVK_SOCKET; this prefix's own, possibly still running, is not counted). Killing an mtlvk another phone
+# renders through crashed that phone's metalhostd -> backboardd -> SpringBoard and every app (a black screen with a
+# spinner for ~30-60 s, open apps lost; software rendering if no mtlvk came back): a CLI boot, a launcher phone with
+# sharing off, and every non-KEEP boot's exit did it.
+a64_mtlvk_users() {
+	local want="X86CODE_MTLVK_SOCKET=$1" n=0 p
+	for p in /proc/[0-9]*; do
+		[ "$(cat "$p/comm" 2>/dev/null)" = darlingserver ] || continue
+		tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "darlingserver $DPREFIX " && continue
+		tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -qxF "$want" && n=$((n+1))
+	done
+	echo $n
+}
+a64_mtlvk_live() {
+	local pid
+	pid=$(cat "$ST/mtlvk.pid" 2>/dev/null || true)
+	[ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = mtlvk ] && [ -S "$ST/mtlvk.sock" ]
+}
 stop_a64_mtlvk() {
 	[ -n "${A64_MTLVK_SOCKET:-}" ] && return 0
-	local old
+	local old users
+	if a64_mtlvk_live; then
+		users=$(a64_mtlvk_users "$ST/mtlvk.sock")
+		if [ "$users" -gt 0 ]; then
+			echo "boot-a64: keeping mtlvk (pid $(cat "$ST/mtlvk.pid")): $users other phone(s) render through it" >&2
+			return 0
+		fi
+	fi
 	old=$(cat "$ST/mtlvk.pid" 2>/dev/null || true)
 	if [ -n "$old" ] && [ -d "/proc/$old" ]; then
 		kill "$old" 2>/dev/null || true
@@ -67,9 +93,11 @@ if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ]; then
 	fi
 fi
 if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ] && [ -z "${A64_MTLVK_SOCKET:-}" ]; then
-	stop_a64_mtlvk
 	export X86CODE_MTLVK_SOCKET=$ST/mtlvk.sock
-	if [ -x "$MTLVK_BIN" ]; then
+	if a64_mtlvk_live && [ "$(a64_mtlvk_users "$ST/mtlvk.sock")" -gt 0 ]; then
+		# another phone renders through this boot's earlier mtlvk: use it too (a fresh one would take theirs down)
+		echo "boot-a64: reusing mtlvk (pid $(cat "$ST/mtlvk.pid")), other phones use it" >&2
+	elif stop_a64_mtlvk && [ -x "$MTLVK_BIN" ]; then
 		setsid "$MTLVK_BIN" "$ST/mtlvk.sock" > "$ST/mtlvk.log" 2>&1 &
 		echo $! > "$ST/mtlvk.pid"
 		for i in $(seq 1 50); do [ -S "$ST/mtlvk.sock" ] && break; sleep 0.1; done

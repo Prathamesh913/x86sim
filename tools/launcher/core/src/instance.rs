@@ -453,7 +453,8 @@ pub fn boot_log(inst: &Instance) -> PathBuf {
     scratch().join(format!("launcher-boot-{}.log", inst.id))
 }
 
-/// A live mtlvk socket to share: this phone's own (a restart keeps it), else any other running phone's.
+/// A live mtlvk socket to share: this phone's own (a restart keeps it), else a running phone's, else one an off phone
+/// left up because others still render through it (its lifetime is its clients', see `stop_gpu_helpers`).
 fn shared_mtlvk(inst: &Instance, others: &[Status]) -> Option<PathBuf> {
     let live = |st: &Path| -> Option<PathBuf> {
         let pid: u32 = read(&format!("{}/mtlvk.pid", st.display())).trim().parse().ok()?;
@@ -464,7 +465,8 @@ fn shared_mtlvk(inst: &Instance, others: &[Status]) -> Option<PathBuf> {
     if let Some(s) = live(&inst.state_dir) {
         return Some(s);
     }
-    others.iter().filter(|s| s.id != inst.id && s.phase != Phase::Off).find_map(|s| live(&s.state_dir))
+    let others = || others.iter().filter(|s| s.id != inst.id);
+    others().filter(|s| s.phase != Phase::Off).find_map(|s| live(&s.state_dir)).or_else(|| others().find_map(|s| live(&s.state_dir)))
 }
 
 /// Boots a phone in its own prefix / state dir / ring. `others`: the current statuses (to share a running mtlvk).
@@ -504,13 +506,37 @@ pub fn start(inst: &Instance, others: &[Status]) -> Result<u32> {
     Ok(cmd.spawn().context("starting boot-a64.sh")?.id())
 }
 
-/// Stops a phone: its container, then its own GPU helper (mtlvk) unless a running phone still uses it. boot-a64.sh's
-/// A64_STOP_ONLY stops the container only, so every Stop left a ~370 MB mtlvk behind. A restart keeps it (`restart`).
+/// Stops a phone: its container, then every GPU helper (mtlvk) no running phone uses any more: its own, unless another
+/// phone shares it, and the one it shared if it was that one's last client (an mtlvk lives as long as its clients,
+/// whichever phone started it). boot-a64.sh's A64_STOP_ONLY stops the container only, so every Stop left a ~370 MB
+/// mtlvk behind. A restart keeps it (`restart`).
 pub fn stop(inst: &Instance, st: Option<&Status>) -> Result<()> {
     let state_dir = st.map(|s| s.state_dir.clone()).unwrap_or_else(|| inst.state_dir.clone());
     stop_container(inst, st)?;
     stop_gpu_helper(&state_dir);
+    stop_gpu_helpers();
     Ok(())
+}
+
+/// Ends the mtlvks of all phones' state dirs that no running container uses, sparing one started in the last 2 min (a
+/// boot starts mtlvk before its container, whose darlingserver is what names the socket).
+pub fn stop_gpu_helpers() {
+    for i in list() {
+        let Ok(pid) = read(&format!("{}/mtlvk.pid", i.state_dir.display())).trim().parse::<u32>() else { continue };
+        if proc_age_s(pid).is_some_and(|a| a >= 120.0) {
+            stop_gpu_helper(&i.state_dir);
+        }
+    }
+}
+
+/// Seconds since a process started (/proc/<pid>/stat field 22, in clock ticks since boot).
+fn proc_age_s(pid: u32) -> Option<f64> {
+    let stat = read(&format!("/proc/{pid}/stat"));
+    let start: f64 = stat.rsplit(')').next()?.split_whitespace().nth(19)?.parse().ok()?;
+    let up: f64 = read("/proc/uptime").split_whitespace().next()?.parse().ok()?;
+    // SAFETY: plain libc call.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+    Some(up - start / hz)
 }
 
 /// Stop, then start with the same GPU helper (it stays up across the restart).
