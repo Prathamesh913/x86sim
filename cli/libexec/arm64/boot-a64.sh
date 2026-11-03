@@ -244,8 +244,14 @@ export X86CODE_PRIVATE_SHM=1
 # dropped for lack of 2 MB pages.
 rm -f /tmp/x86code-a64-img/*.small 2>/dev/null
 RING=$(sed -n 's#^SIMFB_RING=/Volumes/SystemRoot##p' "$D/sim.env")
-if [ -n "$RING" ] && [ -n "${SIMFB_RING_LINUX:-}" ] && [ "$RING" != "$SIMFB_RING_LINUX" ]; then
-	ln -sfn "$RING" "$SIMFB_RING_LINUX"
+# One /dev/shm link per phone, named after its ring (the launcher's SIMFB_RING_LINUX). A SIMFB_RING_LINUX naming another
+# phone's link (e.g. the generic default inherited from the environment) is left alone: re-pointing it made the main
+# phone's viewers and the gate read a second phone's screen.
+if [ -n "$RING" ]; then
+	ln -sfn "$RING" "/dev/shm/$(basename "$RING")"
+	if [ -n "${SIMFB_RING_LINUX:-}" ] && [ "$RING" != "$SIMFB_RING_LINUX" ] && [ "$(basename "$SIMFB_RING_LINUX")" = "$(basename "$RING")" ]; then
+		ln -sfn "$RING" "$SIMFB_RING_LINUX"
+	fi
 fi
 # Strip home-screen / Today widgets so SpringBoard does not demand WidgetRenderer (even with park).
 # A64_KEEP_WIDGETS=1 leaves IconState alone (full profile / wallpaper experiments).
