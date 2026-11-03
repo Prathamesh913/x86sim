@@ -2219,3 +2219,29 @@ fine; B stopped -> mtlvk ended; single-phone boot -> fresh mtlvk, home, Settings
 - **Open**: backboardd native fault in SimulatorHID (guest lr SimulatorHID+0x1130, guest pc garbage, after a
   vm_deallocate trim) in the last seconds of ram2 boots 3 and 4, while boot-a64 was stopping the prefix. No file
   watches on that path; not seen while running.
+
+## App suite + Safari black screen (2026-11-03, ram2)
+- **tests/apps/run.sh**: PASS on ram2 (run-20261103-114838, -123841 after the 0x1b loader fix, -132828). build.sh now
+  builds on Linux (build/mac-env.sh: X86SIM_BUILD=linux when sdks/ exists; linux-swiftc.sh), not only over ssh.
+  Second-phone boots need `A64_STATE=var/run-a64-<n> A64_DPREFIX=$SCRATCH/a64prefix-<n> SIMFB_RING=...` (as the
+  launcher sets): A64_DEVICE alone uses the main phone's state dir and prefix.
+- **Safari black screen: reproduced** (scratch safari/cycle.sh: openurl a local page, SIGKILL MobileSafari + WebContent,
+  repeat): black at cycle 4-10, on the fixed 0x1b libraries too, with and without jetsam. The black Safari is up; its
+  WebContent is idle in xpc_main waiting for Safari (not stuck); no GPU/Networking is started.
+- **Where**: Safari's main thread is held in darlingserver's sigexc suspension (Linux: recvmsg; guest pc a block entry
+  anywhere in scene setup: BrowserController _initSubviews / _updateUsesNarrowLayout / UIKit layout). darlingserver
+  log (temporary SUSPDBG lines in thread_hold/release/wait): `hold main` by Safari's JavaScriptCore thread (JSC GC
+  conservative scan: thread_suspend, get_state, thread_resume), `wait main count 1`, then **no release ever**. The
+  suspender thread sits in a Linux futex: it blocks on something the suspended main thread holds. Darling suspends via
+  SIGRTMIN, handled wherever the Linux thread is (JIT dispatch/translation, a native thunk), so a thread can be stopped
+  holding a libarm64jit/native lock the suspender then needs. XNU stops a thread with no user-space JIT in between.
+  **Owner: linux/arm64jit** (defer Darling's suspension signal to a safe point, or keep JIT locks out of reach of a
+  suspended thread). Not fixed here.
+- Fixed on the way (darlingserver 5bab041): a real lost wakeup in dtape_thread_wait_while_user_suspended (resume between
+  "waiting_suspended" and the microthread's suspend was dropped); now under the wake lock as thread_block. Did NOT cure
+  the black screen (still at cycle 4/6 after it).
+- jetsam.py: zombies skipped (a killed, unreaped process has an empty cmdline; the sweep re-SIGKILLed healthd's pid
+  every 2 s). Processes killed while task-suspended stay zombies (launchd_sim never reaps them): open.
+- Open: cloned phones run apps in the base phone's containers: var/db/lsd's csstore holds absolute container paths
+  (ram2 Safari HOME=var/device-a64/data/Containers/...). Removing the csstore made lsd rebuild with correct paths, but
+  then `x86sim launch` got no reply (reverted). device-a64.py create needs a path rewrite of the store, not a delete.

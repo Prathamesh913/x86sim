@@ -139,6 +139,10 @@ def darling_pids():
                 exe = f.read().split(b"\0")[0].decode(errors="replace")
             with open("/proc/%s/stat" % p) as f:
                 st = f.read().rsplit(")", 1)[1].split()
+            # a zombie (killed, not reaped yet: the container's init reaps late or never) is not a process to reclaim:
+            # its empty cmdline made the sweep SIGKILL "" (healthd's pid) every 2 s forever
+            if st[0] in ("Z", "X"):
+                continue
             start = BOOT + int(st[19]) / CLK
             out[int(ns[-1])] = (int(p), exe, start, (int(st[11]) + int(st[12])) / CLK)
         except (OSError, ValueError, IndexError):
