@@ -2391,4 +2391,5 @@ Own phone var/device-a64-ram3 (own prefix a64prefix-ram3, state var/run-a64-ram3
 - **LSE atomics / CAS / CASP on a tagged pointer** (dynarmic af2df077): address copied to a scratch register and the top
   byte cleared inline (shl 8; shr 8). Codegen 0x1c (jitcache.cpp, key.rs), AOT image rebuilt. tests/arm64/fastmem:
   atomics.s (LDADD, SWP, LDSMAX, LDCLRAL, CAS, CASP) for tags 0/5a/ff/01 in both modes = the untagged run (asserted
-  before); PASS. frint PASS, guestlibc 20000/0.
+  before); PASS. frint PASS, guestlibc 20000/0. tests/apps/run.sh on ram2 (fresh boot, 0x1c + new image): PASS
+  (run-20261103-155338).
