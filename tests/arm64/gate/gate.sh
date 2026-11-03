@@ -16,6 +16,9 @@ if [ "${SKIPBOOT:-0}" != 1 ]; then
 	# RAM 2 follow-up: Maps restores its last camera from its saved state; since the route test reaches the route (its
 	# Enter key works now) that is a zoomed-in 3D view of the Eiffel Tower, no water: maps-tiles failed on the next boot.
 	rm -rf "$DEV"/data/Containers/Data/Application/*/Library/Saved\ Application\ State/com.apple.Maps.savedState
+	# fileproviderd-vnode round: and Maps' own user store (MapsSync: saved places, favourites, recents). A route run once
+	# saved the Louvre as "Work"; mapsroute's tap on the Louvre search result then opened that place's editor, no route.
+	rm -f "$DEV"/data/Containers/Data/Application/*/Library/Maps/MapsSync_0.0.1*
 	OLDSB=$(pids_of SpringBoard | tr '\n' ' ')
 	A64_KEEP=1 X86CODE_METAL=all SECS=20 A64_DEVICE="$DEV" setsid cli/libexec/arm64/boot-a64.sh > "$O/boot.log" 2>&1 < /dev/null &
 	for i in $(seq 1 60); do sleep 2; sb=$(pids_of SpringBoard | grep -vw -e "${OLDSB:-x}" | head -1); [ -n "$sb" ] && break; done

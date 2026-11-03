@@ -2189,3 +2189,33 @@ fine; B stopped -> mtlvk ended; single-phone boot -> fresh mtlvk, home, Settings
   darling-prefix (prefix-heal.sh's manifest gained libSystem.B); jt1's hang began exactly then, with Maps the first
   process launched after it. js1 (booted 09:10, old libraries) passed everything through the keyboard check (it was
   cut by an edit of gate.sh while running). Rerun gates.sh 3 + mapsroute 3/3 once that work is fixed.
+
+## fileproviderd vnode (2026-11-03): kevent vnode watches past Linux's inotify instance cap
+
+- **Symptom**: fileproviderd died ~90 s into some boots (main phone 06:55, ram2 07:23-07:25 x4, gate r2j1/r2m1):
+  guest brk (exception 8) at 0x1e6759dc4, libdispatch's "BUG in libdispatch client: kevent vnode monitor" with EBADF
+  from LaunchServices code; LIBDISPATCH_STRICT turns any kevent error into that trap. Started on demand (Files).
+- **Root cause**: libkqueue gave every EVFILT_VNODE knote its own inotify instance. Linux limits instances per user
+  (fs.inotify.max_user_instances = 1024) and every simulator process of every phone is the same user: ~940 with
+  several phones up (UserEventAgent 165 per phone, MobileSafari 56, ...). Past the cap inotify_init() failed, kn_create
+  failed and kevent_copyin reported EBADF. The fd was valid; XNU has no such limit. Reproduced by
+  tests/probes/vnodeprobe (x86_64, `darling shell`): 374-397 of 1500 vnode knotes registered, then EBADF.
+- **Fix** (libkqueue e6330a8): one inotify instance per kqueue (a sentinel knote in its epoll set), a watch per knote,
+  events drained into per-knote pending masks + an eventfd per knote; EV_DISABLE only takes the eventfd out of epoll
+  (a file deleted while an EV_DISPATCH source is disabled reports NOTE_DELETE on re-enable). close() also drops the fd's
+  vnode knotes (kqueue_closed_fd); EV_ERROR receipts keep the change's flags (XNU). prefix-heal.sh now installs
+  libSystem.B too: Darling links its own copy of libkqueue into it (x86_64 programs' kevent; arm64 guests use
+  libkqueue_sim).
+- **Verified**: vnodeprobe 18/18 (1500 knotes; file write/attrib/rename/delete, directory entry, two knotes on one
+  file incl. O_EVTONLY, deleted while disabled, deleted file's fd). ram2: 4 boots opening Files, no fileproviderd trap.
+  Main phone: gates.sh 3 clean (ks1-ks3), mapsroute 3/3.
+- **Not the libraries**: the main phone's "screen stops, every launch times out" during this round was the shared frame
+  ring (every phone's sim.env named /run/user/<uid>/x86code-a64-simfb.ring; a phone booting replaced the file, the
+  running backboardd kept drawing into the deleted one). Fixed in e0d4005.
+- **Gate**: mapsroute's Return now opens the place card directly; the old tap on a result row hit the map, closed the
+  card, Plan was never found and the origin tap landed on Places > Work "Add": the Louvre was saved as Work and every
+  later run ended in that place's editor. mapsroute taps the row only without a card, searches again when Plan is
+  missing and fails explicitly without a Directions sheet; gate.sh also removes Maps' MapsSync store per boot.
+- **Open**: backboardd native fault in SimulatorHID (guest lr SimulatorHID+0x1130, guest pc garbage, after a
+  vm_deallocate trim) in the last seconds of ram2 boots 3 and 4, while boot-a64 was stopping the prefix. No file
+  watches on that path; not seen while running.
