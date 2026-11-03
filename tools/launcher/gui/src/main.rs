@@ -17,7 +17,7 @@ use x86code_core::{host, instance, logs};
 
 fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([900.0, 600.0]).with_title("x86Code"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([900.0, 600.0]).with_title("x86Code").with_decorations(false),
         ..Default::default()
     };
     eframe::run_native("x86Code", opts, Box::new(|cc| Ok(Box::new(App::new(cc)))))
@@ -403,6 +403,7 @@ impl eframe::App for App {
             }
         }
 
+        title_bar(ctx);
         let (nrun, mb) = self.running_summary();
         egui::SidePanel::left("nav")
             .resizable(false)
@@ -501,4 +502,83 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_secs(6));
         }
     }
+}
+
+/// The window's own title bar (the app is undecorated: tiling compositors such as Hyprland draw none): drag to move,
+/// double-click to maximize, and minimize / maximize / close buttons on the right.
+fn title_bar(ctx: &egui::Context) {
+    const H: f32 = 34.0;
+    egui::TopBottomPanel::top("title-bar")
+        .exact_height(H)
+        .frame(egui::Frame::new().fill(WINDOW).stroke(egui::Stroke::new(1.0_f32, BORDER)))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            // the whole bar drags the window; the buttons, added after, take their clicks first
+            let bar = ui.interact(rect, egui::Id::new("title-bar-drag"), egui::Sense::click_and_drag());
+            let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+            // the window manager must get the move request on the press itself (winit drag_window), not once egui
+            // has seen the pointer travel; and not over the three buttons on the right
+            let buttons_left = rect.right() - 3.0 * 46.0;
+            let press = ctx.input(|i| {
+                i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.interact_pos().is_some_and(|p| rect.contains(p) && p.x < buttons_left)
+            });
+            if bar.double_clicked() && bar.interact_pointer_pos().is_some_and(|p| p.x < buttons_left) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            } else if press {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            ui.painter().text(
+                rect.left_center() + egui::vec2(S4, 0.0),
+                egui::Align2::LEFT_CENTER,
+                "x86Code",
+                egui::FontId::new(T_BODY, medium()),
+                INK_2,
+            );
+            // buttons: close, maximize/restore, minimize (right to left)
+            let bw = 46.0;
+            let mut x = rect.right();
+            // icons are drawn, not font glyphs (the UI font has no ✕ / ❐)
+            #[derive(PartialEq, Clone, Copy)]
+            enum Icon { Close, Max, Restore, Min }
+            let mut button = |icon: Icon, hover: egui::Color32, id: &str| -> bool {
+                x -= bw;
+                let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(bw, rect.height()));
+                let resp = ui.interact(r, egui::Id::new(id), egui::Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(r, 0.0, hover);
+                }
+                let ink = if resp.hovered() && icon == Icon::Close { egui::Color32::WHITE } else { INK_2 };
+                let st = egui::Stroke::new(1.2_f32, ink);
+                let c = r.center();
+                let h = 5.0;
+                let p = ui.painter();
+                match icon {
+                    Icon::Close => {
+                        p.line_segment([c + egui::vec2(-h, -h), c + egui::vec2(h, h)], st);
+                        p.line_segment([c + egui::vec2(-h, h), c + egui::vec2(h, -h)], st);
+                    }
+                    Icon::Max => {
+                        p.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(2.0 * h, 2.0 * h)), 1.0, st, egui::StrokeKind::Inside);
+                    }
+                    Icon::Restore => {
+                        p.rect_stroke(egui::Rect::from_center_size(c + egui::vec2(-1.5, 1.5), egui::vec2(1.6 * h, 1.6 * h)), 1.0, st, egui::StrokeKind::Inside);
+                        p.line_segment([c + egui::vec2(-h + 1.5, -h), c + egui::vec2(h, -h)], st);
+                        p.line_segment([c + egui::vec2(h, -h), c + egui::vec2(h, h - 1.5)], st);
+                    }
+                    Icon::Min => {
+                        p.line_segment([c + egui::vec2(-h, 0.0), c + egui::vec2(h, 0.0)], st);
+                    }
+                }
+                resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+            };
+            if button(Icon::Close, CRIT, "title-close") {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if button(if maximized { Icon::Restore } else { Icon::Max }, HOVER, "title-max") {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            if button(Icon::Min, HOVER, "title-min") {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+        });
 }

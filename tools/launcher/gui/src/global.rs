@@ -30,6 +30,8 @@ pub struct Aot {
     pub filter: String,
     pub only_attention: bool,
     pub message: String,
+    /// pid of the run whose failure `message` reports: a later successful run (ours or another's) clears it
+    pub message_pid: Option<u32>,
     /// "Redo all" asked for confirmation
     pub confirm_redo: bool,
 }
@@ -55,6 +57,7 @@ impl Aot {
             filter: String::new(),
             only_attention: true,
             message: String::new(),
+            message_pid: None,
             confirm_redo: false,
         };
         if a.runtime_root.is_some() {
@@ -117,6 +120,7 @@ impl Aot {
     pub fn tick(&mut self) {
         if let Some(c) = &mut self.child {
             if let Ok(Some(code)) = c.try_wait() {
+                let pid = c.id();
                 self.child = None;
                 if !code.success() {
                     // the builder's own words (x86code-aot: …), not just "failed"
@@ -124,6 +128,10 @@ impl Aot {
                     let last = log.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
                     let last = last.strip_prefix("x86code-aot: ").unwrap_or(last);
                     self.message = if last.is_empty() { format!("The run stopped ({code})") } else { last.to_string() };
+                    self.message_pid = Some(pid);
+                } else {
+                    self.message.clear();
+                    self.message_pid = None;
                 }
                 self.last_poll = Instant::now() - Duration::from_secs(1);
                 self.progress = std::fs::read(self.paths.progress()).ok().and_then(|b| serde_json::from_slice(&b).ok());
@@ -136,6 +144,13 @@ impl Aot {
         if self.last_poll.elapsed() > every {
             self.last_poll = Instant::now();
             self.progress = std::fs::read(self.paths.progress()).ok().and_then(|b| serde_json::from_slice(&b).ok());
+            // a newer run finished cleanly (e.g. started from x86code-aot or the MCP server): the old error is stale
+            if let Some(p) = &self.progress {
+                if p.state == "done" && !self.message.is_empty() && self.message_pid != Some(p.pid) {
+                    self.message.clear();
+                    self.message_pid = None;
+                }
+            }
         }
     }
 
