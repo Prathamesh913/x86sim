@@ -24,8 +24,13 @@ impl Hid {
         for _ in 0..2 {
             if self.sock.is_none() {
                 match UnixStream::connect(&self.path) {
-                    Ok(s) => {
+                    Ok(mut s) => {
                         let _ = s.set_write_timeout(Some(Duration::from_millis(500)));
+                        // a human types with pauses: keep simhid's on-demand keyboard attached for 5 min after this
+                        // client's last key (default 30 s, then the next key pays a re-attach + 1.5 s settle).
+                        // X86CODE_VIEWER_KB_IDLE_S overrides; older simhids log it as an unknown command.
+                        let idle = std::env::var("X86CODE_VIEWER_KB_IDLE_S").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(300);
+                        let _ = s.write_all(format!("kbidle {idle}\n").as_bytes());
                         self.sock = Some(s);
                     }
                     Err(_) => return,

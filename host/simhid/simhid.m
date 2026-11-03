@@ -19,6 +19,9 @@
 //                                  children, finger indexes 1 and 2 with their own identities
 //   key down|up <usage>            keyboard usage (page 7), e.g. 4 = 'a', 0x28 = return
 //   button home|lock|volup|voldown down|up
+//   kbidle <seconds>               (arm64) this client's keyboard idle detach: after its last key the on-demand
+//                                  keyboard stays attached that long (default SIMHID_KB_IDLE_S). Interactive viewers
+//                                  send a long one so a human's typing pauses do not pay the re-attach settle.
 #import <Foundation/Foundation.h>
 typedef int IOReturn;
 typedef uint32_t IOOptionBits;
@@ -139,7 +142,14 @@ static CFTypeRef v_copyProperty(void* t, void* r, CFStringRef key) {
 	CFTypeRef v = CFDictionaryGetValue(s->props, key);
 	return v ? CFRetain(v) : NULL;
 }
-static Boolean v_setProperty(void* t, void* r, CFStringRef key, CFTypeRef value) { return true; }
+static Boolean v_setProperty(void* t, void* r, CFStringRef key, CFTypeRef value) {
+	// keyboard: logged (timestamped) to find when the hardware-keyboard session is up, see the settle in handle_line
+	if (t == &keyboard_svc && g_logf && key) {
+		char k[96] = ""; CFStringGetCString(key, k, sizeof k, kCFStringEncodingUTF8);
+		slog("v_setProperty keyboard %s", k);
+	}
+	return true;
+}
 static void v_setEventCallback(void* t, void* r, void* cb, void* a, void* b) {
 	slog("v_setEventCallback %s cb=%p", t ? ((VService*)t)->name : "(null)", cb);
 }
@@ -188,15 +198,19 @@ static void add_service(IOHIDEventSystemRef_ sys, VService* s) {
 extern void _IOHIDEventSystemRemoveService(IOHIDEventSystemRef_, IOHIDServiceRef);
 extern void _IOHIDServiceTerminate(IOHIDServiceRef);
 static uint64_t kb_last_ns;
+static uint64_t kb_idle_ns;  // idle detach of the client that sent the last key (kbidle, else SIMHID_KB_IDLE_S)
+static uint64_t kb_default_idle_ns;
 static int kb_down;  // keys held (no detach while one is down)
 static uint64_t now_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000000000ull + ts.tv_nsec; }
 static pthread_mutex_t cmd_mu;
 static void* kb_idle_thread(void* arg) {
-	const uint64_t idle = (uint64_t)(intptr_t)arg * 1000000000ull;
 	for (;;) {
 		sleep(2);
 		pthread_mutex_lock(&cmd_mu);
-		if (keyboard_svc.service && hid_system && kb_down <= 0 && now_ns() - kb_last_ns > idle) {
+		// a key-down whose key-up never came (viewer lost focus with a key held) must not keep the keyboard attached
+		// forever (+90 ms per tap): held keys count only for 10 minutes after the last key
+		const uint64_t idle = kb_idle_ns ? kb_idle_ns : kb_default_idle_ns, since = now_ns() - kb_last_ns;
+		if (keyboard_svc.service && hid_system && kb_idle_ns != ~0ull && (kb_down <= 0 || since > 600000000000ull) && since > idle) {
 			IOHIDServiceRef sv = keyboard_svc.service;
 			keyboard_svc.service = NULL;
 			_IOHIDEventSystemRemoveService(hid_system, sv);
@@ -288,7 +302,9 @@ static void send_key(VService* s, uint32_t page, uint32_t usage, bool down) {
 	dispatch_event(s, IOHIDEventCreateKeyboardEvent(kCFAllocatorDefault, mach_absolute_time(), page, usage, down, 0));
 }
 
-static void handle_line(char* line) {
+typedef struct { int fd; uint64_t kb_idle_ns; } Client;  // kb_idle_ns 0: default
+
+static void handle_line(char* line, Client* cl) {
 	char a[16] = "", b[16] = "";
 	double x = 0, y = 0;
 	double x2 = 0, y2 = 0;
@@ -312,14 +328,31 @@ static void handle_line(char* line) {
 		if (!keyboard_svc.service && hid_system) {
 			add_service(hid_system, &keyboard_svc);
 			const char* ms = getenv("SIMHID_KB_SETTLE_MS");
+			// The settle no longer holds cmd_mu (the caller's lock is dropped around it): touches and keys of other
+			// clients, and the idle thread, are not frozen for 1.5 s. This client's later lines still wait (in order).
+			// kb_last_ns is set first so the idle thread cannot detach the service during the settle.
+			kb_last_ns = now_ns(); kb_down++;
+			pthread_mutex_unlock(&cmd_mu);
 			usleep((ms && *ms ? atoi(ms) : 1500) * 1000);
+			pthread_mutex_lock(&cmd_mu);
+			kb_down--;
 			slog("keyboard settled");
 		}
 		kb_last_ns = now_ns();
+		kb_idle_ns = cl ? cl->kb_idle_ns : 0;
 		kb_down += !strcmp(a, "down") ? 1 : -1;
 		if (kb_down < 0) kb_down = 0;
 #endif
 		send_key(&keyboard_svc, 7, usage, !strcmp(a, "down"));
+		return;
+	}
+	int secs;
+	if (sscanf(line, "kbidle %d", &secs) == 1) {
+#if __arm64__
+		// <= 0: never detach after this client's keys (like SIMHID_KB_IDLE_S=0)
+		if (cl) cl->kb_idle_ns = secs > 0 ? (uint64_t)secs * 1000000000ull : ~0ull;
+		slog("client fd=%d kbidle %d", cl ? cl->fd : -1, secs);
+#endif
 		return;
 	}
 	if (sscanf(line, "button %15s %15s", a, b) == 2) {
@@ -338,6 +371,7 @@ static void handle_line(char* line) {
 static pthread_mutex_t cmd_mu = PTHREAD_MUTEX_INITIALIZER;
 static void* client_thread(void* arg) {
 	int fd = (int)(intptr_t)arg;
+	Client cl = { fd, 0 };
 	slog("client_thread fd=%d", fd);
 	char buf[4096];
 	size_t n = 0;
@@ -352,7 +386,7 @@ static void* client_thread(void* arg) {
 			*nl = 0;
 			if (nl > start && nl[-1] == '\r') nl[-1] = 0;
 			pthread_mutex_lock(&cmd_mu);
-			handle_line(start);
+			handle_line(start, &cl);
 			pthread_mutex_unlock(&cmd_mu);
 			start = nl + 1;
 		}
@@ -426,9 +460,11 @@ static void* listen_thread(void* arg) {
 	else {  // Speed 34: idle detach of an on-demand keyboard (SIMHID_KEYBOARD=1 keeps it attached)
 		const char* is = getenv("SIMHID_KB_IDLE_S");
 		const int idle = is && *is ? atoi(is) : 30;
-		if (idle > 0) {
+		// the thread also runs with SIMHID_KB_IDLE_S=0 (default "never"), so a client's kbidle still applies
+		kb_default_idle_ns = idle > 0 ? (uint64_t)idle * 1000000000ull : ~0ull;
+		{
 			pthread_t kt;
-			pthread_create(&kt, NULL, kb_idle_thread, (void*)(intptr_t)idle);
+			pthread_create(&kt, NULL, kb_idle_thread, NULL);
 			pthread_detach(kt);
 		}
 	}
