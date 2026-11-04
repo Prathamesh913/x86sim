@@ -832,6 +832,26 @@ static void cow_diff_once() {
     close(pm);
     close(fd);
 }
+// x86Code RAM 6: the fast dispatch table (a64:fastdispatch, 1-4 MB per process) is a cache of block lookups hashed by
+// crc32 over the whole table, so a process that ran a few thousand blocks has every page of it touched (36 MB over 38
+// processes at home). An idle process drops it (same as ClearFastDispatchTable: empty = zero bytes; entries are read
+// as one 16-byte access in shared mode, so a reader sees the entry or a miss). Under the shared emitter lock, which
+// GetBlock's fill holds. The next wakeup refills what it runs. X86CODE_A64_FDTRIM=0: off.
+static void fastdispatch_trim_locked(void *) {
+    if (FILE *f = fopen("/proc/self/maps", "r")) {
+        char l[512];
+        while (fgets(l, sizeof l, f)) {
+            unsigned long a, b;
+            if (!strstr(l, "[anon:a64:fastdispatch]") || sscanf(l, "%lx-%lx", &a, &b) != 2) continue;
+            madvise((void *)a, b - a, MADV_DONTNEED);
+        }
+        fclose(f);
+    }
+}
+static void fastdispatch_trim() {
+    static const bool on = !(getenv("X86CODE_A64_FDTRIM") && atoi(getenv("X86CODE_A64_FDTRIM")) == 0);
+    if (on) with_shared_code_lock(fastdispatch_trim_locked, nullptr);
+}
 static void start_file_trim() {
     if (const char *c = getenv("X86CODE_A64_COWDIFF"); c && atoi(c) > 0) {
         sigset_t all, old;
@@ -857,8 +877,10 @@ static void start_file_trim() {
             sleep(secs);
             const double c1 = cpu(), busy = (c1 - c0) / (secs * 10.0);  // percent of one CPU
             c0 = c1;
+            if (busy >= 3.0) continue;
+            fastdispatch_trim();
             const long r = rss_file_kb();
-            if (busy >= 3.0 || r < 0 || r - base < 2048) continue;
+            if (r < 0 || r - base < 2048) continue;
             timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
             file_trim_once();
