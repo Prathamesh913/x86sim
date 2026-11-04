@@ -2519,3 +2519,47 @@ UIKitCore 23.6k, QuartzCore 14k, SpringBoardHome 13k) and the slab is full (1212
 removes most of the 15 MB codecache and the image->JIT links. (2) Pre-link image->image static links in the .map (the
 layout fixes every target address) so runtime linking writes identical bytes and skips the store; needs a check that
 lazy registration's validation is not bypassed by a linked jump into an unregistered block.
+
+## RAM 4: daemons at home (2026-11-03, ram2)
+
+Own phone var/device-a64-ram2. Per-process PSS / Private_Dirty (memcat.py, A64_DPREFIX = ram2's prefix: only this phone).
+Totals moved with the other phones' state during the day (one run had swap), so the same-day before/after is given per
+process; the two home totals were taken 10 min apart with the same phones up.
+
+| point | before (HEAD jetsam) | after |
+|---|---|---|
+| home 5 min, total | 1362 MB PSS / 912 PD, 45 procs | 1226 / 808, 46 procs (a transient mobileassetd 37) |
+| home 5 min | Spotlight 207/108, assistantd 105/44, siriactionsd 84/32, InputUI 61/28 | InputUI 51/27 only |
+| Settings open | + Spotlight 193, assistantd 101, siriactionsd 80 | assistantd 69 (keyboard/Settings use it), no Spotlight/siriactionsd |
+| Maps left at home 2 min | Maps 566/259 still resident (role UI_FOCAL, not suspended) | Maps reclaimed ~90-100 s after home |
+
+- **Who keeps them resident**:
+  - Spotlight: SpringBoard launches it at boot in the background (RunningBoard: role NON_UI, no visibility, BKS state 4).
+    The home screen's Search pill is SpringBoard's own drawing (screen identical with Spotlight killed). The pull-down
+    relaunches it: search up and "wifi" typed whole ~3 s after the swipe. After a search it keeps its
+    SPUISearchViewSceneIdentifier scene visible at home until RunningBoard suspends it.
+  - assistantd: no RunAtLoad/KeepAlive; no EnablePressuredExit (dirty-tracked, clean), started by mach lookups (keyboard
+    dictation availability, com.apple.assistant.settings) and ~40 notifyd/distnoted launch events. A ~5 min cycle at home
+    (mobileassetd relaunched -> MobileAsset "cached-metadata-updated" notifications) starts assistantd / corespeechd /
+    localspeechrecognition again; they are reclaimed again (not chased further).
+  - siriactionsd: clean at boot (reclaimed at 30 s); relaunched later by one of its launch events (LaunchServices /
+    biome / notify) it stays dirty (flags 7) with ~0 CPU: an open transaction nobody ends. Its 4 plist activities are
+    real (in VoiceShortcuts), unlike searchd's.
+  - InputUI: SpringBoard's keyboard angel; killed, SpringBoard relaunches it within seconds: nothing to gain, left alone.
+- **Fixes, cli/libexec/jetsam.py**: Spotlight is a "UI service" (UISVC): reclaimed after X86SIM_JETSAM_UISVC s (60) with
+  a positive background signal (not visible / NON_UI / suspended), kept while its scene is visible, never counted as the
+  foreground app (would hold every daemon at the 10 min grace). assistantd joins DEMAND. X86SIM_JETSAM_DIRTY
+  (siriactionsd): reclaimed even when dirty after X86SIM_JETSAM_DIRTY_IDLE s (300) CPU-idle, as a device's jetsam takes
+  dirty background daemons under pressure.
+- **App at home (task 2)**: role, BKSApplicationStateMonitor (state 8, AppIsFrontmost = 1), SBS frontmost and the
+  env-less frontboard.visibility endowment all stay "foreground" for an app left at home. What changes: FrontBoard's
+  visibility endowment for the app's scene (env `UIScene:.../FBSceneManager:sceneID:com.apple.Maps-...`) is dropped.
+  openurl now reports that count per pid ("pid <pid> <visible> <task> <scenes>"; "dump <pid> <bid>" lines print the
+  full RBS + BKS state); jetsam.py counts "no visible scene" as background once the process is 20 s old (a launching app
+  has no scene yet), "scene visible" as foreground. All earlier vetoes stay (fresh answer before the kill, input
+  within 60 s, visible scene). Also seen: whether RunningBoard suspends an app at home varies: with Spotlight alive (a
+  search done) Maps stayed un-suspended; once Spotlight was gone RunningBoard suspended Maps within ~10 s.
+- **Verified on ram2**: Maps foreground 150 s with no input: kept (scenes 1). Maps at home with Spotlight alive:
+  "pid 1 4 0" (visible, running, no scene), reclaimed; Spotlight killed then pull-down search + typing OK (no crash);
+  gates.sh 2 (r4g1, r4g2): 0 failed, wifi typed whole both, mapsroute OK (r4g2's first Siri press missed, the second
+  caught it: known).

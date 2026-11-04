@@ -28,12 +28,18 @@ Kills (SIGKILL, as jetsam; launchd / RunningBoard relaunch what is needed on the
     app in the foreground past 30 s was taken for a background one and killed 90 s later, Maps in the middle of the
     gate's route test. Maps at the home screen keeps visibility and role UI_FOCAL here, so it is reclaimed only once
     RunningBoard suspends it, i.e. after another app was opened.)
+    (RAM 4: openurl also reports FrontBoard's per-scene visibility endowments; an app with none, while it keeps the
+    env-less visibility endowment, is one left at the home screen, counted once it is SCENE_SETTLE s old.)
+  - Spotlight (UISVC) when RunningBoard shows it nothing (background since boot, or after a search) after
+    X86SIM_JETSAM_UISVC s (default 60); never "the foreground app"; SpringBoard relaunches it on the pull-down.
   - an idle-exit daemon (tracked, allows idle exit, clean) that has been clean and used no CPU for X86SIM_JETSAM_IDLE s
     (default 30); the daemons every app launch talks to (HOT, X86SIM_JETSAM_HOT) after X86SIM_JETSAM_IDLE_HOT s
     (default 600), so app opens don't pay their relaunch. While an app is in the foreground every daemon gets the HOT
     time (the app's own daemons, e.g. geod under Maps, stay warm).
   - X86SIM_JETSAM_DEMAND (default below): on-demand daemons without EnablePressuredExit that a basic phone only needs
     for a feature in use (Siri's assets, Wallet's passd): as idle-exit daemons once clean (tracked, not dirty).
+    assistantd too (RAM 4: dictation / Siri; the keyboard and Siri look it up and launchd starts it).
+  - X86SIM_JETSAM_DIRTY (default siriactionsd): such daemons also when dirty, after X86SIM_JETSAM_DIRTY_IDLE s CPU-idle.
 Something relaunched within RELAUNCH s of its kill (a launch event, or a client that needed it) doubles its grace
 period each time, up to X86SIM_JETSAM_MAX s (default 1800): it is never kept forever, and never killed in a loop.
 X86SIM_JETSAM=0 disables it; X86SIM_JETSAM_DAEMONS=0 leaves daemons alone (extensions and apps only).
@@ -60,7 +66,12 @@ HOT = set(os.environ.get("X86SIM_JETSAM_HOT", "containermanagerd,containermanage
 DEMAND = set(os.environ.get("X86SIM_JETSAM_DEMAND", "passd,mobileassetd,assistant_cdmd,ContextService,"
                             "STExtractionService,localspeechrecognition,com.apple.datamigrator,"
                             "com.apple.MobileAsset.DownloadService.Builtin,UserFontManager,siriactionsd,"
-                            "assetsubscriptiond,AppIntentsLiveEntityService").split(",")) - {""}
+                            "assetsubscriptiond,AppIntentsLiveEntityService,assistantd").split(",")) - {""}
+# RAM 4: on-demand daemons that stay dirty (an XPC transaction nobody ends) with nothing to do: reclaimed once CPU-idle for
+# X86SIM_JETSAM_DIRTY_IDLE s anyway, as a device's jetsam takes dirty background daemons under pressure. siriactionsd: a
+# relaunch by a launch event (LaunchServices / Biome / defaults notifications) leaves it dirty for good (~80 MB).
+DIRTY_OK = set(os.environ.get("X86SIM_JETSAM_DIRTY", "siriactionsd").split(",")) - {""}
+DIRTY_IDLE = float(os.environ.get("X86SIM_JETSAM_DIRTY_IDLE", "300"))
 POLL = 2.0
 # RAM 2: RunningBoard's and SpringBoard's view of the apps, from com.x86code.openurl (host/openurl frontmost()): the
 # request lists the apps' Darling pids, the answer has per pid "pid <pid> <visible> <task state>", "layout <n> <ids>"
@@ -81,7 +92,13 @@ BOOT = time.time() - float(open("/proc/uptime").read().split()[0])
 RELAUNCH = 60.0
 # system apps and UI services (angels: the keyboard, Siri's UI) RunningBoard may background: never reclaimed here, and
 # never "the app in the foreground"
-NEVER = ("SpringBoard.app/", "PosterBoard.app/", "Spotlight.app/", "InputUI.app/", "Campo.app/")
+NEVER = ("SpringBoard.app/", "PosterBoard.app/", "InputUI.app/", "Campo.app/")
+# RAM 4: UI services reclaimed like a background app once RunningBoard says they show nothing (no visible scene, not
+# visible / NON_UI), after X86SIM_JETSAM_UISVC s, and never counted as "the app in the foreground". Spotlight: SpringBoard
+# starts it at boot in the background (role NON_UI, ~170 MB) and draws the home screen's Search pill itself; a pull-down
+# relaunches it (search up ~3 s after the swipe, typing intact). As on a device, where it stays suspended / jetsammable.
+UISVC = ("Spotlight.app/",)
+UISVC_GRACE = float(os.environ.get("X86SIM_JETSAM_UISVC", "60"))
 _kills = {}       # executable -> quick relaunches so far (each doubles its grace period)
 _killed_at = {}   # executable -> time of its last kill
 _seen = {}        # (dpid, start) -> {"bg": since, "clean": since, "cpu": [(t, cpu s)]}
@@ -227,7 +244,7 @@ def front_state(newer_than=0.0):
             if f[:1] == ["layout"] and int(f[1]) >= 0:
                 out["layout"] = set(f[2:])
             elif f[:1] == ["pid"]:
-                out["pids"][int(f[1])] = (int(f[2]), int(f[3]))
+                out["pids"][int(f[1])] = (int(f[2]), int(f[3]), int(f[4]) if len(f) > 4 else -1)
         except (IndexError, ValueError):
             pass
     return out
@@ -244,7 +261,10 @@ def wait_front(pids, timeout=4.0):
     return None
 
 
-def app_view(exe, dpid, sm, jm, fs):
+SCENE_SETTLE = 20.0   # a launching app has no scene yet: the scene signal counts once the process is this old
+
+
+def app_view(exe, dpid, sm, jm, fs, age=1e9):
     """(background, foreground) evidence for an app: positive signals only. foreground wins over background."""
     bg = jm[1][3] if jm and len(jm[1]) > 3 else -1
     role = jm[1][4] if jm and len(jm[1]) > 4 else -1
@@ -257,8 +277,16 @@ def app_view(exe, dpid, sm, jm, fs):
         back.append("role %d" % role)
     if fs is not None:
         bid = bundle_id(exe)
-        vis, task = fs["pids"].get(dpid, (-1, -1))
-        if vis == 1:
+        vis, task, scenes = fs["pids"].get(dpid, (-1, -1, -1))
+        # RAM 4: FrontBoard's per-scene visibility endowment is the one signal that tells an app left at the home
+        # screen (it keeps the env-less visibility endowment, role UI_FOCAL, BKS state foreground) from one on screen
+        if scenes > 0:
+            fore.append("scene visible")
+        elif scenes == 0 and vis == 1 and age > SCENE_SETTLE:
+            back.append("no visible scene")
+        elif scenes == 0 and vis == 1:
+            fore.append("launching")
+        elif vis == 1:
             fore.append("visible")
         elif vis == 0:
             back.append("not visible")
@@ -325,19 +353,26 @@ def sweep(verbose=False, status=False):
     fs = front_state()
     inp = last_input()
     for dpid, lpid, exe, st, sm, jm, idle in app_rows:
-        back, fore = app_view(exe, dpid, sm, jm, fs)
+        back, fore = app_view(exe, dpid, sm, jm, fs, now - procs[dpid][2])
         if back and not fore:
             since = st.setdefault("bg", sm[0] if sm else now)
             st["why"] = ", ".join(back)
+            if any(k in exe for k in UISVC):
+                st["uisvc"] = True
             apps.append((since, lpid, dpid, exe, st))
+            continue
+        if any(k in exe for k in UISVC):
+            st.pop("bg", None)
+            st["fg_seen"] = now
             continue
         st.pop("bg", None)
         st["fg_seen"] = now
         fg_app = True
-    apps.sort(key=lambda a: a[0], reverse=True)   # most recently backgrounded first
+    # most recently backgrounded first; UI services last (their own grace, they never take an app's longer one)
+    apps.sort(key=lambda a: (not a[4].get("uisvc"), a[0]), reverse=True)
     due = []
     for i, (since, lpid, dpid, exe, st) in enumerate(apps):
-        g = grace(exe, LAST if i < KEEP else APP)
+        g = grace(exe, UISVC_GRACE if st.get("uisvc") else LAST if i < KEEP else APP)
         # the user touched or typed while this app was in the foreground: not reclaimed for INPUT_KEEP s
         used = inp and now - inp < INPUT_KEEP and st.get("fg_seen", 0) >= inp - 2 * POLL
         if now - since > g and not used:
@@ -353,7 +388,7 @@ def sweep(verbose=False, status=False):
             sm2, jm2 = susp2.get(dpid), js2.get(dpid)
             sm2 = sm2 if sm2 is not None and sm2[0] + 1 >= _start_of(lpid) else None
             jm2 = jm2 if jm2 is not None and jm2[0] + 1 >= _start_of(lpid) else None
-            back, fore = app_view(exe, dpid, sm2, jm2, fresh if fresh is not None else fs)
+            back, fore = app_view(exe, dpid, sm2, jm2, fresh if fresh is not None else fs, time.time() - _start_of(lpid))
             if fore or not back:
                 print("%s jetsam: kept %s (pid %d): %s" % (time.strftime("%H:%M:%S"), name_of(exe), dpid,
                       "foreground (%s)" % ", ".join(fore) if fore else "no background signal any more"), flush=True)
@@ -370,13 +405,13 @@ def sweep(verbose=False, status=False):
         dirty, name = jm[1][1], name_of(exe)
         if not (dirty & 1) or not ((dirty & 2) or name in DEMAND):
             continue
-        if (dirty & 4) or not idle:
+        if not idle or ((dirty & 4) and name not in DIRTY_OK):
             st.pop("clean", None)
             continue
         since = max(jm[0], st.setdefault("clean", now))   # clean since its last dirty flip and since we saw it idle
-        g = grace(exe, IDLE_HOT if (name in HOT or fg_app) else IDLE)
+        g = grace(exe, max(DIRTY_IDLE, IDLE_HOT if fg_app else 0) if (dirty & 4) else IDLE_HOT if (name in HOT or fg_app) else IDLE)
         if now - since > g:
-            killed.append((lpid, dpid, exe, "daemon clean and idle %.0f s" % (now - since)))
+            killed.append((lpid, dpid, exe, "daemon %s and idle %.0f s" % ("dirty" if dirty & 4 else "clean", now - since)))
         elif status:
             print("  daemon %-40s %5.0f s of %.0f" % (name, now - since, g))
     if status:

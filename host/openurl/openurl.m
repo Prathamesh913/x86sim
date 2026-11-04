@@ -387,7 +387,31 @@ static volatile BOOL wake;
 //   (An FBSDisplayLayoutMonitor was tried too: it delivered one nil layout and nothing after it; not kept.)
 //   pid <pid> <visible> <task state>   per requested pid: RunningBoard's state (RBSProcessHandle currentState):
 //                 visible = 1 with the com.apple.frontboard.visibility endowment (FrontBoard shows the process),
-//                 0 without, -1 unknown; task state RBSTaskState (-1 unknown).
+//                 0 without, -1 unknown; task state RBSTaskState (-1 unknown); scenes (RAM 4): visibility
+//                 endowments of a UIScene FrontBoard shows (0 = left at the home screen), -1 unknown.
+//   "dump <pid> <bundle id>" lines (diagnosis): RunningBoard's full state and BKSApplicationStateMonitor's.
+// diagnosis: "dump <pid> <bundle id>" in the request: RunningBoard's full state and BackBoard's application state
+static void dumpState(NSString* arg, NSMutableString* o) {
+	NSArray* f = [arg componentsSeparatedByString:@" "];
+	int pid = [f[0] intValue];
+	NSString* bid = f.count > 1 ? f[1] : nil;
+	dlopen("/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices", RTLD_NOW);
+	Class idc = NSClassFromString(@"RBSProcessIdentifier"), hc = NSClassFromString(@"RBSProcessHandle");
+	id ident = MSG(id, id, SEL, int)(idc, sel_getUid("identifierWithPid:"), pid);
+	id h = ident ? MSG(id, id, SEL, id, id*)(hc, sel_getUid("handleForIdentifier:error:"), ident, NULL) : nil;
+	id st = h ? MSG(id, id, SEL)(h, sel_getUid("currentState")) : nil;
+	[o appendFormat:@"dump %d state %@\n", pid, [st debugDescription]];
+	Class mc = NSClassFromString(@"BKSApplicationStateMonitor");
+	if (mc && bid) {
+		static id mon;
+		if (!mon) mon = MSG(id, id, SEL)(MSG(id, id, SEL)(mc, sel_getUid("alloc")), sel_getUid("init"));
+		unsigned st2 = MSG(unsigned, id, SEL, id)(mon, sel_getUid("applicationStateForApplication:"), bid);
+		id info = [mon respondsToSelector:sel_getUid("applicationInfoForApplication:")] ?
+			MSG(id, id, SEL, id)(mon, sel_getUid("applicationInfoForApplication:"), bid) : nil;
+		[o appendFormat:@"dump %d bks %u %@\n", pid, st2, info];
+	}
+}
+
 static void frontmost(NSString* home, NSString* req) {
 	static NSString* (*copyFront)(void);
 	static BOOL looked;
@@ -402,9 +426,10 @@ static void frontmost(NSString* home, NSString* req) {
 	NSMutableString* o = [NSMutableString stringWithFormat:@"%@\n", bid ?: (copyFront ? @"" : @"?")];
 	Class idc = NSClassFromString(@"RBSProcessIdentifier"), hc = NSClassFromString(@"RBSProcessHandle");
 	for (NSString* line in [req componentsSeparatedByString:@"\n"]) {
+		if ([line hasPrefix:@"dump "]) { dumpState([line substringFromIndex:5], o); continue; }
 		int pid = line.intValue;
 		if (pid <= 0) continue;
-		long vis = -1, task = -1;
+		long vis = -1, task = -1, scenes = -1;
 		id ident = idc ? MSG(id, id, SEL, int)(idc, sel_getUid("identifierWithPid:"), pid) : nil;
 		id h = ident ? MSG(id, id, SEL, id, id*)(hc, sel_getUid("handleForIdentifier:error:"), ident, NULL) : nil;
 		id st = h ? MSG(id, id, SEL)(h, sel_getUid("currentState")) : nil;
@@ -412,8 +437,18 @@ static void frontmost(NSString* home, NSString* req) {
 			NSSet* en = MSG(id, id, SEL)(st, sel_getUid("endowmentNamespaces"));
 			vis = [en containsObject:@"com.apple.frontboard.visibility"] ? 1 : 0;
 			task = (long)MSG(unsigned char, id, SEL)(st, sel_getUid("taskState"));
+			// RAM 4: the visibility endowments FrontBoard gives per UIScene it shows (env "UIScene:<workspace>/<scene id>").
+			// An app left at the home screen keeps the env-less visibility endowment, its role, BKS state 8 and
+			// "frontmost", but loses its scene's endowment: the one signal here that it went off screen.
+			scenes = 0;
+			for (id info in MSG(id, id, SEL)(st, sel_getUid("endowmentInfos"))) {
+				NSString* ns = [info respondsToSelector:sel_getUid("endowmentNamespace")] ? MSG(id, id, SEL)(info, sel_getUid("endowmentNamespace")) : nil;
+				NSString* env = [info respondsToSelector:sel_getUid("environment")] ? MSG(id, id, SEL)(info, sel_getUid("environment")) : nil;
+				if ([ns isEqual:@"com.apple.frontboard.visibility"] && [env isKindOfClass:NSString.class] && [env hasPrefix:@"UIScene:"])
+					scenes++;
+			}
 		}
-		[o appendFormat:@"pid %d %ld %ld\n", pid, vis, task];
+		[o appendFormat:@"pid %d %ld %ld %ld\n", pid, vis, task, scenes];
 	}
 	NSString* out = [home stringByAppendingString:@"/tmp/x86code-frontmost"];
 	NSString* tmp = [out stringByAppendingString:@".new"];
