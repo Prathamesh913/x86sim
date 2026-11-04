@@ -15,8 +15,8 @@
   ],
   [
    "Memory, one sim (PSS)",
-   "2.15 GB (37 procs)",
-   "anon without the shared mtlvk 674-680 -> 597-604 MB (Speed 11); mtlvk 425-430 MB, of which an idle device with one connection is 262 MB; goal <1 GB not met"
+   "2.54 GB at home, 47 procs (one phone alone, 5 min after boot)",
+   "RAM status 2026-11-03 clean boot: 2.62 GB at 1 min, 3.24 GB Settings open, 3.96 GB Maps open, 3.60 GB Maps in background; a second phone adds ~1.5 GB (shared mtlvk and shared pages); earlier 2.15 GB / 948 MB figures were PSS split with other running phones; goal <1 GB not met"
   ],
   [
    "Process crashes per cold boot + Settings",
@@ -50,8 +50,8 @@
   ],
   [
    "Memory",
-   "~3.56 GB",
-   "goal under 1 GB per app; JIT metadata is ~46%"
+   "~3.6-4.0 GB with Maps open",
+   "RAM status 2026-11-03; goal under 1 GB per phone"
   ],
   [
    "Rendering",

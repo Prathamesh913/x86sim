@@ -2418,3 +2418,73 @@ out (r3i2) came from the gate itself, not from the JIT:
   the background). Settings is legitimately killed and comes back cold, and the checks accept either.
 Verification (new libarm64jit 15:51): gates.sh 3 r3p and r3q both clean (6 boots, 0 failed, no retries). mapsroute 3/3
 (mr1-3). Earlier r3j1-3 were also clean.
+
+## Leftover containers and the r3k3 boot hang (2026-11-03)
+
+- **Leftovers found** (17:20): containers of a64prefix-verify (12:31), metal-prefix (12:52, launchd only), metal-prefix2
+  (12:57), ram2's 13:26 container (its launchd, daemons and 8 zombie apps, darlingserver gone), the mtlvk of ramclone1
+  (14:53, no client), two mdnsresponder.py of var/run-a64 from Nov 2. All ended by hand.
+- **Why stop missed them**: `darling shutdown` (setuid launcher) acts only while `.init.pid` names a live darlingserver,
+  and SIGKILLs it plus one child. Once a darlingserver had died, its launchd (pid 1 of the container's pid namespace,
+  comm `mldr`) was reparented to the session subreaper and nothing named it any more; the next boot then mounted the
+  same overlay upper/workdir a second time (kernel: "upperdir is in-use ... undefined behavior" at 14:49 and 15:52, the
+  ram2 reboots). The `timeout ... darling shell` holder that links mDNSResponder names `$ST/`, not `$D/`, so the
+  launcher sweep never matched it, and its `sudo kill` fails without sudo (the setuid launcher has real uid 0; it exits
+  with its container). The verify/metal-prefix ones were ad-hoc test prefixes nobody stopped. mdns.pid was overwritten
+  by a later boot. Also: `x86code-aot sim stop var/device-a64-ramN` ignored the positional path and stopped the main
+  phone (now an error; the phone is `--device DIR`), and a stopped phone's 90 s AOT-status / prefetch subshells
+  (comm boot-a64.sh) kept the launcher showing it "starting".
+- **Fix** (boot-a64.sh stop_prefix): kill the holders by `$D/`/`$ST/`; darling shutdown; then SIGKILL every pid-ns init
+  (`mldr`, NSpid 1) whose mountinfo has the overlay at exactly `$DPREFIX`, and that prefix's darlingserver, until none
+  is left; end the device's leftover boot-a64.sh helper subshells and stale mdnsresponders. `A64_STOP_ONLY=1` (CLI)
+  now also ends this phone's mtlvk when no other darlingserver names its socket; the launcher passes
+  `A64_KEEP_MTLVK=1` (restart keeps it, its stop runs the shared-mtlvk logic as before).
+- **Verify**: ram4, 16 cycles alternating launcher start / launcher restart / CLI boot and launcher / CLI stop, with
+  ram2+ram3 running: 16/16 reached home in 14-18 s; up: 1 darlingserver, 1 ns-init, 63-64 procs, 1 holder; after
+  every stop: 0/0/0/0 and no mtlvk of ram4 (launcher boots shared another phone's mtlvk, which stayed with its
+  phone). ram2/ram3/ram4 stops via the launcher afterwards: 0 container processes left.
+- **r3k3 hang** (lsim.out empty, no spawns): no overlay double-mount warning at 15:23, so not the leftover overlay. Not
+  reproduced: 18 boots of ram4 (2 before the script fix + 16) all started launchd_sim (one first-boot cycle sat at
+  "starting" for >5 min with launchd_sim up — a different symptom: the stress script had pointed SIMFB_RING at a
+  self-link in /dev/shm, fixed). Likely mechanism if it recurs: both `darling shell` calls in boot-inner.sh are wrapped
+  in `timeout`, which cannot signal the setuid launcher (real uid 0), so a shell that never gets shellspawn hangs the
+  boot for good instead of failing in 30 s.
+
+## Clone repairs (2026-11-03): ram2, ram3
+
+Stopped, `device-repath.py var/device-a64-ramN var/device-a64`, booted. No file under their data/ names
+var/device-a64/ any more; Settings, Maps and Safari open on both (Safari renders pages), and their HOME is in the clone
+(Preferences: .../device-a64-ramN/data, Maps/Safari: .../device-a64-ramN/data/Containers/Data/Application/...).
+
+## RAM status (2026-11-03)
+
+Clean boot, only the main phone (own mtlvk; defaults: AOT hot, codegen 0x1c, jetsam on, widgets/wallpaper off).
+memcat.py (PSS, Private_Dirty) and the launcher's number. Boot to home 21 s; cold Settings 4.3 s content (warm 0.73),
+cold Maps 2.8 s (warm 0.67) (openm.sh, frame-timed).
+
+| point | PSS MB | Private_Dirty MB | procs | launcher MB |
+|---|---|---|---|---|
+| home, 1 min after boot | 2617 | 1090 | 50 | 2597 |
+| home, 5 min (idle daemons gone) | 2536 | 1035 | 47 | 2518 |
+| Settings open | 3244 | 1533 | 54 | 3226 |
+| Maps open | 3964 | 1967 | 60 | 3990 |
+| Maps in background 2 min | 3604 | 1725 | 59 | 3586 |
+| home, 10 min (Maps still resident) | 3604 | 1725 | 59 | 3586 |
+| + second phone (ram2, shared mtlvk), home 5 min | main 2688 + ram2 1498 = 4186 | 1499 + 869 | 51 + 45 | 2675 + 1484 |
+
+Per extra phone ~1.5 GB PSS. Note PSS splits shared pages (dyld cache, AOT image) between phones: the earlier
+2.15 GB (progress.json) and ram3's 948 MB / 31 procs were measured with other phones up and so understate one phone
+alone; the single-phone home number is ~2.5 GB. Maps was not reclaimed after 2 min in the background (627 MB).
+
+Categories at home (5 min): runtime-files 874 (dyld cache file pages, inflated by 64 KB fault-around), aot.map+idx 588,
+anon/rw-p 414, mtlvk total 250, heap 123, files 105, a64:* JIT tables 172. Processes: SpringBoard 685, Spotlight 300,
+mtlvk 250, assistantd 163, backboardd 144, siriactionsd 111, InputUI 93, iconservicesagent 62.
+
+Between us and <1 GB, ranked:
+1. Clean file-backed PSS (runtime-files + AOT image, ~1.46 GB): fault-around maps ~15x the touched pages; shared
+   between phones but fully charged to a lone phone. Smaller fault-around / MADV_RANDOM on the cache and image.
+2. SpringBoard 685 MB (≈450 MB of it shared file pages).
+3. Resident-at-boot daemons not needed at home: Spotlight 300, assistantd 163, siriactionsd 111, InputUI 93 (~670 MB).
+4. mtlvk 250 MB (NVIDIA libs/dev 120; shared across phones).
+5. JIT tables (a64:fastdispatch/slmap/lfmap/meta) 172 MB: ~4 MB fixed per process x 47.
+6. Background apps not reclaimed (Maps 627 MB after 2 min) — jetsam only acts under pressure.

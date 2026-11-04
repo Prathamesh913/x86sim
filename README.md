@@ -22,7 +22,7 @@ the home screen, apps like Settings, and touch input, rendered on your own graph
 | ✅ Touch and gestures | click and drag in the viewer window |
 | ✅ Apps open and scroll | Settings scrolls at ~60 fps; an app opens in ~3.5–4 s cold, under 1 s warm |
 | ✅ Quiet when idle | about 1% of one CPU core |
-| 🚧 Memory | about 1.8–2.6 GB at the home screen (idle daemons exit, background apps are reclaimed); the goal is under 1 GB |
+| 🚧 Memory | about 2.5 GB at the home screen for one phone alone (~1.5 GB more per extra phone), ~4 GB with Maps open; the goal is under 1 GB |
 | 🚧 Off by default | wallpaper and widgets (they cost ~1 GB); turn them on per phone in the launcher |
 
 ## How it works

@@ -49,7 +49,7 @@ a64_mtlvk_users() {
 	for p in /proc/[0-9]*; do
 		[ "$(cat "$p/comm" 2>/dev/null)" = darlingserver ] || continue
 		tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "darlingserver $DPREFIX " && continue
-		tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -qxF "$want" && n=$((n+1))
+		tr '\0' '\n' 2>/dev/null < "$p/environ" | grep -qxF "$want" && n=$((n+1))
 	done
 	echo $n
 }
@@ -374,6 +374,16 @@ stop_prefix() {
 		# the setuid darling launchers (real uid 0) refuse the user's signal; they exit with their container
 		x86sim_sudo -n kill -9 $pids 2>/dev/null </dev/null
 	fi
+	# an earlier boot's helper subshells (the 90 s AOT status check, the 60 s prefetch snapshot) outlived the stop,
+	# and the launcher showed the phone "starting" while one ran: end those of this device (not this script's)
+	for d in /proc/[0-9]*; do
+		p=${d#/proc/}
+		[ "$p" = $$ ] && continue
+		[ "$(cat "$d/comm" 2>/dev/null)" = boot-a64.sh ] || continue
+		tr '\0' '\n' 2>/dev/null < "$d/environ" | grep -qxF "A64_DEVICE=$D" || continue
+		tr '\0' '\n' 2>/dev/null < "$d/environ" | grep -qx 'A64_STOP_ONLY=1' && continue
+		pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null
+	done
 	timeout 30 "$X86SIM_DARLING" shutdown 2>/dev/null
 	for i in $(seq 1 50); do
 		left=$(prefix_procs)
