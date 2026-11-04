@@ -2712,3 +2712,47 @@ looks at the other state dir), a phone that crashes or is killed.
   once (launcher sweep). A64_STOP_ONLY via boot-a64.sh: stop A -> "keeping mtlvk: 1 other phone", B fine; stop B ->
   mtlvk exited 30 s later (before: left for good). Single phone: `sim restart` keeps the same mtlvk pid; single
   A64_STOP_ONLY ends it at once. The GUI's Stop calls the same `instance::stop` as the CLI.
+
+## RAM 6 (2026-11-04, main phone alone): fast dispatch and __DATA_CONST trims, idle home under 1 GB
+
+Main phone only (own mtlvk, no other phone up, so nothing is split), fresh boot (gate.sh's boot), home, memcat.py
+15 min after boot (~/scratch/x86code/ram6/boot.sh + memcat --json).
+
+| home 15 min | PSS MB | Private_Dirty MB | procs |
+|---|---|---|---|
+| baseline (HEAD 56d7ed7) | 1330 (1188 without the UserFontManager blip) | 759 | 38 |
+| + fast dispatch trim | 1178 | 737 | 38 |
+| + __DATA_CONST trim | **953** | 660 | 32 |
+
+Baseline top processes (PSS / PD): SpringBoard 330/170, mtlvk 232/136, UserFontManager 142/7 (caught in its 5-min
+fontservicesd cycle: lives ~38 s, then jetsam DEMAND; 117 MB of it dyld cache fault-around), backboardd 130/95,
+mobileassetd 64/39, InputUI 45/24, launchd_sim 35/32, usernotificationsd 34, cloudd 27. Categories: runtime-files 421,
+anon/rw-p 302, heap 93, files 86, nvidia lib+dev 108, shm 49 (the simfb ring), a64:fastdispatch 36, codecache 33.
+
+- **Fast dispatch table (libarm64jit host.cpp, X86CODE_A64_FDTRIM=0 off)**: a crc32-hashed lookup cache of 1-4 MB per
+  process; a process that ran a few thousand blocks has every page touched (InputUI: 0.5 MB of code, 4 MB table). The
+  idle file-trim thread now madvises it away under the shared emitter lock (GetBlock's fill holds it; shared-mode
+  readers do one 16-byte load: entry or zeros = miss). a64:fastdispatch 36 -> 3 MB.
+- **dyld cache __DATA_CONST / __AUTH_CONST (X86CODE_A64_FILETRIM_CONST=0 off)**: RAM 4's trim skipped cache mappings
+  whose max protection has write. They are mapped r--p and nobody writes them (0 Anonymous pages in SpringBoard,
+  backboardd, mobileassetd, InputUI, cloudd), but fault-around kept 139 / 53 / 76 / 79 / 40 MB of them resident.
+  Dropping clean pages there is only safe if no write can land between the pagemap check and MADV_DONTNEED, so every
+  guest call that can make memory writable or map over it (mprotect, ___mprotect, mach_vm_protect, vm_protect,
+  _kernelrpc_mach_vm_protect_trap, mmap, vm_map, vm_remap(_new), vm_allocate) now holds g_cache_prot_mu shared
+  (handlers.cpp h_cachelock); the trim holds it exclusive, re-reads /proc/self/maps, and drops present file pages of
+  the still-read-only VMAs (COW'd pages are anonymous and kept). runtime-files 310 -> 160 MB; those mappings 139 -> 1
+  MB in SpringBoard, 0 elsewhere.
+- Gate: r6fd and r6dc 0 failed (Maps tiles + route, wifi typed whole, Safari, switcher).
+- Speed (fresh boot, openm N=2 Settings, perf.py scroll 8 s), old lib / fast dispatch trim / both: Settings cold
+  3.78 3.75 / 3.50 3.77 / 3.68 3.68 s, warm 0.75 0.75 / 0.74 0.74 / 0.75 0.75 s, scroll 52.8 / 52.7 / 53.5 fps while
+  moving, p50 16.7 ms each. No change. (Absolute numbers differ from RAM 5's: other host load today.)
+
+What the 953 MB is and why it stays:
+- mtlvk 225 (NVIDIA libs 57 + driver chunks 51, malloc ~70, files 27): RAM 2/5; only a new device returns the chunks.
+- SpringBoard 271 / 169 PD: guest heap, decoded wallpaper + /dev/zero surface 26, JIT 27 (codecache 9 + slmap 8),
+  glibc JIT maps (RAM 4). backboardd 118: the simfb ring 49 (4 x full-screen slots, the display path) + IOSurfaces.
+- anon/rw-p 269 over all processes: guest heaps and Darling; next target (per-process glibc arenas, JIT std:: maps).
+- launchd_sim 35 (off the image by design: its own codecache 8), mobileassetd 50 (kept resident, RAM 5).
+- Not in PSS: darlingserver holds ~15 MB of memory entries nobody maps and up to 8 frozen LaunchServices snapshots
+  (7.5 MB unmapped); lsd maps two 7.9 MB store snapshots. Small, left.
+- UserFontManager's 142 MB burst every 5 min (~38 s) is not in the 953 (it was in the baseline's 1330).
