@@ -2393,3 +2393,28 @@ Own phone var/device-a64-ram3 (own prefix a64prefix-ram3, state var/run-a64-ram3
   atomics.s (LDADD, SWP, LDSMAX, LDCLRAL, CAS, CASP) for tags 0/5a/ff/01 in both modes = the untagged run (asserted
   before); PASS. frint PASS, guestlibc 20000/0. tests/apps/run.sh on ram2 (fresh boot, 0x1c + new image): PASS
   (run-20261103-155338).
+
+## Gate determinism: Maps state, input to the home screen, stale open requests (2026-11-03, main phone)
+In-gate maps-route and swipe-up / switcher failures (r3h1, r3ctl1, also on the old codegen) and Maps opens that timed
+out (r3i2) came from the gate itself, not from the JIT:
+- **Maps state survived the reset.** gate.sh deleted only `com.apple.Maps.savedState` and MapsSync. Maps also restores
+  its last camera and map type from its app group's defaults (group.com.apple.Maps.plist: MapsLastActivityCamera /
+  MapsLastActivityMapType), and SpringBoard shows the scene's SplashBoard launch snapshot (container
+  Library/SplashBoard, applicationState.db `_SBScenes` / `XBApplicationSnapshotManifest`) until the app draws. r3i2:
+  the cold open showed a blank grid and the warm open showed the last run's Louvre->Eiffel route card. Neither matched
+  the open regex, so both timed out. Fix: lib.sh `reset_scene_state BUNDLE...` (with the phone stopped) drops Saved
+  Application State, SplashBoard snapshots, the FrontBoard scene records, and for Maps also MapsSync, MapsLastActivity*,
+  LastSuspendTime and NavigationUserActivityPendingDeletion. gate.sh runs it for Maps and Settings.
+- **mapsroute typed into SpringBoard.** It ran `kill -9 Maps; sleep 2; open`. In-gate, that open arrived while
+  SpringBoard was still handling the death, so Maps ran behind the home screen. The tap and "Eiffel Tower" + Return went
+  to SpringBoard (Spotlight, then its top hit), and the following taps landed in Settings and left it on Camera > Preserve
+  Settings. That is the screen the swipe-up / switcher checks then saw (r3h1). Fix: wait until the old Maps is gone,
+  reopen until the frame is not the home screen (HOMERE), check again before Plan and before the origin, and accept a
+  route only from a route card (`N min`, ETA, Louvre with Directions), not from any "Go" among the map labels.
+- **Stale open request.** Tests run while no phone was up (r3k3's boot hung: launchd up, launchd_sim never started,
+  lsim.out empty; unresolved, seen once) left `app com.apple.Maps` in data/tmp/x86code-openurl. The next boot opened
+  Maps over the home check (r3l1). gate.sh deletes pending requests before it boots.
+- Jetsam: no warm-open check lost its app (each warm open comes right after its cold one; kills come 31 s or more into
+  the background). Settings is legitimately killed and comes back cold, and the checks accept either.
+Verification (new libarm64jit 15:51): gates.sh 3 r3p and r3q both clean (6 boots, 0 failed, no retries). mapsroute 3/3
+(mr1-3). Earlier r3j1-3 were also clean.

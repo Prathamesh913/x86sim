@@ -199,3 +199,32 @@ health_welcome() {
 	done
 	PROC=Health wait_ocr "$1-after" 'Summary|Pinned|Health Data|Sharing' 60
 }
+# reset_scene_state BUNDLE... (RAM 3 gate determinism): with the phone stopped, drop what an app's last session leaves
+# for the next boot's launch: UIKit scene restoration (Saved Application State), SplashBoard launch snapshots (SpringBoard
+# shows them until the app draws: a stale route view read as Maps' screen) and FrontBoard's scene records for the bundle
+# (applicationState.db _SBScenes / XBApplicationSnapshotManifest: the scene identity that restoration keys on).
+# Maps (com.apple.Maps) also: MapsSync (places, recents) and the last camera / map type it restores from its app-group
+# defaults (MapsLastActivity*), and LastSuspendTime / NavigationUserActivityPendingDeletion (a pending route activity).
+reset_scene_state() {
+	local b c m db="$DEV/data/Library/FrontBoard/applicationState.db"
+	for b in "$@"; do
+		for m in "$DEV"/data/Containers/Data/Application/*/.com.apple.mobile_container_manager.metadata.plist \
+			"$DEV"/data/Containers/Shared/AppGroup/*/.com.apple.mobile_container_manager.metadata.plist; do
+			python3 -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); sys.exit(d.get("MCMMetadataIdentifier") not in (sys.argv[2], "group."+sys.argv[2]))' "$m" "$b" 2>/dev/null || continue
+			c=$(dirname "$m")
+			rm -rf "$c/Library/Saved Application State" "$c/Library/SplashBoard"
+			[ "$b" = com.apple.Maps ] && rm -f "$c"/Library/Maps/MapsSync_0.0.1*
+			for f in "$c/Library/Preferences/$b.plist" "$c/Library/Preferences/group.$b.plist"; do
+				[ -f "$f" ] && python3 -c 'import plistlib,sys
+f=sys.argv[1]; d=plistlib.load(open(f,"rb"))
+k=[x for x in d if x.startswith("MapsLastActivity") or x in ("LastSuspendTime","NavigationUserActivityPendingDeletion")]
+for x in k: del d[x]
+k and plistlib.dump(d,open(f,"wb"),fmt=plistlib.FMT_BINARY)' "$f"
+			done
+		done
+		rm -rf "$DEV/data/Library/Saved Application State/$b.savedState" "$DEV/data/Library/SplashBoard/Snapshots/$b"
+		[ -f "$db" ] && sqlite3 "$db" "delete from kvs where application_identifier in (select id from application_identifier_tab where application_identifier='$b') and key in (select id from key_tab where key in ('_SBScenes','XBApplicationSnapshotManifest'))"
+	done
+}
+# HOMERE: the home screen's icon labels (an app in front shows none of them together)
+HOMERE='Calendar.*(Wallet|Health|Settings)|(Wallet|Health).*Settings'

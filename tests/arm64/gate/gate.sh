@@ -13,12 +13,15 @@ say "=== $T $(date +%T)"
 if [ "${SKIPBOOT:-0}" != 1 ]; then
 	shot "$O/before.png"; STALEFRAME=$(cat "$O/.frame" 2>/dev/null)
 	A64_STOP_ONLY=1 A64_DEVICE="$DEV" cli/libexec/arm64/boot-a64.sh >/dev/null 2>&1
-	# RAM 2 follow-up: Maps restores its last camera from its saved state; since the route test reaches the route (its
-	# Enter key works now) that is a zoomed-in 3D view of the Eiffel Tower, no water: maps-tiles failed on the next boot.
-	rm -rf "$DEV"/data/Containers/Data/Application/*/Library/Saved\ Application\ State/com.apple.Maps.savedState
-	# fileproviderd-vnode round: and Maps' own user store (MapsSync: saved places, favourites, recents). A route run once
-	# saved the Louvre as "Work"; mapsroute's tap on the Louvre search result then opened that place's editor, no route.
-	rm -f "$DEV"/data/Containers/Data/Application/*/Library/Maps/MapsSync_0.0.1*
+	# RAM 2 follow-up: Maps restores its last camera (a zoomed-in 3D Eiffel Tower after a route run: maps-tiles failed);
+	# fileproviderd-vnode round: and MapsSync (the Louvre saved as "Work" opened its editor, no route). RAM 3: that was
+	# not all of it: the camera is in the app group's defaults (MapsLastActivityCamera), and SpringBoard's launch
+	# snapshot of the last route view (SplashBoard + applicationState.db) survived too. reset_scene_state (lib.sh) drops
+	# all of it for Maps, and Settings' restored page for Settings.
+	reset_scene_state com.apple.Maps com.apple.Preferences
+	# RAM 3: and an open request nobody consumed (a test that ran while no phone was up: r3k3's boot hung, mapsroute's
+	# three "app com.apple.Maps" waited in the trigger file and the next boot opened Maps over the home check, r3l1)
+	rm -f "$DEV"/data/tmp/x86code-openurl "$DEV"/data/tmp/x86code-openurl.new
 	OLDSB=$(pids_of SpringBoard | tr '\n' ' ')
 	A64_KEEP=1 X86CODE_METAL=all SECS=20 A64_DEVICE="$DEV" setsid cli/libexec/arm64/boot-a64.sh > "$O/boot.log" 2>&1 < /dev/null &
 	for i in $(seq 1 60); do sleep 2; sb=$(pids_of SpringBoard | grep -vw -e "${OLDSB:-x}" | head -1); [ -n "$sb" ] && break; done
