@@ -16,6 +16,10 @@ fn main() {
         cbtest();
         return;
     }
+    if mode == "cbmalloc" {
+        cbmalloc();
+        return;
+    }
     if mode == "raw" {
         use ash::vk;
         // SAFETY: plain Vulkan instance + device on the first physical device.
@@ -127,5 +131,51 @@ fn cbtest() {
         println!("free cbs + trim: nvctl {} MB", nvctl());
         for (p, _) in &pools { dev.destroy_command_pool(*p, None); }
         println!("destroy: nvctl {} MB", nvctl());
+    }
+}
+
+/// x86Code RAM 5: the driver's host malloc per command buffer: 10 pools x N primaries (each recorded with a few fills
+/// and submitted), then free / trim / destroy, malloc's in-use and PSS after each.
+fn cbmalloc() {
+    use ash::vk;
+    unsafe {
+        let entry = ash::Entry::load().unwrap();
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let inst = entry.create_instance(&vk::InstanceCreateInfo::default().application_info(&app), None).unwrap();
+        let pd = inst.enumerate_physical_devices().unwrap().into_iter().find(|p| inst.get_physical_device_properties(*p).device_type == vk::PhysicalDeviceType::DISCRETE_GPU).unwrap();
+        let prio = [1.0f32];
+        let q = [vk::DeviceQueueCreateInfo::default().queue_family_index(0).queue_priorities(&prio)];
+        let dev = inst.create_device(pd, &vk::DeviceCreateInfo::default().queue_create_infos(&q), None).unwrap();
+        let queue = dev.get_device_queue(0, 0);
+        let buf = dev.create_buffer(&vk::BufferCreateInfo::default().size(1 << 20).usage(vk::BufferUsageFlags::TRANSFER_DST), None).unwrap();
+        let req = dev.get_buffer_memory_requirements(buf);
+        let mem = dev.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(1), None).unwrap();
+        dev.bind_buffer_memory(buf, mem, 0).unwrap();
+        println!("device: {} nvctl {}", pss(), nvctl());
+        let n: u32 = std::env::var("N").ok().and_then(|v| v.parse().ok()).unwrap_or(130);
+        let mut pools = Vec::new();
+        for _ in 0..10 {
+            let pool = dev.create_command_pool(&vk::CommandPoolCreateInfo::default().flags(vk::CommandPoolCreateFlags::TRANSIENT | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER).queue_family_index(0), None).unwrap();
+            let cbs = dev.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(n)).unwrap();
+            for cb in &cbs {
+                dev.begin_command_buffer(*cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).unwrap();
+                for i in 0..8 {
+                    dev.cmd_fill_buffer(*cb, buf, i * 4, 4, i as u32);
+                }
+                dev.end_command_buffer(*cb).unwrap();
+            }
+            dev.queue_submit(queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()).unwrap();
+            pools.push((pool, cbs));
+        }
+        dev.device_wait_idle().unwrap();
+        println!("{} cbs recorded: {} nvctl {}", n * 10, pss(), nvctl());
+        for (p, _) in &pools { dev.reset_command_pool(*p, vk::CommandPoolResetFlags::RELEASE_RESOURCES).unwrap(); }
+        println!("reset release: {} nvctl {}", pss(), nvctl());
+        for (p, cbs) in &pools { dev.free_command_buffers(*p, cbs); dev.trim_command_pool(*p, vk::CommandPoolTrimFlags::empty()); }
+        libc::malloc_trim(0);
+        println!("free cbs + trim: {} nvctl {}", pss(), nvctl());
+        for (p, _) in &pools { dev.destroy_command_pool(*p, None); }
+        libc::malloc_trim(0);
+        println!("destroy pools: {} nvctl {}", pss(), nvctl());
     }
 }

@@ -94,7 +94,13 @@ pub fn start(device: metal2vulkan_runtime::Device) {
     let Some(secs) = std::env::var("MTLVK_MEMSTATS").ok().and_then(|v| v.parse::<f64>().ok()).filter(|s| *s > 0.0) else { return };
     let _ = std::thread::Builder::new().name("memstats".into()).spawn(move || loop {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        eprintln!("mtlvk mem: t {t} | {} | {} | {}", smaps_summary(), malloc_summary(), budget_summary(&device));
+        let (pools, primaries, secondaries, descriptors) = device.spare_counts();
+        eprintln!(
+            "mtlvk mem: t {t} | {} | {} | {} | spares: command pools {pools} (primaries {primaries} secondaries {secondaries}) descriptor pools {descriptors}",
+            smaps_summary(),
+            malloc_summary(),
+            budget_summary(&device)
+        );
         crate::conn::STATS_REQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         std::thread::sleep(std::time::Duration::from_secs_f64(secs));
     });

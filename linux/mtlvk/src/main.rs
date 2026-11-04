@@ -71,7 +71,74 @@ fn start_trim(device: Device) {
                 unsafe { libc::malloc_trim(0) != 0 }
             };
             if log && (pools > 0 || descriptors > 0) {
-                eprintln!("mtlvk trim: {pools} command pools, {descriptors} descriptor pools, malloc_trim {malloc}");
+                eprintln!("mtlvk trim: {pools} command pools, {descriptors} descriptor pools released, malloc_trim {malloc}");
+            }
+        }
+    });
+}
+
+/// Client connections being served (metalhostd's, one per phone process that renders).
+static CONNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct ConnGuard;
+impl ConnGuard {
+    fn new() -> Self {
+        CONNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ConnGuard
+    }
+}
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        CONNS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Darlingservers (one per running phone) whose environment names `sock` as their phone's mtlvk.
+fn phone_users(sock: &str) -> usize {
+    let want = format!("X86CODE_MTLVK_SOCKET={sock}");
+    let rd = |p: &std::path::Path, f: &str| std::fs::read(p.join(f)).unwrap_or_default();
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| rd(&e.path(), "comm") == b"darlingserver\n")
+        .filter(|e| rd(&e.path(), "environ").split(|b| *b == 0).any(|kv| kv == want.as_bytes()))
+        .count()
+}
+
+/// x86Code RAM 5: an mtlvk lives as long as its phones. Every stop path (launcher GUI, x86code-aot, boot-a64.sh's
+/// A64_STOP_ONLY, a phone that crashed or was restarted onto another mtlvk) used to have to find and end it, and a
+/// shared one whose last phone stopped through a path that did not look (or a phone that moved to a new mtlvk) stayed
+/// up for good (~250-600 MB). Now mtlvk ends itself once it has had no client connection and no running phone naming
+/// its socket (a darlingserver's X86CODE_MTLVK_SOCKET) for MTLVK_IDLE_EXIT seconds (default 30; 0 = never; a boot's
+/// darlingserver exists ~1 s after mtlvk, and a restart's new darlingserver names the socket before its old one is
+/// gone or within seconds). The socket is unlinked first, so a boot that looks for it starts a fresh mtlvk.
+fn start_idle_exit(sock: String) {
+    let secs = std::env::var("MTLVK_IDLE_EXIT").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(30.0);
+    if secs <= 0.0 {
+        return;
+    }
+    let ino = |p: &str| std::fs::metadata(p).ok().map(|m| std::os::unix::fs::MetadataExt::ino(&m));
+    let mine = ino(&sock);
+    let _ = std::thread::Builder::new().name("idle-exit".into()).spawn(move || {
+        let mut idle_since = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if CONNS.load(std::sync::atomic::Ordering::SeqCst) > 0 || phone_users(&sock) > 0 {
+                idle_since = std::time::Instant::now();
+                continue;
+            }
+            if idle_since.elapsed().as_secs_f64() < secs {
+                continue;
+            }
+            // another mtlvk may have taken the path over: leave its socket alone
+            if mine.is_some() && ino(&sock) == mine {
+                let _ = std::fs::remove_file(&sock);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if CONNS.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                eprintln!("mtlvk: no phone and no connection for {secs} s: exiting (MTLVK_IDLE_EXIT)");
+                std::process::exit(0);
             }
         }
     });
@@ -131,13 +198,19 @@ fn main() {
         std::process::exit(1);
     });
     eprintln!("mtlvk: listening on {path}");
+    start_idle_exit(path.clone());
     for (n, stream) in listener.incoming().enumerate() {
         match stream {
             Ok(s) => {
                 let device = device.clone();
+                // counted until the thread ends, a panic included (the guard drops on unwind or if spawn fails)
+                let guard = ConnGuard::new();
                 std::thread::Builder::new()
                     .name(format!("conn{n}"))
-                    .spawn(move || conn::serve(n, device, s))
+                    .spawn(move || {
+                        let _g = guard;
+                        conn::serve(n, device, s)
+                    })
                     .ok();
             }
             Err(e) => eprintln!("mtlvk: accept: {e}"),

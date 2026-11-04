@@ -2670,3 +2670,45 @@ launchd.log spawn reasons and liboslogdiag (filter: mobileassetd, fontservicesd,
   /var/run is cleared per boot); it only skips the first-boot activation.
 - Tool: liboslogdiag now finds the data directory at run time (HOME / CFFIXED_USER_HOME), so one build serves every
   phone (X86CODE_INSERT=host/simshim/diag/arm64/liboslogdiag.dylib on `sim restart`, names in data/oslog.filter).
+
+## RAM 5: mtlvk growth, stop leak (2026-11-04, main phone)
+
+**Growth.** One metalhostd connection serves the whole phone (conn0 for the boot), so nothing is per-connection: dead
+apps' objects do go (buffers 194 -> 13, textures back to the home count). What grew was malloc in use (MTLVK_MEMSTATS):
+60 MB at home -> 135 after the first round of apps -> 150 -> 160 after the third, never down. jemalloc heap profile
+(LD_PRELOAD libjemalloc prof, jeprof diff home -> end): +82 MB, of it 60 MB NVIDIA glcore, 35 MB under
+`recorder::replays::resolve -> vkAllocateCommandBuffers`. The runtime's spare command pools keep every command buffer
+their busiest use made (a frame of many passes: 130 primaries in one pool); new `Device::spare_counts` (printed on the
+`mtlvk mem:` line): 10 spares held 1294 primaries + 217 secondaries after 2 rounds, up to 15 pools in longer runs —
+the 580 MB gate-run mtlvk. devprobe `cbmalloc` (1300 command buffers in 10 pools): malloc in use 7 -> 40 MB; reset with
+RELEASE_RESOURCES 39, vkFreeCommandBuffers + vkTrimCommandPool 38, vkDestroyCommandPool 7. So RAM 2's reset trim
+returned nothing of it (a freeing trim was tried: 1294 -> 49 command buffers, malloc unchanged).
+- **Fix** (metal2vulkan 29d1f682): `Spares::trim` (mtlvk's trim thread, every 5 s, spares idle 10 s) destroys the idle
+  spares past the newest 4 per family and any of the newest holding > 32 command buffers. On the trim thread, out of the
+  spares, nothing pending (615.71's destroy hang was on a completion handler thread, with ray tracing on). 0 hangs in
+  ~40 min of app cycling.
+- Not leaking / left as is: nvctl 2 MB chunks 35 -> ~92-98 MB (NVIDIA's command memory cache, a high-water mark, flat
+  after round 1; only a new device returns it, and the phone keeps its connection while up). ~80 more render pipeline
+  states stay after the first round (backboardd's CoreAnimation pipelines, kept by CA: ~+30 MB malloc incl. VkPipelines)
+  plus the 32 MB memo. IOSurface imports: memfd back to 19 MB after each kill. glibc: arenas 120 -> 63 MB; malloc_trim
+  already runs. Device recreation when idle does not apply (never client-less while a phone runs).
+- Scenario (fresh boot; home; 3 rounds of Settings, Maps, Wallet, Health, Safari (18 s each, home), then kill -9 of
+  the five; idle 5 min), mtlvk PSS MB before -> after: home 256 -> 241; round 1 killed 383 -> 375; round 2 killed
+  437 -> 349; round 3 killed 451 -> 354; idle 1-4 min 409 -> 354; idle 5 min 349 -> 354 (before: something released at
+  5 min). Before grows every round, after returns to ~350 after each round; malloc in use 159 -> 96 MB.
+- Rendering/speed (fresh boot): Settings cold 3.57 s, warm 0.57 s, scroll 61 fps peak, p50 16.5 ms, 377 frames / 8.5 s
+  (RAM 2: 3.51 / 0.57 / 61 / 16.5 / 371-376). Screenshots of all five apps and home correct.
+
+**Stop leak.** ram2's mtlvk (19:50) outlived ram2's stop because another phone rendered through it: the main phone,
+booted from the launcher at 22:41 onto ram2's kept mtlvk (`shared_mtlvk` offers an off phone's kept one; its log has
+connections until 23:01). The main phone then booted at 23:19 onto a fresh mtlvk of its own by a path that sweeps no
+helpers (a boot-a64.sh / restart boot), orphaning ram2's. Other leak paths of the same kind: boot-a64.sh's
+A64_STOP_ONLY of a phone that shared another's mtlvk (`stop_a64_mtlvk` returns at once with A64_MTLVK_SOCKET, and never
+looks at the other state dir), a phone that crashes or is killed.
+- **Fix** (mtlvk): an mtlvk ends itself once it has had no client connection and no running darlingserver naming its
+  socket (X86CODE_MTLVK_SOCKET) for MTLVK_IDLE_EXIT s (default 30, 0 = never); it unlinks its socket first (only if
+  still its own inode) so a boot then starts a fresh one. The launcher's immediate stop logic is unchanged.
+- Verified (main = A, ram2 = B sharing A's mtlvk): x86code-aot CLI: stop A -> kept, B renders; stop B -> mtlvk ended at
+  once (launcher sweep). A64_STOP_ONLY via boot-a64.sh: stop A -> "keeping mtlvk: 1 other phone", B fine; stop B ->
+  mtlvk exited 30 s later (before: left for good). Single phone: `sim restart` keeps the same mtlvk pid; single
+  A64_STOP_ONLY ends it at once. The GUI's Stop calls the same `instance::stop` as the CLI.
