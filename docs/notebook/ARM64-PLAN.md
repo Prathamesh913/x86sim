@@ -2488,3 +2488,34 @@ Between us and <1 GB, ranked:
 4. mtlvk 250 MB (NVIDIA libs/dev 120; shared across phones).
 5. JIT tables (a64:fastdispatch/slmap/lfmap/meta) 172 MB: ~4 MB fixed per process x 47.
 6. Background apps not reclaimed (Maps 627 MB after 2 min) — jetsam only acts under pressure.
+
+## RAM 4: SpringBoard (2026-11-03, ram3): what its private memory is
+
+ram3 at home (wallpaper image shown, 9 threads), SpringBoard smaps per mapping + SIGUSR1 memlog (gheap/glibc/JIT maps).
+Two boots (19:24 and after the 19:28 libarm64jit install): 235 / 232 MB Private_Dirty, ~396 PSS (other phones up).
+Tools: ~/scratch/x86code/ram4/{smapcat,anon,dirty,cowset}.py (smaps categories; COW pages of the AOT .map per process).
+
+| Private_Dirty MB | what | ours / inherent |
+|---|---|---|
+| 52.4 | AOT image .map, COW'd pages (13.4k of 78k resident pages) | ours |
+| ~36 | host glibc ([heap] 11.6 + mmapped 37 in 43 blocks; JIT maps patch_information 6, block_descriptors 4, block_ranges 1.8, fastmem 2) | ours |
+| 25 | a64 tables: slmap 8, meta:blocks 4, fastdispatch 4, meta:links 4.6, lfmap 2, fastmem 1.4, ranges/relocs 1 | ours |
+| 15.2 | a64:codecache: code translated live (not in the image) | ours |
+| ~41 | guest heap (gheap: 61 MB small carved, 6.4 on free lists, 3.9 released by the scavenger; large 4.9 in 21) | inherent |
+| 24.3 | two 1206x2622x4 buffers: a decoded full-screen image (r--p anon 12.2) and a /dev/zero shared surface (12.1) | inherent |
+| 27 | dylib __DATA dirty (dyld cache 7.6, other images 19.7) | inherent |
+| ~15 | other guest anon (stacks, vm_allocate) | inherent |
+
+Inherent ~105 MB, in the range of a device's SpringBoard dirty footprint; ours ~128 MB. Not issues: Mach memory entries
+0.2 MB (12 maps), gheap fragmentation (6.4 MB free, scavenged), threads (9; stacks small).
+
+The 52 MB AOT COW is per process and workload, not load-time layout: COW pages per process (cowset.py, 38 ram3
+processes) are SpringBoard 13424, Spotlight 9008, searchd 1036, backboardd 999, the rest < 600; only 9 pages are COW in
+half the processes. The .map holds link sites unlinked; a process links them at run time (Patch on RegisterBlock, image
+block registration being lazy) and every page with a site it links becomes private. Tried: skip the RSB `mov rcx, imm64`
+store when unchanged (EmitPatchMovRcx, like WriteSharedLinkHead): 13418 -> 13424 pages, no effect, reverted.
+Next (JIT/AOT owners): (1) the image is stale (192/686 chunks; ~37k SpringBoard-relevant blocks live-translated:
+UIKitCore 23.6k, QuartzCore 14k, SpringBoardHome 13k) and the slab is full (1212 MB wanted, 1080 held): folding them in
+removes most of the 15 MB codecache and the image->JIT links. (2) Pre-link image->image static links in the .map (the
+layout fixes every target address) so runtime linking writes identical bytes and skips the store; needs a check that
+lazy registration's validation is not bypassed by a linked jump into an unregistered block.
