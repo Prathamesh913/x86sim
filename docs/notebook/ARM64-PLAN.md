@@ -2813,3 +2813,46 @@ last); runtime-files 1156 + aot.map 553 of it are file pages of busy processes (
 in the image (codecache 12) with a 49 MB host glibc heap: JIT overhead from live translation; image update/slab size.
 Anonymous RW at fresh home (269): unchanged; guest glibc is already arena_max=2 (mksimdevice); not split further.
 Settings warm 0.57 -> 0.75 s / 61 -> 53 fps vs RAM 5: same on the old library in RAM 6 and here; cause not found.
+
+## RAM 8 (2026-11-04, main phone alone): mtlvk after use: idle pipeline trim, command pool release
+
+Same procedure as RAM 7 (gate, then 15 min idle; scripts ~/scratch/x86code/ram8/: run8.sh = run.sh with
+MTLVK_MEMSTATS, explore.sh = gate + short idle with a chosen MTLVK binary/wrapper, shim/nvmap.c = LD_PRELOAD log of
+/dev/nvidiactl mmaps with backtraces, nvsum.py its summary). Baseline b0 (RAM 7 build): mtlvk 499 MB, phone 1454.
+The memstats line now ends with a pipeline census (metal2vulkan `Device::pipeline_census`).
+
+What held it (b0/e1, end of gate + idle): 927-970 VkPipelines, 568-598 of them graphics pipeline libraries, 161
+render variants whose compiled pipelines (SPIR-V, layouts, reflection) are only 8 MB, 187-201 pipelines kept for
+released variants; nvctl-small 142 MB, all of its growth 2 MB chunks mapped in vkBeginCommandBuffer of the
+recorder's replays (one burst of ~35 on one thread).
+
+1. **Pipelines** (metal2vulkan ff1b88c6, mtlvk trim thread): the compile-time data is not the weight (8 MB); the
+   driver's pipelines and libraries are. `Device::trim_idle_pipelines(MTLVK_PIPELINE_IDLE, default 300 s; 0 =
+   never)` destroys VkPipelines of render variants no draw looked up for that long and no command buffer holds
+   (not kept), the kept pipelines of released variants (including the queued releases an idle program never
+   applies), then the libraries nothing holds and no key claimed. The next draw remakes them from the caches.
+   Dropping libraries right after linking crashed NVIDIA 615 (a fast-linked pipeline reads them when bound), so
+   linked pipelines keep theirs. With 120 s the gate's Maps cold open took >3 min once (SpringBoard remaking while
+   Maps compiled): 300 s. Effect at 15 min idle: VkPipelines 927 -> 24, malloc in use 169 -> 133 MB.
+2. **Fragmentation** (mtlvk): fixed glibc mmap threshold (MTLVK_MMAP_THRESHOLD KiB, default 256) and
+   MTLVK_ARENA_MAX 4: heap 21 -> 11, arenas 145 -> 140, anon 64 -> 54 MB. The memory the trimmed pipelines free stays
+   between long-lived objects (arena 247 MB system, 133 in use). jemalloc for mtlvk (LD_PRELOAD, 5 s decay, 4
+   arenas) on the same scenario: 452 MB vs 445: no gain, not taken.
+3. **Command memory** (metal2vulkan spares): NVIDIA's pool keeps the chunks its largest command buffer grew to
+   until reset with RELEASE_RESOURCES; then they return to the device's own cache and are reused. devprobe cbgrow
+   (40 pools that each recorded 20000 commands once, then 40 small command buffers in flight): 46 MB -> 16 MB.
+   Spare pools are now reset with it (METAL2VULKAN_POOL_RESET_KEEP=1 = before). nvctl-small 142 -> 110 MB; the rest is
+   the device's high water from bursts, which only a new device returns.
+
+| point (PSS MB) | before | after |
+|---|---|---|
+| mtlvk fresh home 15 min | 225 (RAM 7) | 223 |
+| mtlvk after gate + 15 min | 499 (b0) | **445** (f1) |
+| phone after gate + 15 min | 1454 (b0) | 1420 (f1) |
+| phone fresh home 15 min | 960 (RAM 7) | 1144 (SpringBoard +99 and daemons not yet exited: guest side; mtlvk -11) |
+| gate | 0 failed | f1 0 failed (e3 with 120 s idle: 3, Maps slow) |
+| Settings cold / warm / scroll | 3.77 3.46 / 0.73 0.76 / 53.0 fps | 3.47 3.29 / 0.75 0.74 / 52.5 fps, p50 16.7 |
+
+Screenshots of the gate's apps, the Maps route and Settings opened after a trim (fresh phone, 15 min idle) render
+correctly. Left: ~110 MB fragmented free in glibc's arenas and ~80 MB of NVIDIA command chunks (device high water);
+the live variants' own objects (shader modules, layouts, plans) stay with their states.

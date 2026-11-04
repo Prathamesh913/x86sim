@@ -58,11 +58,23 @@ fn start_trim(device: Device) {
         return;
     }
     let log = std::env::var_os("MTLVK_MEMSTATS").is_some();
+    let pipeline_idle = std::env::var("MTLVK_PIPELINE_IDLE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(300.0);
+    let pipeline_idle = (pipeline_idle > 0.0).then(|| std::time::Duration::from_secs_f64(pipeline_idle));
     let _ = std::thread::Builder::new().name("trim".into()).spawn(move || {
         let mut last_malloc_trim = std::time::Instant::now();
         loop {
             std::thread::sleep(std::time::Duration::from_secs_f64(every));
             let (pools, descriptors) = device.trim_idle(std::time::Duration::from_secs_f64(idle));
+            // x86Code RAM 8: pipelines nothing used for MTLVK_PIPELINE_IDLE s (default 300; 0 = never): graphics
+            // pipeline libraries no new key claimed, and the VkPipelines kept for released variants
+            let (libraries, kept) = match pipeline_idle {
+                Some(idle) => device.trim_idle_pipelines(idle),
+                None => (0, 0),
+            };
+            if log && (libraries > 0 || kept > 0) {
+                eprintln!("mtlvk trim: {libraries} pipeline libraries, {kept} kept pipelines destroyed");
+            }
+            let pools = pools + libraries + kept;
             // glibc keeps freed pages of its arenas (an app's pipelines and command logs, gone with it); give back
             // the whole free pages after a quiet trim and at least every minute.
             let malloc = (pools > 0 || descriptors > 0 || last_malloc_trim.elapsed().as_secs() >= 60) && {
@@ -144,7 +156,30 @@ fn start_idle_exit(sock: String) {
     });
 }
 
+/// x86Code RAM 8: glibc malloc for a long-lived process whose driver compiles. NVIDIA's compiler takes large
+/// short-lived blocks on the threads that make pipelines, beside the pipelines' small long-lived objects; glibc
+/// raises its mmap threshold to each large block freed (up to 32 MB), so later ones came from the arenas and left
+/// them holed around the long-lived objects (after a gate run: 110 MB free in the arenas, malloc_trim returning
+/// little). A fixed threshold (MTLVK_MMAP_THRESHOLD KiB, default 256; 0 = glibc's dynamic one) keeps large blocks
+/// in their own mappings, returned at free; MTLVK_ARENA_MAX (default 4; 0 = glibc's 8 per core) bounds the arenas
+/// the many short-lived threads (one per off-class compile, the pool's) spread over.
+fn tune_malloc() {
+    let env = |k: &str, d: i32| std::env::var(k).ok().and_then(|v| v.parse::<i32>().ok()).unwrap_or(d);
+    let threshold = env("MTLVK_MMAP_THRESHOLD", 256);
+    let arenas = env("MTLVK_ARENA_MAX", 4);
+    // SAFETY: plain libc calls, before any other thread starts.
+    unsafe {
+        if threshold > 0 {
+            libc::mallopt(libc::M_MMAP_THRESHOLD, threshold << 10);
+        }
+        if arenas > 0 {
+            libc::mallopt(libc::M_ARENA_MAX, arenas);
+        }
+    }
+}
+
 fn main() {
+    tune_malloc();
     // x86Code Speed 7: SIGUSR1 -> per-connection object counts on stderr (next request)
     unsafe { libc::signal(libc::SIGUSR1, on_usr1 as libc::sighandler_t) };
     let arg = std::env::args().nth(1);

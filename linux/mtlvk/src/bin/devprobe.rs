@@ -16,6 +16,10 @@ fn main() {
         cbtest();
         return;
     }
+    if mode == "cbgrow" {
+        cbgrow();
+        return;
+    }
     if mode == "cbmalloc" {
         cbmalloc();
         return;
@@ -157,8 +161,10 @@ fn cbmalloc() {
         for _ in 0..10 {
             let pool = dev.create_command_pool(&vk::CommandPoolCreateInfo::default().flags(vk::CommandPoolCreateFlags::TRANSIENT | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER).queue_family_index(0), None).unwrap();
             let cbs = dev.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(n)).unwrap();
+            // x86Code RAM 8: ONETIME=0 begins them reusable (no ONE_TIME_SUBMIT), as the runtime's replays do
+            let flags = if std::env::var("ONETIME").as_deref() == Ok("0") { vk::CommandBufferUsageFlags::empty() } else { vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT };
             for cb in &cbs {
-                dev.begin_command_buffer(*cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).unwrap();
+                dev.begin_command_buffer(*cb, &vk::CommandBufferBeginInfo::default().flags(flags)).unwrap();
                 for i in 0..8 {
                     dev.cmd_fill_buffer(*cb, buf, i * 4, 4, i as u32);
                 }
@@ -177,5 +183,56 @@ fn cbmalloc() {
         for (p, _) in &pools { dev.destroy_command_pool(*p, None); }
         libc::malloc_trim(0);
         println!("destroy pools: {} nvctl {}", pss(), nvctl());
+    }
+}
+
+/// x86Code RAM 8: does a command pool that once recorded a large command buffer take a large chunk for each later
+/// small one? 40 pools each record a big command buffer (BIG fills), one at a time (submitted, waited, the pool
+/// reset with RELEASE_RESOURCES when RELEASE=1, else plainly); then all 40 record a small one (10 fills) at once,
+/// in flight together. nvctl after each phase.
+fn cbgrow() {
+    use ash::vk;
+    unsafe {
+        let entry = ash::Entry::load().unwrap();
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let inst = entry.create_instance(&vk::InstanceCreateInfo::default().application_info(&app), None).unwrap();
+        let pd = inst.enumerate_physical_devices().unwrap().into_iter().find(|p| inst.get_physical_device_properties(*p).device_type == vk::PhysicalDeviceType::DISCRETE_GPU).unwrap();
+        let prio = [1.0f32];
+        let q = [vk::DeviceQueueCreateInfo::default().queue_family_index(0).queue_priorities(&prio)];
+        let dev = inst.create_device(pd, &vk::DeviceCreateInfo::default().queue_create_infos(&q), None).unwrap();
+        let queue = dev.get_device_queue(0, 0);
+        let buf = dev.create_buffer(&vk::BufferCreateInfo::default().size(1 << 20).usage(vk::BufferUsageFlags::TRANSFER_DST), None).unwrap();
+        let req = dev.get_buffer_memory_requirements(buf);
+        let mem = dev.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(1), None).unwrap();
+        dev.bind_buffer_memory(buf, mem, 0).unwrap();
+        let big: u32 = std::env::var("BIG").ok().and_then(|v| v.parse().ok()).unwrap_or(20000);
+        let release = std::env::var("RELEASE").as_deref() == Ok("1");
+        println!("device: nvctl {}", nvctl());
+        let mut pools = Vec::new();
+        let record = |cb: vk::CommandBuffer, n: u32| {
+            dev.begin_command_buffer(cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).unwrap();
+            for i in 0..n {
+                dev.cmd_fill_buffer(cb, buf, ((i % 1024) * 4) as u64, 4, i);
+            }
+            dev.end_command_buffer(cb).unwrap();
+        };
+        for _ in 0..40 {
+            let pool = dev.create_command_pool(&vk::CommandPoolCreateInfo::default().flags(vk::CommandPoolCreateFlags::TRANSIENT | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER).queue_family_index(0), None).unwrap();
+            let cb = dev.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(1)).unwrap()[0];
+            record(cb, big);
+            dev.queue_submit(queue, &[vk::SubmitInfo::default().command_buffers(&[cb])], vk::Fence::null()).unwrap();
+            dev.device_wait_idle().unwrap();
+            let flags = if release { vk::CommandPoolResetFlags::RELEASE_RESOURCES } else { vk::CommandPoolResetFlags::empty() };
+            dev.reset_command_pool(pool, flags).unwrap();
+            pools.push((pool, cb));
+        }
+        println!("40 big, one at a time: nvctl {}", nvctl());
+        for (_, cb) in &pools {
+            record(*cb, 10);
+        }
+        let cbs: Vec<_> = pools.iter().map(|p| p.1).collect();
+        dev.queue_submit(queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()).unwrap();
+        println!("40 small in flight: nvctl {}", nvctl());
+        dev.device_wait_idle().unwrap();
     }
 }
