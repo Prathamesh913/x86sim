@@ -2563,3 +2563,76 @@ process; the two home totals were taken 10 min apart with the same phones up.
   "pid 1 4 0" (visible, running, no scene), reclaimed; Spotlight killed then pull-down search + typing OK (no crash);
   gates.sh 2 (r4g1, r4g2): 0 failed, wifi typed whole both, mapsroute OK (r4g2's first Siri press missed, the second
   caught it: known).
+
+## RAM 4: file-backed pages (2026-11-03, main phone)
+Why clean file pages of the dyld cache and the AOT image (.map/.idx) dominated PSS, and the fix.
+
+- **Mechanism: kernel fault-around, not our prefetch.** Measured on a 256 MB test file and on the real files
+  (/tmp probes, 7.2.15 kernel, fault_around_bytes 64 KB, not settable without root):
+  - A read fault maps every page of the 64 KB window (16 pages) that is in the page cache: 64 random touches on a
+    cached file -> 4 MB RSS (64 KB each); on the live files 31-52 KB mapped per touched page (dyld cache 52, .01 31,
+    .map 43, .idx 47; less where the window holds uncached pages).
+  - MADV_RANDOM / MADV_SEQUENTIAL / MADV_NOHUGEPAGE on the mapping do **not** stop it on this kernel (same 15.8 MB for
+    64 touches). MADV_RANDOM only stops readahead into the page cache (uncached file: 316 KB RSS / 508 KB cache vs
+    3.9 MB / 254 MB); once the pages are cached (always, after the first boot) fault-around maps them anyway.
+  - What is in the cache decides it: pages read with POSIX_FADV_RANDOM set (page-cache folios of 4 KB) still map
+    64 KB per touch; reads of 1 MB build large folios that map the same. So no fd/file trick changes it.
+  - Prefetch (prefetch.py read/apply: preadv / fadvise WILLNEED) only fills the page cache; it never maps anything
+    into a process (it does not touch through mmap). It makes the windows fully cached, which is why fault-around
+    maps whole 64 KB windows, but without it the first boot is 30-60 s slower (Speed 11/14).
+  - No THP for these files: FilePmdMapped 0 everywhere (btrfs, no READ_ONLY_THP); the tmpfs huge copy of the image
+    (Speed 28) is not in use on this phone.
+  - The dyld cache is mapped whole per process (2 GB + 1.7 GB .01, expected); only the faulted windows count.
+  - Result at home (5 min, other phones up): file-backed Rss summed over 43 processes 8.9-9.4 GB (dsc r-xp 4.0 GB,
+    r--p 2.0 GB, .map 1.3 GB, .idx 0.85 GB); Referenced is set on all of it (fault-around marks the PTEs young).
+    SpringBoard: dyld cache 706 MB Rss for 303 mappings, .map 297 MB, .idx 124 MB.
+  - Runs of mapped pages in SpringBoard's file mappings are 16/32-page multiples (fault-around windows), plus long
+    runs where code is really hot.
+- **Fix: libarm64jit file trim** (host.cpp, X86CODE_A64_FILETRIM=<secs>, default 15, 0 off): a native thread per
+  process checks every 15 s; when the process was idle (<3% CPU over the interval) and its RssFile grew >= 2 MB since
+  the last trim, it drops the PTEs of clean file pages with MADV_DONTNEED (the pages stay in the page cache: a later
+  touch is a minor fault, no I/O; and fault-around maps a window again). Only where nothing can be lost:
+  - read-only shared mappings (.idx etc.): whole mapping;
+  - dyld cache private mappings: only the parts in a cache mapping whose max protection has no write (__TEXT,
+    __LINKEDIT; from the cache header), only present file pages per /proc/self/pagemap (bit 61), each 2 MB step under
+    g_text_patch_mu, which libarm64jit's own __TEXT patches (malloc/objc/msgSend) now take;
+  - the AOT image (.map, MAP_PRIVATE rwx, link sites written at run time): only present file pages, each 2 MB step
+    under the shared emitter lock (Jit::WithSharedLock, dynarmic; every write to translated code holds it), so a COW'd
+    page is never dropped (X86CODE_A64_FILETRIM_IMAGE=0: leave the image alone).
+  A trim takes 3-20 ms on a niced thread. Not used: process_madvise from outside (ptrace_scope 1, EPERM),
+  MADV_PAGEOUT/COLD (would evict the shared page cache; we only want the mapping gone).
+- **A/B** (3 fresh boots per arm, alternating, other phones up so PSS is split; memcat 5 min after boot, then
+  Settings open 25 s, then Maps open 30 s):
+
+| | off (1/2/3) | on (1/2/3) | mean diff |
+|---|---|---|---|
+| home PSS MB | 1095 / 1188 / 1287 | 883 / 897 / 908 | -294 |
+| home file-backed Rss (all procs) MB | 8862 / 8862 / 9379 | 2285 / 2185 / 2278 | -6.8 GB |
+| home file PSS MB | 493 / 583 / 658 | 283 / 297 / 310 | -281 |
+| home Private_Dirty MB | 762 / 762 / 791 | 763 / 763 / 761 | 0 |
+| Settings open PSS MB | 1723 / 1791 / 1941 | 1501 / 1642 / 1628 | -228 |
+| Maps open PSS MB | 2408 / 2525 / 2660 | 1991 / 2167 / 2185 | -417 |
+| boot to home s | 15.0 / 13.8 / 13.6 | 13.7 / 13.7 / 13.7 | 0 |
+| Settings cold content s | 4.40 / 4.40 / 4.16 | 4.36 / 3.96 / 4.30 | -0.1 |
+| Settings warm content s | 0.747 / 0.746 / 0.777 | 0.753 / 0.747 / 0.745 | 0 |
+| Maps cold content s | 3.32 / 3.38 / 3.37 | (no t0) / 3.28 / 2.86 | -0.3 |
+| Maps warm content s | 0.688 / 0.690 / 0.689 | 0.693 / 0.685 / 0.686 | 0 |
+
+  Warm-tap response (openm warm "resp") 0.39-0.46 s in both arms. tapm.sh read "no frames after t0" in both arms
+  (its t0 comes from the shared simhid.log, which other phones' gates write too): not used.
+  With an app open the trim catches up once the app idles; the open itself maps again (Settings/Maps rows).
+- **AOT image COW** (SpringBoard ~53 MB private in the .map; X86CODE_A64_COWDIFF=<secs> + _COWDIFF_DIR diagnostic
+  compares every private page of the image mapping with the file): all of the changed bytes are shared link heads
+  (`mov rax, imm64` -> jmp/jcc rel32), and **every one points outside the image** (SpringBoard 58.3k linked heads in
+  13.5k pages, 0 to image blocks; backboardd 7.2k/1.1k pages, iconservicesagent 3.7k/0.75k, InputUI 1.7k/0.64k; the
+  other ~5 diffs are fastmem call patches). Image->image links are already linked in the .map, so pre-linking them
+  at build time would change nothing: the COW is image code calling blocks this process translated live, i.e. image
+  staleness/coverage. 
+- **Image rebuilt** (`build --full --workers 12`, 24 s; codegen unchanged 0x1c; `status` before 208 of 678 chunks
+  stale, after 3 of 679 (the running phones' new .live); slab still full: 1232 MB wanted, 1080 held). One boot after
+  it (img1, trim on): SpringBoard image COW 13.5k -> 585 pages (cowdiff; 58.3k -> 2.9k linked heads), backboardd
+  1066 -> 205, iconservicesagent 752 -> 204. SpringBoard Private_Dirty ~235 -> 178 MB. aot.map Private_Dirty (all
+  processes) home 67 -> 6 MB, Settings 118 -> 9, Maps 189 -> 14; phone Private_Dirty home 762 -> 690, Maps open
+  1505 -> 1287; home PSS 851 MB. Settings cold content 3.41 s (was 4.0-4.4), Maps cold 3.00 s; warm unchanged. Boot
+  16.7 s (the first process after a rebuild writes the 1 GB relocated .map; one-off). The image goes stale again as
+  training feeds back; keeping it current (`update`) is what keeps the COW down.
