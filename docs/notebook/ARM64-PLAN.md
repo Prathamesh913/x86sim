@@ -2756,3 +2756,60 @@ What the 953 MB is and why it stays:
 - Not in PSS: darlingserver holds ~15 MB of memory entries nobody maps and up to 8 frozen LaunchServices snapshots
   (7.5 MB unmapped); lsd maps two 7.9 MB store snapshots. Small, left.
 - UserFontManager's 142 MB burst every 5 min (~38 s) is not in the 953 (it was in the baseline's 1330).
+
+## RAM 7 (2026-11-04, main phone alone): UserFontManager kept, orphaned XPC services, what stays after use
+
+Same procedure as RAM 6 (main phone only, fresh boot, memcat 15 min after boot; "after use" = gate.sh then 15 min
+idle; peak = the highest of memcat samples every 20 s during the gate). Scripts: ~/scratch/x86code/ram7/
+(boot.sh, run.sh, speed.sh, diff.py = per-process/category diff of two memcat --json; memcat --json now also writes
+bycatproc).
+
+- **UserFontManager every 5 min (jetsam.py)**. Trigger: fontservicesd's plist activity
+  com.apple.fontservicesd.subscription-support (Interval 300, Maintenance) runs subscriptionSupportTimerHandler, which
+  asks its XPC service UserFontManager (FSUserFontManager, pid domain of fontservicesd) for the font providers'
+  subscription info. Sampled over a cycle: 0.23 s of CPU, then idle; 141-146 MB PSS (166 MB RssFile, dyld cache
+  fault-around) until libarm64jit's file trim at ~30 s (-> 7 MB), killed by jetsam's DEMAND rule at ~38 s; the next ask
+  relaunched it. On a device an idle XPC service whose client lives sits in the idle band until real pressure, and
+  the ask reaches the running service. Fix: UserFontManager out of DEMAND, into a new RESIDENT set
+  (X86SIM_JETSAM_RESIDENT) never reclaimed as an idle daemon. It stays at 7-8 MB; no more 140 MB blips (RAM 6's 1330
+  baseline had one in it) and no relaunch cost. It still goes with fontservicesd (below).
+- **Orphaned process-scoped XPC services (Darling libsystem_kernel, proc_info)**. After a gate run 4
+  SetStoreUpdateService (CascadeSets, ServiceType Application) plus healthd's DayStreamProcessorService and
+  HistoricalAnalyzerService (~54 MB) lived on with their clients dead. launchd.log: on the client's exit launchd_sim
+  tears down its pid domain, `could not terminate service: 45: Operation not supported`, "Service did not exit 9
+  seconds after SIGKILL", "Abandoning PID". It stops services with proc_terminate() = proc_info(callnum 7,
+  PROC_INFO_CALL_TERMINATE), which Darling did not implement. Now: SIGKILL for a tracked clean process, SIGTERM
+  otherwise (XNU's memorystatus_on_terminate), signal returned; launchd escalates itself. Verified: kill -9
+  fontservicesd -> "exited due to SIGKILL during teardown of process-scoped services" for its UserFontManager at once
+  (before: alive for good). One SetStoreUpdateService (siriactionsd's, 11 MB) was also left at fresh home.
+- Numbers (PSS MB):
+
+| point | RAM 6 / before | after |
+|---|---|---|
+| fresh home 15 min | 953 (+140 blip every 5 min) | **960**, no blip (UserFontManager 8, SetStoreUpdateService 0) |
+| after gate + 15 min idle | 1465 (r7g1, jetsam fix only) | 1503 (r7g2; orphans 54 -> 0, mtlvk +12, HOT daemons not yet at 600 s) |
+| peak during the gate | 4567 (r7g1 sampler) | 4684 (r7g2); gate's own "after apps" 3209 / 3230 |
+| gates | r7g1, r7g2, r7g3 0 failed | |
+| Settings cold / warm / scroll | 3.68 / 0.75 / 53.5 fps (RAM 6) | 3.77 3.46 / 0.73 0.76 / 53.0 fps, p50 16.7 |
+
+  (The 1.97 GB "after use" figure was the gate's own "PSS idle after the pass" taken 15 s after the last app; at 15
+  min idle it is ~1.5 GB.)
+
+What stays after use (r7g2 at 15 min vs fresh, +540):
+- **mtlvk +250 (225 -> 478)**: MTLVK_MEMSTATS: malloc in use 20 -> 172 MB with free 96 MB in the arenas that
+  malloc_trim cannot return (fragmented), nvctl small chunks 31 -> 136 (NVIDIA's command memory, high-water: RAM 5),
+  live objects back to near home (buf 22, tex 77) but 121 libraries and 159 render pipeline states stay (CoreAnimation
+  in backboardd/SpringBoard keeps them). jemalloc profile (LD_PRELOAD via an MTLVK= wrapper, boot -> end of gate):
+  +250 MB = new_render_pipeline_state 78 (metal2vulkan compile artifacts: stage modules, functions loaded from the
+  cache, relocated SPIR-V 43; NVIDIA pipelines 35), pipelines compiled at draw time (at_user_initiated) 55 NVIDIA,
+  command buffers under replays::resolve 28 (in flight at the dump), device creation 33. Not fixed: dropping a
+  pipeline state's compile artifacts once its VkPipelines exist (metal2vulkan's pipeline cache) is the lever, and only
+  a new device returns the NVIDIA chunks.
+- kbd 91 (TextInput's daemon, started by the first keyboard use, no EnablePressuredExit: resident as on a device),
+  corespeechd 31, HOT daemons inside their 600 s.
+Peak (gate, ~4.6 GB in samples): 5-6 apps alive at once (News 403, WebContent x2 339, Safari 274, Wallet 247,
+Messages 233, Health 229) because the gate opens one every ~20 s and jetsam keeps the background ones 30 s (90 s for the
+last); runtime-files 1156 + aot.map 553 of it are file pages of busy processes (trimmed once idle). healthappd 206: not
+in the image (codecache 12) with a 49 MB host glibc heap: JIT overhead from live translation; image update/slab size.
+Anonymous RW at fresh home (269): unchanged; guest glibc is already arena_max=2 (mksimdevice); not split further.
+Settings warm 0.57 -> 0.75 s / 61 -> 53 fps vs RAM 5: same on the old library in RAM 6 and here; cause not found.

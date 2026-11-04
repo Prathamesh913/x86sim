@@ -70,8 +70,14 @@ HOT = set(os.environ.get("X86SIM_JETSAM_HOT", "containermanagerd,containermanage
 # passd at its launch) and each relaunch woke those 8 daemons (~400 MB) for jetsam to reclaim again: a loop.
 DEMAND = set(os.environ.get("X86SIM_JETSAM_DEMAND", "passd,assistant_cdmd,ContextService,"
                             "STExtractionService,localspeechrecognition,com.apple.datamigrator,"
-                            "com.apple.MobileAsset.DownloadService.Builtin,UserFontManager,siriactionsd,"
+                            "com.apple.MobileAsset.DownloadService.Builtin,siriactionsd,"
                             "assetsubscriptiond,AppIntentsLiveEntityService,assistantd").split(",")) - {""}
+# RAM 7: kept resident although idle-exit-able. UserFontManager is fontservicesd's XPC service; fontservicesd's activity
+# com.apple.fontservicesd.subscription-support (Interval 300) asks it for the font providers' subscription info every
+# 5 min (0.2 s of CPU). Reclaimed 30 s after each ask, every ask relaunched it: ~140 MB PSS (dyld cache fault-around)
+# for the ~30 s until libarm64jit's file trim, then the kill. Resident and trimmed it is 7 MB. On a device an idle
+# XPC service whose client lives sits in the idle band until real memory pressure.
+RESIDENT = set(os.environ.get("X86SIM_JETSAM_RESIDENT", "UserFontManager").split(",")) - {""}
 # RAM 4: on-demand daemons that stay dirty (an XPC transaction nobody ends) with nothing to do: reclaimed once CPU-idle for
 # X86SIM_JETSAM_DIRTY_IDLE s anyway, as a device's jetsam takes dirty background daemons under pressure. siriactionsd: a
 # relaunch by a launch event (LaunchServices / Biome / defaults notifications) leaves it dirty for good (~80 MB).
@@ -408,6 +414,8 @@ def sweep(verbose=False, status=False):
         if ".app/" in exe or not DAEMONS or not jm or len(jm[1]) < 2:
             continue
         dirty, name = jm[1][1], name_of(exe)
+        if name in RESIDENT:
+            continue
         if not (dirty & 1) or not ((dirty & 2) or name in DEMAND):
             continue
         if not idle or ((dirty & 4) and name not in DIRTY_OK):

@@ -179,7 +179,8 @@ def main():
             print(f"{v / M:8.0f}  {n or '[anon]'}")
     if "--json" in sys.argv:
         with open(sys.argv[sys.argv.index("--json") + 1], "w") as f:
-            json.dump({"byproc": byproc, "bycat": bycat, "swap": swp, "pdirty": pdirty}, f, indent=1)
+            json.dump({"byproc": byproc, "bycat": bycat, "swap": swp, "pdirty": pdirty,
+                       "bycatproc": {c: dict(v) for c, v in bycatproc.items()}}, f, indent=1)
 
 
 if __name__ == "__main__":
