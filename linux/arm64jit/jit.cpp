@@ -699,6 +699,13 @@ static void profile_tick() {
          (unsigned long long)st.guest_instructions, st.code_bytes / 1048576.0, (unsigned long long)st.lookups, g_live_threads.load());
 }
 
+// RAM 4 (host.cpp file trim): fn(arg) under the shared emitter lock; false when there is no shared cache (yet).
+bool with_shared_code_lock(void (*fn)(void *), void *arg) {
+    if (!shared_translations() || !g_shared_code) return false;
+    Dynarmic::A64::Jit::WithSharedLock(*g_shared_code, fn, arg);
+    return true;
+}
+
 // Called from host.cpp memlog_once / SIGUSR1. Safe when this tid has no GuestThread.
 void memlog_shared_stats() {
     if (!shared_translations()) return;

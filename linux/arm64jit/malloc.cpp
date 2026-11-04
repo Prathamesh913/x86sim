@@ -292,6 +292,7 @@ void native_malloc_install() {
         else if (handlers().count(name)) logf("native malloc: %s is not in __TEXT", name.c_str());
     auto patch = [&](u64 addr, const std::string &name, Handler h) {
         u64 page = addr & ~0xfffull, len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
+        std::lock_guard g(g_text_patch_mu);
         if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) die("native malloc: mprotect %#lx", (unsigned long)page);
         emit_stub((uint32_t *)addr, add_thunk(name, h));
         mprotect((void *)page, len, PROT_READ | PROT_EXEC);

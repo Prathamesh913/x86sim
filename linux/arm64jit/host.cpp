@@ -1,8 +1,12 @@
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/personality.h>
 #include <algorithm>
 #include <malloc.h>
 #include <thread>
+#include <map>
+#include <mutex>
+#include <string>
 // libarm64jit: process setup. Called by the x86_64 host program (host/arm64host) after Darling's libSystem is up.
 // Maps the arm64 main executable and dyld_sim, writes the 16K arm64 commpage, builds the stub dylibs for the host
 // libraries, then runs _dyld_sim_prepare() and main under the JIT on this (the main) thread. dyld_sim maps the
@@ -632,8 +636,245 @@ static void start_memlog() {
         }
     }).detach();
 }
+// RAM 4: every read fault on a file mapping maps the whole fault-around window (fault_around_bytes = 64 KB, or the
+// whole large folio) of what is in the page cache; MADV_RANDOM no longer turns that off. A process ends up mapping
+// several times the pages it touched (all counted in PSS; Referenced is set on all of them).
+// X86CODE_A64_FILETRIM=<secs> (default 15, 0 off): a native thread checks every <secs> whether the process was idle (under 3% CPU)
+// and its file RSS grew by >= 2 MB since the last trim; then it drops the page-table entries of clean file pages
+// (MADV_DONTNEED: the pages stay in the page cache; a later touch maps them again from there, no I/O). Only where no
+// data can be lost: read-only shared mappings (a shared page lives in the page cache anyway), and the parts of a
+// dyld shared cache's private mappings whose cache mapping can never be written (max protection without write:
+// __TEXT, __LINKEDIT), page by page from /proc/self/pagemap (only present file pages, bit 61; a COW'd page is kept).
+// libarm64jit's own patches of guest __TEXT (mprotect, write, mprotect) hold g_text_patch_mu, as does each 2 MB step.
+// The AOT image (.map, MAP_PRIVATE rwx: link sites are written at run time) the same way, page by page, with the
+// shared emitter lock held for each 2 MB step (every write to translated code happens under it), so a site being
+// linked can never lose its new copy-on-write page. X86CODE_A64_FILETRIM_IMAGE=0: leave the image alone.
+std::mutex g_text_patch_mu;
+bool with_shared_code_lock(void (*fn)(void *), void *arg);  // jit.cpp
+static long rss_file_kb() {
+    long v = -1;
+    if (FILE *f = fopen("/proc/self/status", "r")) {
+        char l[256];
+        while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssFile:", 8)) { v = atol(l + 8); break; }
+        fclose(f);
+    }
+    return v;
+}
+// file ranges [off, end) of a dyld cache file whose mappings have no write in their max protection; empty if not one
+static std::vector<std::pair<u64, u64>> cache_ro_ranges(const char *path) {
+    std::vector<std::pair<u64, u64>> r;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return r;
+    uint8_t h[0x200];
+    if (pread(fd, h, sizeof h, 0) == (ssize_t)sizeof h && !memcmp(h, "dyld_v1", 7)) {
+        uint32_t off, cnt;
+        memcpy(&off, h + 0x10, 4); memcpy(&cnt, h + 0x14, 4);
+        for (uint32_t i = 0; i < cnt && i < 32; i++) {
+            struct { u64 addr, size, fileoff; uint32_t maxprot, initprot; } m;
+            if (pread(fd, &m, sizeof m, off + 32 * i) != (ssize_t)sizeof m) break;
+            if (!(m.maxprot & 2) && m.size) r.push_back({m.fileoff, m.fileoff + m.size});
+        }
+    }
+    close(fd);
+    return r;
+}
+static void file_trim_once() {
+    struct V { u64 a, b; int kind; };  // 0 cache (g_text_patch_mu), 1 shared, 2 AOT image (emitter lock)
+    static const bool image = !(getenv("X86CODE_A64_FILETRIM_IMAGE") && atoi(getenv("X86CODE_A64_FILETRIM_IMAGE")) == 0);
+    std::vector<V> v;
+    static std::map<std::string, std::vector<std::pair<u64, u64>>> ro;  // per cache file
+    if (FILE *f = fopen("/proc/self/maps", "r")) {
+        char l[4096];
+        while (fgets(l, sizeof l, f)) {
+            unsigned long a, b, off, ino;
+            char perm[8];
+            int path = 0;
+            if (sscanf(l, "%lx-%lx %7s %lx %*x:%*x %lu %n", &a, &b, perm, &off, &ino, &path) < 5 || !ino || !path) continue;
+            char *n = l + path;
+            n[strcspn(n, "\n")] = 0;
+            if (n[0] != '/' || !strncmp(n, "/dev/", 5) || !strncmp(n, "/memfd:", 7) || !strncmp(n, "/SYSV", 5)) continue;
+            if (perm[0] != 'r' || b - a < 0x10000) continue;
+            const size_t nl = strlen(n);
+            if (image && perm[3] == 'p' && nl > 4 && !strcmp(n + nl - 4, ".map") && strstr(n, ".aot.")) { v.push_back({a, b, 2}); continue; }
+            if (perm[1] == 'w') continue;
+            if (perm[3] == 's') { v.push_back({a, b, 1}); continue; }
+            if (!strstr(n, "dyld_sim_shared_cache") && !strstr(n, "dyld_shared_cache")) continue;
+            auto it = ro.find(n);
+            if (it == ro.end()) it = ro.emplace(n, cache_ro_ranges(n)).first;
+            for (auto [lo, hi] : it->second) {  // the VMA's part that lies in a never-writable cache mapping
+                const u64 s = std::max<u64>(off, lo), e = std::min<u64>(off + (b - a), hi);
+                if (s < e) v.push_back({a + (s - off), a + (e - off), 0});
+            }
+        }
+        fclose(f);
+    }
+    int pm = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC);
+    if (pm < 0) return;
+    struct Step { int pm; u64 s, e; bool ok; } st{pm, 0, 0, true};
+    // drops the present file pages of [s, e) (at most 2 MB), keeping every private page
+    static void (*const step)(void *) = [](void *p) {
+        auto &q = *(Step *)p;
+        static u64 ent[0x200];
+        const u64 n = (q.e - q.s) >> 12;
+        if (pread(q.pm, ent, n * 8, (off_t)(q.s >> 12) * 8) != (ssize_t)(n * 8)) { q.ok = false; return; }
+        auto file = [&](u64 k) { return (ent[k] >> 63 & 1) && (ent[k] >> 61 & 1); };
+        for (u64 i = 0; i < n;) {
+            if (!file(i)) { i++; continue; }
+            u64 j = i;
+            while (j < n && file(j)) j++;
+            madvise((void *)(q.s + (i << 12)), (j - i) << 12, MADV_DONTNEED);
+            i = j;
+        }
+    };
+    for (const V &m : v) {
+        if (m.kind == 1) { madvise((void *)m.a, m.b - m.a, MADV_DONTNEED); continue; }
+        st.ok = true;
+        for (u64 s = m.a; s < m.b && st.ok; s += 0x200000) {
+            st.s = s; st.e = std::min(m.b, s + 0x200000);
+            if (m.kind == 0) { std::lock_guard g(g_text_patch_mu); step(&st); }
+            else if (!with_shared_code_lock(step, &st)) break;
+        }
+    }
+    close(pm);
+}
+// RAM 4 diagnostics: X86CODE_A64_COWDIFF=<secs> X86CODE_A64_COWDIFF_DIR=<dir>: once, <secs> after start, compare
+// every private (COW'd) page of the AOT image mapping with the file and classify the changed bytes by the site kind
+// they hit (link head: 8-byte aligned `mov rax, imm64` unlinked / jmp/jcc linked; RSB `mov rcx, imm64`; other), and
+// where a linked jump now points (inside the image or not). Written to <dir>/cowdiff-<exe>-<pid>.txt.
+static void cow_diff_once() {
+    const char *dir = getenv("X86CODE_A64_COWDIFF_DIR");
+    if (!dir) return;
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return;
+    char l[4096], path[4096] = "";
+    unsigned long a = 0, b = 0, off = 0;
+    while (fgets(l, sizeof l, f)) {
+        int pp = 0;
+        unsigned long x, y, o;
+        char perm[8];
+        if (sscanf(l, "%lx-%lx %7s %lx %*x:%*x %*u %n", &x, &y, perm, &o, &pp) < 4 || !pp) continue;
+        char *n = l + pp;
+        n[strcspn(n, "\n")] = 0;
+        const size_t nl = strlen(n);
+        if (nl > 4 && !strcmp(n + nl - 4, ".map") && strstr(n, ".aot.") && y - x > (b - a)) { a = x; b = y; off = o; snprintf(path, sizeof path, "%s", n); }
+    }
+    fclose(f);
+    if (!a) return;
+    int pm = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC), fd = open(path, O_RDONLY | O_CLOEXEC);
+    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *bn = exe && strrchr(exe, '/') ? strrchr(exe, '/') + 1 : "guest";
+    char out[512];
+    snprintf(out, sizeof out, "%s/cowdiff-%s-%d.txt", dir, bn, (int)getpid());
+    FILE *o = fopen(out, "w");
+    if (pm < 0 || fd < 0 || !o) { if (o) fclose(o); if (pm >= 0) close(pm); if (fd >= 0) close(fd); return; }
+    u64 pages = 0, same = 0, resident = 0, runs = 0;
+    u64 k_head_link = 0, k_head_unlink = 0, k_head_other = 0, k_rcx = 0, k_other = 0, to_image = 0, to_outside = 0;
+    u64 rcx_to_image = 0, rcx_to_outside = 0, rcx_to_ret = 0;
+    uint8_t fp[4096 + 16];
+    int samples = 0;
+    for (u64 s = a; s < b; s += 4096) {
+        u64 e;
+        if (pread(pm, &e, 8, (off_t)(s >> 12) * 8) != 8) break;
+        if (!(e >> 63 & 1)) continue;
+        resident++;
+        if (e >> 61 & 1) continue;  // still the file page
+        pages++;
+        const uint8_t *m = (const uint8_t *)s;
+        memset(fp, 0, sizeof fp);
+        if (pread(fd, fp, 4096, (off_t)(off + (s - a))) != 4096) continue;
+        if (!memcmp(m, fp, 4096)) { same++; continue; }
+        for (u64 j = 0; j < 4096;) {
+            if (m[j] == fp[j]) { j++; continue; }
+            u64 k = j;
+            while (k < 4096 && m[k] != fp[k]) k++;
+            runs++;
+            const u64 al = j & ~7ull;  // shared link heads are 8-byte aligned; rcx imm64 too
+            const u64 at = s + al;
+            if (fp[al] == 0x48 && fp[al + 1] == 0xB8) {
+                if (m[al] == 0xE9 || (m[al] == 0x0F && (m[al + 1] == 0x8F || m[al + 1] == 0x84))) {
+                    k_head_link++;
+                    const int len = m[al] == 0xE9 ? 5 : 6;
+                    int32_t rel; memcpy(&rel, m + al + (len - 4), 4);
+                    const u64 t = at + len + rel;
+                    (t >= a && t < b ? to_image : to_outside)++;
+                } else k_head_unlink++;
+                k = std::max<u64>(k, al + 8);
+            } else if (al >= 2 && fp[al - 2] == 0x48 && fp[al - 1] == 0xB9) {
+                k_rcx++;
+                u64 t; memcpy(&t, m + al, 8);
+                u64 t0; memcpy(&t0, fp + al, 8);
+                if (t >= a && t < b) rcx_to_image++; else rcx_to_outside++;
+                (void)t0;
+                k = std::max<u64>(k, al + 8);
+            } else if (al < 4096 - 8 && al >= 8 && j == al + 2 && fp[al] == 0x48 && fp[al + 1] == 0xB9) {
+                k_rcx++; rcx_to_ret++;
+            } else {
+                k_other++;
+                if (samples < 40) {
+                    samples++;
+                    fprintf(o, "other @+%#lx:", (unsigned long)(s - a + j));
+                    for (u64 q = (j >= 12 ? j - 12 : 0); q < std::min<u64>(4096, j + 12); q++) fprintf(o, " %02x", fp[q]);
+                    fprintf(o, "  ->");
+                    for (u64 q = (j >= 12 ? j - 12 : 0); q < std::min<u64>(4096, j + 12); q++) fprintf(o, " %02x", m[q]);
+                    fprintf(o, "\n");
+                }
+            }
+            j = k;
+        }
+    }
+    fprintf(o, "image %s\nresident %lu private %lu identical-to-file %lu diff-runs %lu\n", path, (unsigned long)resident,
+            (unsigned long)pages, (unsigned long)same, (unsigned long)runs);
+    fprintf(o, "link heads linked %lu (to image %lu, outside %lu), unlinked/other %lu/%lu; rcx imm %lu (image %lu outside %lu); other %lu\n",
+            (unsigned long)k_head_link, (unsigned long)to_image, (unsigned long)to_outside, (unsigned long)k_head_unlink,
+            (unsigned long)k_head_other, (unsigned long)k_rcx, (unsigned long)rcx_to_image, (unsigned long)rcx_to_outside,
+            (unsigned long)k_other);
+    fclose(o);
+    close(pm);
+    close(fd);
+}
+static void start_file_trim() {
+    if (const char *c = getenv("X86CODE_A64_COWDIFF"); c && atoi(c) > 0) {
+        sigset_t all, old;
+        sigfillset(&all);
+        pthread_sigmask(SIG_SETMASK, &all, &old);
+        std::thread([secs = atoi(c)] { g_non_darling_thread = true; sleep(secs); cow_diff_once(); }).detach();
+        pthread_sigmask(SIG_SETMASK, &old, nullptr);
+    }
+    const char *e = getenv("X86CODE_A64_FILETRIM");
+    const int secs = e && *e ? atoi(e) : 15;
+    if (secs <= 0) return;
+    sigset_t all, old;
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &old);
+    std::thread([secs] {
+        g_non_darling_thread = true;
+        setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 19);
+        auto cpu = [] { timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; };
+        long base = 0;
+        double c0 = cpu();
+        sleep(secs);
+        for (;;) {
+            sleep(secs);
+            const double c1 = cpu(), busy = (c1 - c0) / (secs * 10.0);  // percent of one CPU
+            c0 = c1;
+            const long r = rss_file_kb();
+            if (busy >= 3.0 || r < 0 || r - base < 2048) continue;
+            timespec t0, t1;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            file_trim_once();
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            base = rss_file_kb();
+            c0 = cpu();
+            if (getenv("X86CODE_A64_FILETRIM_LOG"))
+                logf("filetrim: RssFile %ld -> %ld MB in %.1f ms (cpu %.1f%%)", r >> 10, base >> 10,
+                     (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6, busy);
+        }
+    }).detach();
+    pthread_sigmask(SIG_SETMASK, &old, nullptr);
+}
 static void install_fault_report() {
     start_memlog();
+    start_file_trim();
     hook_native_abort();
     g_scratch_abrt = scratch_dir().c_str();
     { struct sigaction sa{}; sa.sa_sigaction = on_abrt; sa.sa_flags = SA_SIGINFO | SA_ONSTACK; sigaction(SIGABRT, &sa, nullptr); }

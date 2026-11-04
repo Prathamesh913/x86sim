@@ -154,6 +154,7 @@ void native_objc_install() {
         u64 addr = g_msgsend;
         u64 page = addr & ~0xfffull;
         u64 len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
+        std::lock_guard g(g_text_patch_mu);
         if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) {
             logf("native objc: mprotect %#lx failed", (unsigned long)page);
             g_svc_native = false;
@@ -190,6 +191,7 @@ static bool patch_return(GuestThread &t, u64 addr, uint32_t expect, uint32_t mov
         return false;
     }
     u64 page = addr & ~0xfffull, len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
+    std::unique_lock g(g_text_patch_mu);
     if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) {
         logf("patch %s: mprotect %#lx failed", what, (unsigned long)page);
         return false;
@@ -197,6 +199,7 @@ static bool patch_return(GuestThread &t, u64 addr, uint32_t expect, uint32_t mov
     p[0] = mov_ret;
     p[1] = 0xd65f03c0u;  // ret
     mprotect((void *)page, len, PROT_READ | PROT_EXEC);
+    g.unlock();
     t.jit->InvalidateCacheRange(addr, 8);
     if (getenv("X86CODE_A64_STATS")) logf("patch %s at %#lx", what, (unsigned long)addr);
     return true;
