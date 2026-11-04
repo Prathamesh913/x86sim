@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <shared_mutex>
 #include <memory>
 #include <atomic>
 #include <optional>
@@ -235,6 +236,10 @@ void objc_cache_gc_guard(GuestThread &t);
 void sim_service_patches(GuestThread &t);
 extern std::atomic<bool> g_stub_guard_armed;
 void jitcache_save_on_exit();
+// RAM 6: held shared by every guest call that can make memory writable or map over it (mprotect, vm_protect, mmap,
+// vm_map, vm_remap, vm_allocate); exclusive while the file trim drops clean pages of the dyld cache's writable-max
+// (read-only now) mappings, so no write can land between its pagemap check and the MADV_DONTNEED.
+extern std::shared_mutex g_cache_prot_mu;
 extern std::mutex g_text_patch_mu;  // RAM 4: held while libarm64jit patches guest __TEXT (host.cpp file trim)
 extern thread_local bool g_non_darling_thread;  // logf: stderr only (plain std::thread, e.g. the cache saver)
 // Speed 6: state that translated code addresses, at a fixed address (jit.cpp; shared AOT image).

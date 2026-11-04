@@ -717,6 +717,11 @@ static void h_cache_control(GuestThread &t, u32) {
     t.set_x(0, fn == 1 || fn == 2 ? 0 : 45);
 }
 
+// RAM 6: see g_cache_prot_mu (host.cpp file trim)
+template <Handler H> static void h_cachelock(GuestThread &t, u32 i) {
+    std::shared_lock g(g_cache_prot_mu);
+    H(t, i);
+}
 Handler special_handler(const std::string &n, int *nfixed, const char **native_name) {
     static const std::map<std::string, int> variadic = {
         {"_open", 2}, {"_open$NOCANCEL", 2}, {"_openat", 3}, {"_openat$NOCANCEL", 3}, {"_fcntl", 2}, {"_fcntl$NOCANCEL", 2},
@@ -759,10 +764,14 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_pthread_workqueue_setup", h_workqueue_setup}, {"_pthread_introspection_hook_install", h_introspection_hook},
         {"_mach_msg_server", h_callbacks<0>}, {"_mach_msg_server_once", h_callbacks<0>},
         {"_mach_msg_server_importance", h_callbacks<0>}, {"___sigaction", h_sigaction}, {"___platform_sigaction", h_platform_sigaction},
-        {"_mach_vm_map", h_vm_map}, {"_vm_map", h_vm_map}, {"_mach_vm_remap", h_vm_remap}, {"_vm_remap", h_vm_remap},
-        {"_mach_vm_remap_new", h_vm_remap}, {"_vm_remap_new", h_vm_remap}, {"_mach_vm_allocate", h_vm_allocate},
-        {"_vm_allocate", h_vm_allocate}, {"_mmap", h_mmap}, {"_munmap", h_munmap}, {"___munmap", h_munmap},
-        {"_mach_vm_deallocate", h_vm_deallocate}, {"_vm_deallocate", h_vm_deallocate}, {"___mmap", h_mmap}, {"_mach_msg_overwrite", h_msg_overwrite}, {"_mach_msg", h_mach_msg},
+        {"_mach_vm_map", h_cachelock<h_vm_map>}, {"_vm_map", h_cachelock<h_vm_map>}, {"_mach_vm_remap", h_cachelock<h_vm_remap>},
+        {"_vm_remap", h_cachelock<h_vm_remap>}, {"_mach_vm_remap_new", h_cachelock<h_vm_remap>},
+        {"_vm_remap_new", h_cachelock<h_vm_remap>}, {"_mach_vm_allocate", h_cachelock<h_vm_allocate>},
+        {"_vm_allocate", h_cachelock<h_vm_allocate>}, {"_mmap", h_cachelock<h_mmap>}, {"_munmap", h_munmap}, {"___munmap", h_munmap},
+        {"_mach_vm_deallocate", h_vm_deallocate}, {"_vm_deallocate", h_vm_deallocate}, {"___mmap", h_cachelock<h_mmap>},
+        {"_mprotect", h_cachelock<h_generic>}, {"___mprotect", h_cachelock<h_generic>},
+        {"_mach_vm_protect", h_cachelock<h_generic>}, {"_vm_protect", h_cachelock<h_generic>},
+        {"__kernelrpc_mach_vm_protect_trap", h_cachelock<h_generic>}, {"_mach_msg_overwrite", h_msg_overwrite}, {"_mach_msg", h_mach_msg},
         {"__exit", h_exit}, {"___exit", h_exit}, {"_abort_with_payload", h_abort_with}, {"_abort_with_reason", h_abort_with}, {"_pthread_exit", h_pthread_exit}, {"___pthread_kill", h_kill_like}, {"_pthread_kill", h_kill_like},
         {"___kill", h_kill_like}, {"_kill", h_kill_like},
         {"_thread_get_state", h_thread_get_state}, {"_thread_set_state", h_thread_set_state}, {"_thread_get_register_pointer_values", h_thread_get_register_pointer_values},

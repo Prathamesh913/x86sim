@@ -650,6 +650,7 @@ static void start_memlog() {
 // shared emitter lock held for each 2 MB step (every write to translated code happens under it), so a site being
 // linked can never lose its new copy-on-write page. X86CODE_A64_FILETRIM_IMAGE=0: leave the image alone.
 std::mutex g_text_patch_mu;
+std::shared_mutex g_cache_prot_mu;
 bool with_shared_code_lock(void (*fn)(void *), void *arg);  // jit.cpp
 static long rss_file_kb() {
     long v = -1;
@@ -661,7 +662,8 @@ static long rss_file_kb() {
     return v;
 }
 // file ranges [off, end) of a dyld cache file whose mappings have no write in their max protection; empty if not one
-static std::vector<std::pair<u64, u64>> cache_ro_ranges(const char *path) {
+// (RAM 6: rw = the mappings whose max protection has write: __DATA_CONST / __AUTH_CONST, mapped read-only)
+static std::vector<std::pair<u64, u64>> cache_ro_ranges(const char *path, bool rw = false) {
     std::vector<std::pair<u64, u64>> r;
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return r;
@@ -672,11 +674,15 @@ static std::vector<std::pair<u64, u64>> cache_ro_ranges(const char *path) {
         for (uint32_t i = 0; i < cnt && i < 32; i++) {
             struct { u64 addr, size, fileoff; uint32_t maxprot, initprot; } m;
             if (pread(fd, &m, sizeof m, off + 32 * i) != (ssize_t)sizeof m) break;
-            if (!(m.maxprot & 2) && m.size) r.push_back({m.fileoff, m.fileoff + m.size});
+            if (!(m.maxprot & 2) != rw && m.size) r.push_back({m.fileoff, m.fileoff + m.size});
         }
     }
     close(fd);
     return r;
+}
+static bool cache_const_trim() {  // X86CODE_A64_FILETRIM_CONST=0: leave the cache's read-only __DATA_CONST alone
+    static const bool on = !(getenv("X86CODE_A64_FILETRIM_CONST") && atoi(getenv("X86CODE_A64_FILETRIM_CONST")) == 0);
+    return on;
 }
 static void file_trim_once() {
     struct V { u64 a, b; int kind; };  // 0 cache (g_text_patch_mu), 1 shared, 2 AOT image (emitter lock)
@@ -726,6 +732,43 @@ static void file_trim_once() {
             i = j;
         }
     };
+    // RAM 6: the dyld cache's __DATA_CONST / __AUTH_CONST (max protection read-write, mapped read-only): ~50-140 MB of
+    // clean fault-around file pages per UI process, never written here (0 anonymous pages in them at home). A write
+    // needs an mprotect / vm_protect (or a map over them) first; every guest call that can do that holds
+    // g_cache_prot_mu shared (handlers.cpp h_cachelock), so with it held exclusive the read-only VMAs found now stay
+    // read-only until the pages are dropped. Present file pages only (a COW'd page is anonymous and kept).
+    if (cache_const_trim()) {
+        std::unique_lock g(g_cache_prot_mu);
+        std::vector<V> w;
+        if (FILE *f = fopen("/proc/self/maps", "r")) {
+            static std::map<std::string, std::vector<std::pair<u64, u64>>> rw;
+            char l[4096];
+            while (fgets(l, sizeof l, f)) {
+                unsigned long a, b, off, ino;
+                char perm[8];
+                int path = 0;
+                if (sscanf(l, "%lx-%lx %7s %lx %*x:%*x %lu %n", &a, &b, perm, &off, &ino, &path) < 5 || !ino || !path) continue;
+                char *n = l + path;
+                n[strcspn(n, "\n")] = 0;
+                if (perm[0] != 'r' || perm[1] == 'w' || perm[3] != 'p' || b - a < 0x10000) continue;
+                if (!strstr(n, "dyld_sim_shared_cache") && !strstr(n, "dyld_shared_cache")) continue;
+                auto it = rw.find(n);
+                if (it == rw.end()) it = rw.emplace(n, cache_ro_ranges(n, true)).first;
+                for (auto [lo, hi] : it->second) {
+                    const u64 s = std::max<u64>(off, lo), e = std::min<u64>(off + (b - a), hi);
+                    if (s < e) w.push_back({a + (s - off), a + (e - off), 3});
+                }
+            }
+            fclose(f);
+        }
+        for (const V &m : w) {
+            st.ok = true;
+            for (u64 s = m.a; s < m.b && st.ok; s += 0x200000) {
+                st.s = s; st.e = std::min(m.b, s + 0x200000);
+                step(&st);
+            }
+        }
+    }
     for (const V &m : v) {
         if (m.kind == 1) { madvise((void *)m.a, m.b - m.a, MADV_DONTNEED); continue; }
         st.ok = true;
