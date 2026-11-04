@@ -38,10 +38,12 @@ static int on(void)
 		const char* dir = getenv("X86CODE_OSLOG_DIR");
 		if (!dir) e = NULL;
 #else
-		const char* dir = X86CODE_DATA_DIR "/var/log";
+		static char dirbuf[1100]; snprintf(dirbuf, sizeof(dirbuf), "%s/var/log", diag_data_dir());
+		const char* dir = dirbuf;
 		if (!e) {
 			// or the first line of data/oslog.filter (jobs launched by runningboard don't get our environment)
-			int ffd = open(X86CODE_DATA_DIR "/oslog.filter", O_RDONLY);
+			char fp[1100]; snprintf(fp, sizeof(fp), "%s/oslog.filter", diag_data_dir());
+			int ffd = open(fp, O_RDONLY);
 			if (ffd >= 0) { ssize_t n = read(ffd, fbuf, sizeof(fbuf) - 1); close(ffd); if (n > 0) { fbuf[n] = 0; fbuf[strcspn(fbuf, "\n")] = 0; e = fbuf; } }
 		}
 #endif
@@ -157,7 +159,7 @@ static void emit(os_log_t log, os_log_type_t type, const char* fmt, uint8_t* buf
 			// x86Code: call stack for messages containing the first line of data/oslog.bt (max 8 per process)
 			static char bt[256]; static int btinit, btn;
 #ifndef SIMSHIM_OSLOG
-			if (!btinit) { btinit = 1; int bfd = open(X86CODE_DATA_DIR "/oslog.bt", O_RDONLY);
+			if (!btinit) { btinit = 1; char bp[1100]; snprintf(bp, sizeof(bp), "%s/oslog.bt", diag_data_dir()); int bfd = open(bp, O_RDONLY);
 				if (bfd >= 0) { ssize_t k = read(bfd, bt, sizeof(bt) - 1); close(bfd); if (k > 0) { bt[k] = 0; char* nl = strchr(bt, '\n'); if (nl) *nl = 0; } } }
 			if (bt[0] && btn < 8 && strstr(out, bt)) { btn++; const char* st = [[[NSThread callStackSymbols] description] UTF8String]; write(fd, st, strlen(st)); write(fd, "\n", 1); }
 #else
