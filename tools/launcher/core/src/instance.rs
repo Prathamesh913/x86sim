@@ -588,6 +588,7 @@ fn stop_container(inst: &Instance, st: Option<&Status>) -> Result<()> {
     let out = Command::new(boot_script())
         .current_dir(repo_root())
         .env("A64_STOP_ONLY", "1")
+        .env("A64_KEEP_MTLVK", "1")
         .env("A64_DEVICE", &inst.dir)
         .env("A64_STATE", &state_dir)
         .env("A64_DPREFIX", &prefix)

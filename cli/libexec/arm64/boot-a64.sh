@@ -340,19 +340,48 @@ else
 fi
 ENVS=$(sed 's/^/"/; s/$/"/' "$D/sim.env" | tr '\n' ' ')
 ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86CODE_A64_TRACE=1)
-# stop only this prefix's container: its setuid launchers (timeout can't signal them) are found by their command
-# line (this device's path, or tests/arm64/run.sh's a64home), so the x86_64 container's are never touched; then
-# darling shutdown and stale state files
+# stop only this prefix's container. Its launchers (darling shell, and the `timeout` that holds the mDNSResponder
+# link) are found by their command line (this device's path, this state dir, or tests/arm64/run.sh's a64home), so
+# the x86_64 container's are never touched. Then darling shutdown, then a sweep of what it misses: darling shutdown
+# SIGKILLs darlingserver and the first entry of /proc/<darlingserver>/task/<main>/children only, and launchd is often
+# not a child of the main thread (or the entry is another process), so launchd -- pid 1 of the container's pid
+# namespace -- survived, reparented to the session's subreaper, with every daemon and app of the old boot under it
+# (ARM64-PLAN "Leftover containers"). All of these run as the user: plain kill works where sudo is not available.
+# A namespace init is this prefix's when its mount table has the prefix overlay mounted at exactly $DPREFIX.
+prefix_procs() {
+	local d p
+	for d in /proc/[0-9]*; do
+		p=${d#/proc/}
+		case "$(cat "$d/comm" 2>/dev/null)" in
+		darlingserver)
+			tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q "^darlingserver $DPREFIX " && echo "$p" ;;
+		mldr)  # Darling processes run under mldr: launchd is comm mldr
+			[ "$(awk '/^NSpid:/{print $NF}' "$d/status" 2>/dev/null)" = 1 ] || continue
+			awk -v m="$DPREFIX" '$5 == m { f = 1 } END { exit !f }' "$d/mountinfo" 2>/dev/null && echo "$p" ;;
+		esac
+	done
+}
 stop_prefix() {
-	local pids="" d p
+	local pids="" d p i left
 	for d in /proc/[0-9]*; do
 		p=${d#/proc/}
 		[ -r "$d/cmdline" ] || continue
-		[ "$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -1)" = "$X86SIM_DARLING" ] || continue
-		tr '\0' '\n' < "$d/cmdline" 2>/dev/null | grep -q -e "$D/" -e "/a64home" && pids="$pids $p"
+		tr '\0' '\n' < "$d/cmdline" 2>/dev/null | grep -qxF "$X86SIM_DARLING" || continue
+		tr '\0' '\n' < "$d/cmdline" 2>/dev/null | grep -q -e "$D/" -e "$ST/" -e "/a64home" && pids="$pids $p"
 	done
-	[ -n "$pids" ] && x86sim_sudo kill -9 $pids 2>/dev/null
+	if [ -n "$pids" ]; then
+		kill -9 $pids 2>/dev/null
+		# the setuid darling launchers (real uid 0) refuse the user's signal; they exit with their container
+		x86sim_sudo -n kill -9 $pids 2>/dev/null </dev/null
+	fi
 	timeout 30 "$X86SIM_DARLING" shutdown 2>/dev/null
+	for i in $(seq 1 50); do
+		left=$(prefix_procs)
+		[ -z "$left" ] && break
+		[ "$i" = 1 ] || [ "$i" = 20 ] && echo "boot-a64: ending leftover container processes of $DPREFIX:" $left >&2
+		kill -9 $left 2>/dev/null
+		sleep 0.1
+	done
 	local ip; ip=$(cat "$DPREFIX/.init.pid" 2>/dev/null)
 	if [ -z "$ip" ] || [ ! -d "/proc/$ip" ] || grep -q "^State:.*Z" "/proc/$ip/status" 2>/dev/null; then
 		rm -f "$DPREFIX/.init.pid" "$DPREFIX/.darlingserver.sock"
@@ -366,10 +395,17 @@ stop_prefix
 [ -f "$ST/jetsam.pid" ] && kill "$(cat "$ST/jetsam.pid")" 2>/dev/null
 rm -f "$ST/jetsam.pid"
 [ -f "$ST/mdns.pid" ] && kill "$(cat "$ST/mdns.pid")" 2>/dev/null
+# and one whose pidfile a later boot overwrote (two from the day before were still serving var/run-a64)
+pkill -f "mdnsresponder.py $ST/mDNSResponder\$" 2>/dev/null
 rm -f "$ST/mdns.pid" "$ST/mDNSResponder"
 [ -f "$ST/simaudio.pid" ] && kill "$(cat "$ST/simaudio.pid")" 2>/dev/null
 rm -f "$ST/simaudio.pid"
-[ "${A64_STOP_ONLY:-0}" = 1 ] && exit 0  # Speed 10: stop this device's container only
+# Speed 10: A64_STOP_ONLY=1 stops this device: the container, and its mtlvk unless another phone renders through it
+# (A64_KEEP_MTLVK=1: the container only -- the launcher's restart keeps the GPU helper, its stop ends it itself)
+if [ "${A64_STOP_ONLY:-0}" = 1 ]; then
+	[ "${A64_KEEP_MTLVK:-0}" = 1 ] || stop_a64_mtlvk
+	exit 0
+fi
 # the marks of the last boot (Darling pids are reused)
 rm -rf "$DPREFIX/private/var/run/x86code-suspended" "$DPREFIX/private/var/run/x86code-jetsam"
 # the Darling pieces our build fixed (libsystem_kernel ...), also into a recreated prefix: cli/libexec/arm64/prefix-heal.sh
