@@ -63,7 +63,12 @@ BACKOFF_MAX = float(os.environ.get("X86SIM_JETSAM_MAX", "1800"))
 HOT = set(os.environ.get("X86SIM_JETSAM_HOT", "containermanagerd,containermanagerd_system,trustd,securityd,"
                          "iconservicesagent,fontservicesd,pkd,appprotectiond,tccd,systemstatusd,usernotificationsd,"
                          "sleepd,diagnosticd,mobilegestalt,UserEventAgent,nsurlsessiond,cloudd").split(","))
-DEMAND = set(os.environ.get("X86SIM_JETSAM_DEMAND", "passd,mobileassetd,assistant_cdmd,ContextService,"
+# RAM 5: not mobileassetd. Every mobileassetd start posts MobileAsset's STARTUP_ACTIVATED and ATOMIC_INSTANCE_* notifications
+# (by design once per boot: it runs for the whole boot on a device), and those are launch events of assistantd, corespeechd,
+# siriknowledged, assetsubscriptiond (-> sirittsd, ContextService, localspeechrecognition, STExtractionService). Reclaimed
+# idle, it was looked up again within 5 min (fontservicesd's 300 s activity subscription-support asks it for font assets;
+# passd at its launch) and each relaunch woke those 8 daemons (~400 MB) for jetsam to reclaim again: a loop.
+DEMAND = set(os.environ.get("X86SIM_JETSAM_DEMAND", "passd,assistant_cdmd,ContextService,"
                             "STExtractionService,localspeechrecognition,com.apple.datamigrator,"
                             "com.apple.MobileAsset.DownloadService.Builtin,UserFontManager,siriactionsd,"
                             "assetsubscriptiond,AppIntentsLiveEntityService,assistantd").split(",")) - {""}

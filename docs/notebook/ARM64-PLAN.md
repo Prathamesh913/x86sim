@@ -2636,3 +2636,37 @@ Why clean file pages of the dyld cache and the AOT image (.map/.idx) dominated P
   1505 -> 1287; home PSS 851 MB. Settings cold content 3.41 s (was 4.0-4.4), Maps cold 3.00 s; warm unchanged. Boot
   16.7 s (the first process after a rebuild writes the 1 GB relocated .map; one-off). The image goes stale again as
   training feeds back; keeping it current (`update`) is what keeps the COW down.
+
+## RAM 5: idle daemon relaunch loop (2026-11-03, main phone)
+
+RAM 4 noted that mobileassetd came back about every 5 min at home and brought Siri's daemons with it. Cause found with
+launchd.log spawn reasons and liboslogdiag (filter: mobileassetd, fontservicesd, the Siri daemons, passd, searchd).
+- **What looked mobileassetd up again**: fontservicesd (HOT, stays up) has the plist activity
+  com.apple.fontservicesd.subscription-support (Interval 300, repeating). Every 5 min (:x4:57 / :x9:57) it starts
+  UserFontManager and connects to com.apple.mobileassetd.v2 (peer = fontservicesd's pid) for font assets. passd's boot
+  launch does the same once.
+- **Why that woke 8 daemons**: at each start mobileassetd runs its auto-asset startup and posts
+  `com.apple.MobileAsset.AutoAssetNotification^...^STARTUP_ACTIVATED` (even with the doneThisBoot cookie present) and
+  ATOMIC_INSTANCE_* notifications. These are notifyd launch events of assistantd, corespeechd, siriknowledged and
+  assetsubscriptiond, launched within 20 ms of the post. They pull in sirittsd, ContextService, localspeechrecognition
+  and STExtractionService. On a device mobileassetd runs for the whole boot (no EnablePressuredExit), so it posts once.
+  Here jetsam.py had it in DEMAND, killed it after 30 s idle, and the next lookup restarted the whole set. That was the
+  loop: ours, not a failing catalog query or an unfinished activity.
+- **Fix**: mobileassetd taken out of jetsam.py's DEMAND list. It stays resident (~55-67 MB PSS); the 5-min
+  fontservicesd query then reaches the running daemon and posts nothing. Its DownloadService.Builtin is still reclaimed.
+- Before/after on the main phone alone (memcat PSS MB, procs; same boot procedure):
+
+| min after boot | before | after |
+|---|---|---|
+| 1 | 1260 / 48 | 1263 / 49 (mobileassetd 55) |
+| 5 | 1073 / 44 (between cycles) | 1080 |
+| 10 | 1229 / 52 (assistantd 70, mobileassetd 53, sirittsd 26, ContextService 19, siriknowledged 19, assetsubscriptiond 13) | 1080 |
+| 15 | 1001 / 40 | 929 |
+| 20 | 975 / 38 | 929 (mobileassetd 67) |
+
+  After: over 20 min no assistantd/corespeechd/siri*/ContextService/assetsubscriptiond spawn; only UserFontManager
+  every 5 min (a 30 s blip). gates.sh 3 (r5g): 0 failed, Settings, "wifi" typed whole, Health, Wallet.
+- Not changed: the container's /private/var/run/MobileAssetStartupActivation.doneThisBoot is from Nov 2 (a device's
+  /var/run is cleared per boot); it only skips the first-boot activation.
+- Tool: liboslogdiag now finds the data directory at run time (HOME / CFFIXED_USER_HOME), so one build serves every
+  phone (X86CODE_INSERT=host/simshim/diag/arm64/liboslogdiag.dylib on `sim restart`, names in data/oslog.filter).
