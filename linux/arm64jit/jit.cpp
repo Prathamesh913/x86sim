@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <asm/prctl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -419,7 +420,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
     // the persisted window (shared cache + placed images: fixed per cache key), read without faulting. Unbound
     // slots (chained-fixup encodings in the AOT builder's unbound placed images) fall outside the window.
     std::optional<u64> MemoryReadConstant64(u64 a) override {
-        constexpr u64 lo = 0x1c0000000ull, hi = 0x2c0000000ull;
+        constexpr u64 lo = 0x1c0000000ull, hi = 0x300000000ull;  // RAM 13: kCacheHi
         if (a < lo || a + 8 > hi || (a & 7)) return std::nullopt;
         u64 v = 0;
         iovec l{&v, 8}, r{(void *)a, 8};
@@ -462,13 +463,15 @@ static bool shared_translations() {
 // < 2 GB), and the rest in a fixed data page 2 MB below the code cache.
 constexpr u64 kNoAslrCodeBase = 0x7fffa0000000ull;
 // Speed 18: the shared code cache holds the AOT image plus room for this process's own translations. Default 768 MB;
-// with a larger image, image + 384 MB, up to 1344 MB: the cache must stay within rel32 reach of libarm64jit and glibc (near
-// host calls in the prelude; the image's prelude layout depends on it). X86CODE_A64_CODECACHE_MB overrides.
+// with a larger image, image + 384 MB. RAM 13: up to 2000 MB (was 1344: rel32 reach of libarm64jit and glibc for the
+// prelude's near host calls). Every host call now goes through a stub page 4 MB below the cache (host_call_stubs), so
+// the cache needs reach only to that page and FixedData. X86CODE_A64_CODECACHE_MB overrides.
+constexpr u64 kMaxCodeCacheMb = 2000;
 static u64 code_cache_mb() {
     static const u64 mb = []() -> u64 {
-        if (const char *e = getenv("X86CODE_A64_CODECACHE_MB")) { const int v = atoi(e); if (v >= 64) return std::min(v, 1344); }
+        if (const char *e = getenv("X86CODE_A64_CODECACHE_MB")) { const int v = atoi(e); if (v >= 64) return std::min<u64>(v, kMaxCodeCacheMb); }
         const u64 img = jitcache_image_code_bytes() >> 20;
-        return std::clamp<u64>(img + 384, 768, 1344);
+        return std::clamp<u64>(img + 384, 768, kMaxCodeCacheMb);
     }();
     return mb;
 }
@@ -477,7 +480,7 @@ static u64 code_cache_base() {
         // the cache ends where the 768 MB one always ended (kNoAslrCodeBase + 768 MB) and grows downwards
         if (personality(0xffffffff) & ADDR_NO_RANDOMIZE) return kNoAslrCodeBase + (768ull << 20) - (code_cache_mb() << 20);
         Dl_info di{};
-        // below libarm64jit, as close as fits (Speed 18 builders use slabs of up to 1344 MB)
+        // below libarm64jit, as close as fits (builders use slabs of up to kMaxCodeCacheMb)
         return dladdr((void *)&code_cache_base, &di) && di.dli_fbase
                    ? ((u64)di.dli_fbase - std::max<u64>(1ull << 30, (code_cache_mb() << 20) + (64ull << 20))) & ~0xfffffull : 0;
     }();
@@ -492,6 +495,18 @@ FixedData &fixed_data() {
         return new (p) FixedData();
     }();
     return *fd;
+}
+
+// RAM 13: host-call stubs (16 bytes each, 64K of them) at a fixed address 4 MB below the code cache, filled as the
+// emitter needs them (the prelude first, in the same order in every process, so the prelude bytes stay shareable).
+static void host_call_stubs() {
+    constexpr size_t kBytes = 1u << 20;
+    const u64 b = code_cache_base();
+    if (!b || (getenv("X86CODE_A64_HOSTSTUBS") && atoi(getenv("X86CODE_A64_HOSTSTUBS")) == 0)) return;
+    void *p = mmap((void *)(b - 0x400000), kBytes, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (p == MAP_FAILED) { logf("hoststubs: %#llx taken", (unsigned long long)(b - 0x400000)); return; }
+    prctl(0x53564d41 /* PR_SET_VMA */, 0 /* ANON_NAME */, (unsigned long)p, kBytes, (unsigned long)"a64:hoststubs");
+    Dynarmic::A64::Jit::SetHostCallStubs(p, kBytes);
 }
 
 static Dynarmic::A64::Jit::SharedCode *g_shared_code;  // for memlog from host threads (never freed)
@@ -547,6 +562,7 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         // apps holds ~380 MB of code and filled 384 MB (SpringBoard aborted in a loop).
         c.code_cache_size = (size_t)code_cache_mb() << 20;
         if (const u64 b = code_cache_base()) Dynarmic::A64::Jit::SetCodeCacheAddress(b);
+        host_call_stubs();
         auto sc = Dynarmic::A64::Jit::MakeSharedCode(c);
         jitcache_set_shared(sc);
         g_shared_code = sc.get();
@@ -1000,7 +1016,7 @@ static std::string stub_symbol(const char *path, u64 off) {  // "/memfd:libsyste
     return b;
 }
 std::string where(u64 a) {
-    if (a >= 0x1c0000000ull && a < 0x2c0000000ull) return "cache";
+    if (a >= 0x1c0000000ull && a < 0x300000000ull) return "cache";
     std::string r;
     if (FILE *m = fopen("/proc/self/maps", "r")) {
         char line[768];

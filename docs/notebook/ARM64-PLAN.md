@@ -3091,3 +3091,88 @@ distance leaves 1344 MB, minus 256 MB live room = 1080 MB for an image that want
     the reach constraint is to that block, not to the library: the slab can then be ~2 GB below it minus live room.
 (c) is the clean one: one fixed page of `jmp [rip+x]` stubs filled at startup, image code calls only those; it frees
 ~650 MB of reach (about the missing 133 MB plus app-private tiers). Needs a codegen bump and a full image rebuild.
+
+## RAM 13 (2026-11-05, main phone alone): host-call stubs, no reach limit; the whole hot set and the apps in the image
+
+Codegen 0x1d. Scripts in ~/scratch/x86code/ram13/ (all.sh / apps.sh / run.sh / speed.sh as RAM 12; files.sh = the
+non-cache files each app maps; replace.py = placement without moving trained entries; train.sh = .live training with
+SIGUSR1; bench/stub.c). "Before" = RAM 12 n1 (same HEAD, same procedure).
+
+What limited the image: image blocks never call the host directly (HostCall blocks are not persisted), but they jump
+into the prelude (dispatcher, fallback thunks), whose host calls were `call rel32` when libarm64jit was in reach and
+`mov rax, imm64; call rax` otherwise. The image is valid only for a prelude of the same size, so the code cache had
+to sit within rel32 reach of libarm64jit and glibc: 1344 MB, minus 256 MB live room.
+
+Changes:
+1. **Host-call stubs (dynarmic block_of_code, libarm64jit jit.cpp)**. `BlockOfCode::CallFunction` always calls a
+   16-byte stub (`jmp [rip+2]; int3 x2; .quad target`) in a 1 MB RWX page at a fixed address 4 MB below the code cache
+   (a64:hoststubs; Jit::SetHostCallStubs). Stubs are allocated on first use, the prelude first and in the same order
+   in every process, so the prelude bytes no longer depend on where libarm64jit is. Before, there were several
+   prelude.<hash> files (3.9 MB each, one per library address); now there is one, shared by every process. The cache
+   only needs reach to the stub page and FixedData: max 2000 MB (kMaxCodeCacheMb; x86code-aot SLAB_MB 2000). Falls back
+   to the far call when the page cannot be mapped or is out of reach; X86CODE_A64_HOSTSTUBS=0 turns it off
+   (experiments: with a cache over 1344 MB the image then misses on prelude size). Cost: one 4 KB page per process
+   (fewer than 256 stubs in use). A microbenchmark (bench/stub.c: 2e8 calls to a small noinline function) gives
+   0.962 ns per direct call and 0.963 ns through the stub: a correctly predicted indirect jmp costs nothing measurable.
+2. **Persisted window to 0x300000000 (jitcache kCacheHi, host.cpp reservation, jit.cpp, mkplacement.py HI)**. The
+   placement window [0x2ac000000, 0x2c0000000) had 26 MB left, and the six apps map 181 unplaced arm64 Mach-Os
+   (184 MB: NewsUI2 31 MB, WorkoutUI 27, MobileSafariUI 9, Health and its ~60 plugins, WebKit's extension executables,
+   assistantd, securityd, geod, healthd ...). [0x2c0000000, 0x300000000) is free in every process (the guest VM
+   allocator and gheap start at 0x300000000). placement.txt keeps all 191 old entries at their addresses (training
+   is by address, so they stay valid) and adds the 181 first-fit (copy: cli/libexec/arm64/placement-24B8117.txt).
+3. **x86code-aot scope (aot.rs)**. A system app's own executable (Applications/X.app/X) with no training yet is
+   translated whole from its static entries, like the app tier: 16x its code bytes, because 3x and 8x truncated it.
+   Trained apps stay hot-only (Maps whole was 136+ MB, mostly cold, vs 21 MB hot). Newly placed frameworks get in by
+   training: one per-app pass plus train.sh (SIGUSR1 = memlog, which saves .live: apps.sh kills apps with -9 before
+   the autosave), then `x86code-aot update`.
+4. **Image mappings MADV_DONTDUMP (dynarmic MapImageRange / index maps)**. WebKit's WebContent/GPU/Networking abort
+   when Safari is killed (pre-existing: also in RAM 12's runs and on the old image). systemd-coredump read every
+   mapped page, so the gate's sampled peak caught one dump pass holding 870 MB of image pages (4139 MB "peak").
+   X86CODE_A64_IMAGE_DUMP=1 keeps the image in core dumps.
+
+Image: was 1213 MB wanted, 1080 MB room (133 MB of hot set cut at "one program"). Full build: 1257 MB code, nothing
+cut. After the training pass and update: **1318 MB code, 1187 chunks** (was 678), 6.44M blocks. Health's executable
+is 20 MB, News 4.5, NewsUI2 10, Heart/HealthRecords plugins, the WebKit executables. On disk: .aot 1926 MB (was 1619),
+relocated .map 1318 MB (1098 MB allocated, sparse; was 1095), .map.idx 300 MB (was 260). The per-process code cache
+is image + 384 = 1702 MB (reserved, not committed).
+
+Cost of mapping a bigger image: none per phone. The image is a shared MAP_PRIVATE file mapping; only touched pages are
+resident, and the file trim drops them as before. aot.map PSS at fresh home 21 MB (was 21), after gate + 15 min 23
+(22), aot.idx 0-6 MB. SpringBoard at home: aot.map Rss 19 MB, Pss 14, Private_Dirty 1. A Safari launch reaches 270
+MB of image pages in MobileSafari and 185 in WebContent, back near 0 within 10 s (wkwatch.sh). What the bigger image
+saves is JIT: the a64:* categories (codecache, block metadata, fastdispatch, lfmap) across the phone went 90 -> 43 MB
+at fresh home and 115 -> 67 after gate + 15 min.
+
+| point (PSS MB) | before (RAM 12 n1) | after (n1) |
+|---|---|---|
+| fresh home 15 min | 906 (mtlvk 230) | 960 / 951 25 s later (mtlvk 299; without mtlvk 676 -> 661 / 652) |
+| gate | 0 failed | 0 failed (again with the final DONTDUMP library: 0 failed, after apps 1929, idle 1506) |
+| gate "after apps" / "idle after the pass" | 1990 / 1523 | **1946 / 1475** |
+| after gate + 15 min | 1186 (mtlvk 347) | 1186 (mtlvk 365; without mtlvk 839 -> 821; healthd +58, SpringBoard -26) |
+| sampled peak | 3796 | 4139 (a WebKit core-dump pass, item 4; next highest sample 3524, Maps' route) |
+
+mtlvk is the native Linux Metal service: the image does not touch it. Its +18-69 MB is the high-water variance
+already seen in RAM 10-11.
+
+Per app (apps.sh, app PSS at A = open 20 s / H = home 22 s; JIT = the app's codecache + block metadata):
+
+| app | before A / H | after A / H | app JIT before -> after |
+|---|---|---|---|
+| Settings | 96 / 91 | 89 / 82 | 5 -> 0 |
+| Maps | 183 / 212 | 197 / 207 | 7 -> 3 (aot.map file pages 3 -> 9 at A: Maps' run, trimmed) |
+| Wallet | 87 / 86 | 89 / 82 | 0 -> 0 |
+| Health | 129 / 101 | 139 / 111 | 2 -> 0 (aot.map +4, anon +5) |
+| Safari | 82 / 82 (WebKit 198 / 184) | 77 / 76 (WebKit 213 / 192) | 9 -> 6 |
+| News | **145 / 140** | **97 / 118** | **37 -> 0** (codecache 21, metadata 16) |
+
+Speed (fresh boot, openm N=2, after vs RAM 12): Settings cold 3.93 / 3.73 s (4.55 / 3.65), warm 0.74 / 0.74 (0.76 /
+0.73); Maps 2.57 / 2.92 (3.20 / 3.12); Safari 4.64 / 4.72 (4.85); News 3.77 / 3.50 (3.45); Settings scroll 53.3 fps,
+p50 16.7 (51.9). OCR time to content (hw.sh, 3 rounds): Health 3.5-4.1 s, Wallet 1.0, Safari 4.6-4.9 (RAM 11: 3.6-4.3,
+1.0, 4.9-5.3). Screenshots (home, Settings, Maps, Wallet, Health, Safari, News) correct.
+
+Not done / found:
+- MobileSafariUI and WorkoutUI are placed but have no chunk: no training reached them (no .live blocks in their
+  range). They get in when training reaches them (the install hook's update).
+- apps.sh / gate lib: `CRASH X crashed at launch` without a sizes baseline matches old crash lines in reused per-pid
+  logs (Maps.N.log, Health.N.log); not a crash (the app came up, screenshots correct).
+- WebKit helpers' SIGABRT on Safari's teardown (above) is not investigated.

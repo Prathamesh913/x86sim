@@ -1166,8 +1166,8 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     read_const_mappings(cache);
     double t_stubs = ms_since(g_t0);
 
-    // Keep the cache's fixed range free for dyld_sim's MAP_FIXED mappings.
-    mmap((void *)0x1C0000000ull, 0x2C0000000ull - 0x1C0000000ull, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+    // Keep the cache's fixed range free for dyld_sim's MAP_FIXED mappings (RAM 13: and placed files up to 0x300000000).
+    mmap((void *)0x1C0000000ull, 0x300000000ull - 0x1C0000000ull, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     map_commpage();
     Mapped main_exe = map_macho(exe, false);
     Mapped dyld = map_macho(root + "/usr/lib/dyld_sim", true);

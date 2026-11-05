@@ -29,12 +29,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// libarm64jit's code cache is at most 1344 MB (rel32 reach of libarm64jit and glibc); 384 MB of it stays free for
+/// libarm64jit's code cache is at most 2000 MB (RAM 13: host calls go through a stub page next to it, so only reach to
+/// that page limits it; was 1344 MB, rel32 reach of libarm64jit and glibc); 384 MB of it stays free for
 /// each process's own translations.
-pub const SLAB_MB: u64 = 1344;
+pub const SLAB_MB: u64 = 2000;
 pub const DEFAULT_BUDGET_MB: u64 = SLAB_MB - 384;
 /// Speed 35: slab space a full build leaves for each process's live translations. 2026-11-03: 384 (was 128), the whole
-/// per-process live allowance (code cache = min(image + 384, 1344) MB): with scope "hot" a full build packed the slab to
+/// per-process live allowance (code cache = min(image + 384, SLAB_MB) MB): with scope "hot" a full build packed the slab to
 /// 1216 MB and Maps' route (search, place card, directions) aborted "shared code cache full" 3 of 3 times.
 pub const FULL_LIVE_ROOM_MB: u64 = 256;
 const HOT_BYTES_PER_BLOCK: f64 = 260.0;
@@ -334,7 +335,7 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     let loaded: HashSet<String> = if cfg.scope == "loaded" { dependency_closure(&cache, &placed_deps) } else { HashSet::new() };
     chunks.retain(|c| match cfg.scope.as_str() {
         // Speed 31: app-tier chunks always (an app on the image never trains: it would translate its own code live)
-        "hot" => !c.hot.is_empty() || c.src.kind == Kind::App,
+        "hot" => !c.hot.is_empty() || whole_static(c),
         "all" => true,
         _ => !c.hot.is_empty() || c.src.kind != Kind::Cache || loaded.contains(&c.src.name),
     });
@@ -358,6 +359,19 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
 
 pub const COLD_SUFFIX: &str = "#cold";
 
+/// RAM 13: chunks translated whole from their static entries (function starts etc.) whatever the scope: the app tier
+/// (Speed 31) and a system app's own executable (placed "Applications/<X>.app/<X>") that has no training yet (newly
+/// placed): otherwise none of its code is in the image until training reaches it. Trained ones stay hot-only (Maps
+/// whole: 136+ MB, mostly cold, vs 21 MB hot).
+fn whole_static(c: &PlanChunk) -> bool {
+    c.src.kind == Kind::App || (c.src.kind == Kind::Placed && c.hot.is_empty() && is_system_app_exe(&c.src.name))
+}
+
+fn is_system_app_exe(key: &str) -> bool {
+    let f: Vec<&str> = key.split('/').collect();
+    f.len() == 3 && f[0] == "Applications" && f[1].strip_suffix(".app") == Some(f[2])
+}
+
 /// RAM 2 (JIT): when the hot set does not fit the slab (less FULL_LIVE_ROOM_MB), keep the highest-ranked blocks over
 /// all libraries (hot::rank: most programs first) and cut each library's hot list at that line, instead of leaving
 /// whole libraries out at build time. The training set may keep growing (every boot adds .live blocks); what grows
@@ -372,7 +386,7 @@ fn trim_to_slab(chunks: &mut Vec<PlanChunk>) -> bool {
     let mut fixed = 0u64;
     let mut cand: Vec<(u32, usize, f64)> = vec![];
     for (i, c) in chunks.iter().enumerate() {
-        if c.src.kind == Kind::App || c.hot.is_empty() {
+        if whole_static(c) || c.hot.is_empty() {
             fixed += c.want;
             continue;
         }
@@ -394,7 +408,7 @@ fn trim_to_slab(chunks: &mut Vec<PlanChunk>) -> bool {
     }
     let before: usize = chunks.iter().map(|c| c.hot.len()).sum();
     for (i, c) in chunks.iter_mut().enumerate() {
-        if c.src.kind == Kind::App || c.hot.is_empty() {
+        if whole_static(c) || c.hot.is_empty() {
             continue;
         }
         let n = c.hot.len() as u64;
@@ -403,7 +417,7 @@ fn trim_to_slab(chunks: &mut Vec<PlanChunk>) -> bool {
         c.est_hot = c.est_hot * keep[i] as u64 / n;
         c.est_full = c.est_full.max(c.est_hot);
     }
-    chunks.retain(|c| !c.hot.is_empty() || c.src.kind == Kind::App);
+    chunks.retain(|c| !c.hot.is_empty() || whole_static(c));
     let after: usize = chunks.iter().map(|c| c.hot.len()).sum();
     eprintln!(
         "x86code-aot: hot set wants {} MB, slab holds {} MB: kept {after} of {before} hot blocks (cut at {} programs{})",
@@ -475,9 +489,11 @@ fn allocate(chunks: &mut [PlanChunk], cfg: &Config) {
         used += c.want;
     }
     // Speed 31: app-tier chunks get their whole static code (function starts etc.), whatever the scope
-    for c in chunks.iter_mut().filter(|c| c.src.kind == Kind::App) {
+    for c in chunks.iter_mut().filter(|c| whole_static(c)) {
         // (app code is denser in blocks than the measured cache ratio: Cadence's debug dylib needed ~7x its code)
-        let full = align((c.est_full * 9 / 8).max(c.src.code_bytes * 12) + (64 << 10)).max(c.want);
+        // (RAM 13: untrained system apps too: Health's and News' executables truncated at 3x and 8x their code)
+        let dense = c.src.code_bytes * if c.src.kind == Kind::App { 12 } else { 16 };
+        let full = align((c.est_full * 9 / 8).max(dense) + (64 << 10)).max(c.want);
         used += full - c.want;
         c.want = full;
     }
@@ -743,7 +759,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     // Speed 35: a full build whose training set outgrew the slab (every chunk is in todo, so nothing could be
     // evicted) leaves out the coldest library chunks (profile hits per slot byte) until the rest fits; they are
     // recorded as evicted (same key, no file), so a later update re-admits them when space frees. It leaves
-    // FULL_LIVE_ROOM_MB of the slab free: the per-process code cache is min(image + 384, 1344) MB, and a slab packed
+    // FULL_LIVE_ROOM_MB of the slab free: the per-process code cache is min(image + 384, SLAB_MB) MB, and a slab packed
     // to 1336 MB left 8 MB for live translation (SpringBoard aborted "shared code cache full" in a loop).
     if opts.full && !opts.measure {
         let total: u64 = todo.iter().map(|c| c.want).sum();
@@ -925,7 +941,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     let placements: HashMap<String, discover::Placement> = discover::read_placement(&p.placement()).into_iter().map(|x| (x.key.clone(), x)).collect();
     let mut ent_paths: HashMap<String, PathBuf> = HashMap::new();
     for c in &todo {
-        let statics = if cfg.scope == "hot" && !opts.measure && c.src.kind != Kind::App {
+        let statics = if cfg.scope == "hot" && !opts.measure && !whole_static(c) {
             vec![]
         } else {
             match c.src.kind {

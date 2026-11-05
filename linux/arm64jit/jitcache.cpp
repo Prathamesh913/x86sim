@@ -52,12 +52,14 @@ namespace a64 {
 namespace {
 
 constexpr u64 kCacheLo = 0x1c0000000ull;
-constexpr u64 kCacheHi = 0x2c0000000ull;
+// RAM 13: the persisted window ends at 0x300000000 (was 0x2c0000000): placed files also go above the cache window's
+// old top, into the free 1 GB below the guest VM range (handlers.cpp / gheap.cpp start at 0x300000000).
+constexpr u64 kCacheHi = 0x300000000ull;
 // CODEGEN_VERSION: bump whenever translated code would change (emitter, IR passes, StackLayout, fuse_svc, inline objc,
 // the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
 // alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
 // Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
-constexpr u64 kCodegenVersion = 0x0000001cull;  // LSE atomics/CAS/CASP drop a top-byte tag inline (0x1b: RAM 3: unchecked fastmem (no inline address check, r13 allocatable) (0x1a: Speed 35: inline FRINTA/FRINTX, FCVTAS/FCVTAU in image chunks (0x19: Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
+constexpr u64 kCodegenVersion = 0x0000001dull;  // RAM 13: host calls through a fixed stub page (no reach limit) (0x1c: LSE atomics/CAS/CASP drop a top-byte tag inline (0x1b: RAM 3: unchecked fastmem (no inline address check, r13 allocatable) (0x1a: Speed 35: inline FRINTA/FRINTX, FCVTAS/FCVTAU in image chunks (0x19: Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
 // kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
 // part of it (relocations cover every base; a mapped image is keyed by its layout instead, see LoadPersistentCache).
 u64 g_build = kCodegenVersion;
