@@ -60,10 +60,19 @@ fn start_trim(device: Device) {
     let log = std::env::var_os("MTLVK_MEMSTATS").is_some();
     let pipeline_idle = std::env::var("MTLVK_PIPELINE_IDLE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(300.0);
     let pipeline_idle = (pipeline_idle > 0.0).then(|| std::time::Duration::from_secs_f64(pipeline_idle));
+    let file_trim_mb = std::env::var("MTLVK_FILETRIM").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(8);
     let _ = std::thread::Builder::new().name("trim".into()).spawn(move || {
         let mut last_malloc_trim = std::time::Instant::now();
+        let mut ft = memstat::FileTrim::new(file_trim_mb << 10);
         loop {
             std::thread::sleep(std::time::Duration::from_secs_f64(every));
+            if file_trim_mb > 0 {
+                if let Some((before, after)) = ft.tick(every) {
+                    if log {
+                        eprintln!("mtlvk trim: file pages {} -> {} MB", before >> 10, after >> 10);
+                    }
+                }
+            }
             let (pools, descriptors) = device.trim_idle(std::time::Duration::from_secs_f64(idle));
             // x86Code RAM 8: pipelines nothing used for MTLVK_PIPELINE_IDLE s (default 300; 0 = never): graphics
             // pipeline libraries no new key claimed, and the VkPipelines kept for released variants

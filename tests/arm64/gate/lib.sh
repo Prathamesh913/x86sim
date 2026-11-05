@@ -50,8 +50,11 @@ proc_state() {
 	[ -n "$(pid_of "$1")" ] && echo alive || echo gone
 }
 # wait_proc LABEL NAME MAXSECS: the app's process comes up (polled from the process list, no screen)
+# RAM 14: a caller that never ran mark_logs (apps.sh, train.sh) gets a baseline here, so reused per-pid logs
+# (Maps.N.log from an earlier boot) only count lines written from now on.
 wait_proc() {
 	local i
+	[ -f "$O/.sizes" ] || mark_logs
 	for i in $(seq 1 "$3"); do
 		case $(proc_state "$2") in
 			alive) return 0 ;;

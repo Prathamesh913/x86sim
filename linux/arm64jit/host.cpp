@@ -186,6 +186,17 @@ static void h_helper_open(GuestThread &t, u32) {
     if (fd < 0) fd = d_open(path, (int)t.x(1), (int)t.stack_slot(0));
     if (g_trace) logf("dyld_sim open %s -> %d", path, fd);
     tl_open_place = fd >= 0 ? placement_find(path) : nullptr;
+    // RAM 14: placement keys are real paths; a framework moved into the OS cryptex is opened through its symlink
+    // (System/Library/PrivateFrameworks/MobileSafariUI.framework -> ../../../System/Cryptexes/OS/...), so the suffix
+    // never matched and it loaded "anywhere", never trained or in the image. Retry with the opened file's real path.
+    if (fd >= 0 && !tl_open_place) {
+        char lp[64], real[4096];
+        snprintf(lp, sizeof lp, "/proc/self/fd/%d", fd);
+        if (ssize_t n = readlink(lp, real, sizeof real - 1); n > 0) {
+            real[n] = 0;
+            tl_open_place = placement_find(real);
+        }
+    }
     tl_open_fd = fd;
     t.set_x(0, (u64)(int64_t)fd);
 }
@@ -665,12 +676,17 @@ static void start_memlog() {
     const char *e = getenv("X86CODE_A64_MEMLOG");
     if (!e || atoi(e) <= 0) return;
     int secs = atoi(e);
+    sigset_t all, old;  // RAM 14: native threads block every signal (see gheap.cpp start_scavenger)
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &old);
     std::thread([secs] {
+        g_non_darling_thread = true;
         for (;;) {
             sleep(secs);
             memlog_once();
         }
     }).detach();
+    pthread_sigmask(SIG_SETMASK, &old, nullptr);
 }
 // RAM 4: every read fault on a file mapping maps the whole fault-around window (fault_around_bytes = 64 KB, or the
 // whole large folio) of what is in the page cache; MADV_RANDOM no longer turns that off. A process ends up mapping

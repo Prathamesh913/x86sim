@@ -128,3 +128,90 @@ fn prof_dump_on_request() {
         eprintln!("mtlvk: prof.dump {r}");
     }
 }
+
+/// x86Code RAM 14: clean file pages of read-only private mappings (NVIDIA's shader compiler libnvidia-gpucomp ~45 MB,
+/// glvkspirv, rtcore, glcore, mtlvk's own text, the other ICDs the loader opened) stay mapped after the burst that
+/// touched them, and how much a boot touched varied with what it compiled (fresh home 230-300 MB PSS). After a quiet
+/// trim tick (under 3% CPU) with the file RSS grown >= MTLVK_FILETRIM MB (default 8: the ~2 MB an idle frame
+/// path maps again each tick stays) since the last trim, their page-table entries are dropped
+/// (MADV_DONTNEED: the pages stay in the page cache, a later touch maps them again without I/O). Only mappings with
+/// no anonymous (written, copy-on-write) page: relocated RELRO / data pages are never touched. MTLVK_FILETRIM=0 off.
+pub struct FileTrim {
+    last_cpu: u64,
+    base_kb: u64,
+    grow_kb: u64,
+}
+fn cpu_ticks() -> u64 {
+    let s = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let rest = s.rsplit_once(')').map(|(_, r)| r).unwrap_or("");
+    let f: Vec<&str> = rest.split_whitespace().collect();
+    // fields after ")": state is index 0, utime 11, stime 12
+    f.get(11).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) + f.get(12).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+}
+fn rss_file_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .unwrap_or_default()
+        .lines()
+        .find_map(|l| l.strip_prefix("RssFile:"))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap_or(0)
+}
+impl FileTrim {
+    pub fn new(grow_kb: u64) -> Self {
+        FileTrim { last_cpu: cpu_ticks(), base_kb: 0, grow_kb }
+    }
+    /// Returns (RssFile before, after) in KiB when it trimmed.
+    pub fn tick(&mut self, secs: f64) -> Option<(u64, u64)> {
+        let cpu = cpu_ticks();
+        // SAFETY: plain libc call.
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as f64;
+        let busy = (cpu.saturating_sub(self.last_cpu)) as f64 / hz / secs;
+        self.last_cpu = cpu;
+        let now = rss_file_kb();
+        if busy >= 0.03 || now < self.base_kb + self.grow_kb {
+            self.base_kb = self.base_kb.min(now);
+            return None;
+        }
+        trim_file_pages();
+        let after = rss_file_kb();
+        self.base_kb = after;
+        Some((now, after))
+    }
+}
+fn trim_file_pages() {
+    let Ok(s) = std::fs::read_to_string("/proc/self/smaps") else { return };
+    let mut cur: Option<(usize, usize)> = None;
+    let mut rss = 0u64;
+    let flush = |cur: Option<(usize, usize)>, rss: u64, anon_zero: bool| {
+        if let (Some((a, b)), true, true) = (cur, rss > 0, anon_zero) {
+            // SAFETY: a read-only private file mapping with no anonymous page: dropping its PTEs only unmaps
+            // page-cache pages, which the next access maps again unchanged.
+            unsafe { libc::madvise(a as *mut libc::c_void, b - a, libc::MADV_DONTNEED) };
+        }
+    };
+    for l in s.lines() {
+        let mut it = l.split_whitespace();
+        let first = it.next().unwrap_or("");
+        if let Some((a, b)) = first.split_once('-').filter(|(a, _)| a.chars().all(|c| c.is_ascii_hexdigit())) {
+            let perms = it.next().unwrap_or("");
+            let path = it.nth(3).unwrap_or("");
+            let ok = perms.len() == 4
+                && !perms.contains('w')
+                && perms.ends_with('p')
+                && path.starts_with('/')
+                && !path.starts_with("/dev/")
+                && !path.starts_with("/memfd:")
+                && !l.ends_with("(deleted)");
+            cur = match (ok, usize::from_str_radix(a, 16), usize::from_str_radix(b, 16)) {
+                (true, Ok(a), Ok(b)) => Some((a, b)),
+                _ => None,
+            };
+            rss = 0;
+        } else if let Some(v) = l.strip_prefix("Rss:") {
+            rss = v.trim().trim_end_matches("kB").trim().parse().unwrap_or(0);
+        } else if let Some(v) = l.strip_prefix("Anonymous:") {
+            let anon: u64 = v.trim().trim_end_matches("kB").trim().parse().unwrap_or(1);
+            flush(cur.take(), rss, anon == 0);
+        }
+    }
+}

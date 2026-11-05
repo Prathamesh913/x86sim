@@ -18,6 +18,7 @@
 // released the stale free-list link it found there. X86CODE_A64_GHEAP_ZERO=0 turns it off.
 #include "a64.h"
 #include <cerrno>
+#include <signal.h>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -181,7 +182,13 @@ void start_scavenger() {
     static std::once_flag once;
     std::call_once(once, [] {
         if (const char *e = getenv("X86CODE_A64_GHEAP_SCAVENGE"); e && *e == '0') return;
-        std::thread([] { for (;;) { sleep(5); for (int c = 0; c < kClasses; c++) scavenge(c); } }).detach();
+        // RAM 14: a native thread blocks every signal. A process-directed signal (the SIGTERM/SIGHUP a WebKit helper
+        // gets when its host app dies) taken here ran Darling's handler, which needs this thread's darlingserver
+        // RPC socket: there is none, so it aborted (__darling_thread_rpc_socket) instead of exiting.
+        sigset_t all, old; sigfillset(&all);
+        pthread_sigmask(SIG_SETMASK, &all, &old);
+        std::thread([] { g_non_darling_thread = true; for (;;) { sleep(5); for (int c = 0; c < kClasses; c++) scavenge(c); } }).detach();
+        pthread_sigmask(SIG_SETMASK, &old, nullptr);
     });
 }
 

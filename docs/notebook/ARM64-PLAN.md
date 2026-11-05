@@ -3176,3 +3176,63 @@ Not done / found:
 - apps.sh / gate lib: `CRASH X crashed at launch` without a sizes baseline matches old crash lines in reused per-pid
   logs (Maps.N.log, Health.N.log); not a crash (the app came up, screenshots correct).
 - WebKit helpers' SIGABRT on Safari's teardown (above) is not investigated.
+
+## RAM 14 (2026-11-05, main phone alone): WebKit helpers' abort, mtlvk file trim, MobileSafariUI placed and trained
+
+Scripts in ~/scratch/x86code/ram14/ (fresh.sh TAG = boot + mtlvk memstats every 60 s + memcat at 15 min and 25 s
+later + mtlvk smaps; apps.sh / run.sh / speed.sh / train.sh as RAM 13; mt.py = mtlvk categories across memcat files;
+final.sh = 3 fresh boots, per-app pass, gate + 15 min). "Before" = RAM 13 n1.
+
+1. **WebKit helpers aborted when Safari was killed: a host thread took a guest signal.** Every core (systemd-coredump,
+   SIGABRT) had the same stack: libarm64jit's gheap scavenger thread in `sleep` -> Darling's signal handler ->
+   `__darling_thread_rpc_socket` -> abort. Killing Safari makes launchd end its WebContent / GPU / Networking with a
+   process-directed signal; Linux delivers it to any thread that does not block it, and the gheap scavenger (and
+   the X86CODE_A64_MEMLOG thread) were plain std::threads with signals unblocked. Darling's handler needs the
+   thread's darlingserver RPC socket, which a host thread does not have, so it aborted (and dumped ~50 MB core each,
+   RAM 13 item 4) instead of the process ending as on iOS. Both threads now start with every signal blocked like
+   libarm64jit's other native threads (jit.cpp, jitcache.cpp, host.cpp's trims). Check: Safari open on Wikipedia,
+   `kill -9` Safari: the three helpers end within seconds, no core dump; none in the gate or the per-app pass either.
+   Not a Mach port / XPC difference: the helpers' own path was fine.
+2. **mtlvk fresh-home PSS 230-300 MB: what a boot touched of NVIDIA's libraries, plus the heap's split.** Within a boot
+   mtlvk is flat from minute 1 (memstats every 60 s). Across boots (memcat categories, RAM 12 / RAM 13 / now):
+   nvidia-lib 61 / 77 / 77 MB (file pages of libnvidia-gpucomp ~45, glvkspirv, rtcore, glcore, mtlvk's text 17,
+   libLLVM + libvulkan_radeon of the loader's other ICD ~10), nvidia-dev 51 / 70 / 51 (the command-chunk high water
+   of the boot's busiest moment), glibc 64 / 94 / 69 (heap vs mmapped arena split varies; the total does not much).
+   Four quick boots in a row: 249-254, all from the same parts. The variable, largest part is clean file pages kept
+   mapped after the startup burst. **File trim in mtlvk** (memstat.rs FileTrim, from the trim thread): after a
+   quiet trim tick (< 3% CPU over 5 s) with RssFile grown >= MTLVK_FILETRIM MB (default 8; 0 = off) since the last
+   trim, MADV_DONTNEED on every read-only private file mapping with no anonymous page (RELRO / written pages are
+   never touched); the pages stay in the page cache. A 2 MB threshold re-trimmed every 5 s (an idle frame path maps
+   ~2 MB again), 8 MB does not. mtlvk fresh: 254 -> 150 MB (nvidia-lib 77 -> 7, files 34 -> 5), three 15-min boots
+   150 / 150 / 161. Selecting only NVIDIA's ICD (VK_LOADER_DRIVERS_SELECT) saved ~4 MB more: not taken
+   (host-specific). The remaining nvctl-small / heap are RAM 10's high water.
+3. **apps.sh false "CRASH at launch"**: lib.sh's wait_proc now takes a mark_logs baseline when the caller has none
+   (apps.sh / train.sh also mark before each app), so reused per-pid logs only count new lines. Per-app pass: no
+   CRASH lines.
+4. **MobileSafariUI was never placed**: placement keys are real paths; MobileSafariUI lives in the OS cryptex and
+   dyld opens it through the symlink System/Library/PrivateFrameworks/MobileSafariUI.framework -> ../../../System/
+   Cryptexes/OS/..., so the suffix never matched and it loaded at 0x7fff... (no training could ever name it).
+   host.cpp h_helper_open retries placement_find with the opened fd's real path. Training (train.sh, Safari twice):
+   26794 MobileSafariUI blocks in MobileSafari.live; `X86CODE_A64_JITCACHE_DIR=~/scratch/x86code/jc-24B8117
+   x86code-aot update` (phone stopped): 106 stale chunks rebuilt, MobileSafariUI added: **1322 MB code, 1188 chunks**,
+   6.51M blocks. **WorkoutUI is placed** (Health and healthappd map it at 0x2c0410000) **but never executes**: no
+   block in Health / healthappd / healthd .live after Summary, Browse, Activity and its detail pages (Cardio
+   Fitness/Recovery, Activity, Workouts' articles; no workout data on the phone). Nothing to train; making it
+   whole (16x its 6.6 MB text) would add ~100 MB of image no scenario runs. Left out on purpose.
+
+| point (PSS MB) | before (RAM 13 n1) | after (n1-n3 / n-g) |
+|---|---|---|
+| fresh home 15 min (3 boots) | 960 / 951 (mtlvk 299) | **774, 782, 797** (n3's first snapshot 963 caught a launch burst, 35 procs; mtlvk 150 / 150 / 161) |
+| gate | 0 failed | 0 failed |
+| gate "after apps" / "idle after the pass" | 1946 / 1475 | **1768 / 1415** |
+| after gate + 15 min | 1186 (mtlvk 365) | **1097** (mtlvk 266: lib 12, arenas 117, nvctl-small 54) |
+| sampled peak | 4139 (a WebKit core-dump pass) / 3524 | **3599** (no core dumps) |
+
+Per app (A = open 20 s / H = home 22 s, app PSS; phone totals at A lower by 80-150 MB, mostly mtlvk): Settings 86 / 85
+(89 / 82), Maps 189 / 197 (197 / 207), Wallet 91 / 85 (89 / 82), Health 145 / 115 (139 / 111), Safari 86 / 87 (77 /
+76; MobileSafariUI's image pages) with WebKit 198 / 189 (213 / 192), News 105 / 115 (97 / 118).
+
+Speed (fresh boot, openm N=2): Settings cold 3.26 s, warm 0.75; Maps 2.67, warm 0.69; Safari 4.72 / 4.30, warm 0.77;
+News 3.39 / 3.39; scroll 53.6 fps p50 16.7 (RAM 13: 3.93 / 3.73, 0.74; 2.57 / 2.92; 4.64 / 4.72; 3.77 / 3.50; 53.3).
+OCR time to content (hw.sh, 3 rounds): Health 3.2-3.5 s, Wallet 1.0, Safari 4.4-4.8 (RAM 13: 3.5-4.1, 1.0, 4.6-4.9).
+Screenshots (Settings, Maps, Wallet, Health, Safari, News) correct.
