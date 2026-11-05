@@ -2969,3 +2969,57 @@ What remains after use (r2 vs fresh e2: 1170 vs 903, +267):
 - backboardd +20, SpringBoard +18 (devzero surfaces +12: app snapshots / icon surfaces), InputUI +9, darlingserver +9.
 - Optional item (assistantd's ~15-min xpc event wave): not reproduced in f1 (no spawn between 3 and 20 min after
   boot); not chased further.
+
+## RAM 11 (2026-11-05, main phone alone): what an app costs; Swift conformance index leak, settled file trim
+
+Per-app pass (~/scratch/x86code/ram11/apps.sh: fresh boot + 5 min, then per app: snapshot B at home, open, 20 s,
+snapshot A, home 22 s, snapshot H, kill, 45 s; sum.py = the app's categories and the others' deltas). b0 = HEAD, a1 =
+both fixes. PSS MB (app's own Private_Dirty in brackets):
+
+| app (A = open 20 s) | b0 app | a1 app | biggest others at A (a1) |
+|---|---|---|---|
+| Settings | 93 [67] | 96 [65] | searchd +47, assistantd +43, corespeechd/sirittsd +20 each (the RAM 5 Siri wave), Spotlight +45 at H |
+| Maps | 195 [160] | 200 [151] | mtlvk +54, passd +36, financed +33, navd +33, geod +28 |
+| Wallet | 93 [80] | 88 [78] | SpringBoard +104 (file pages), passd +36, financed +29, geod +23 |
+| Health | **1010** [182] | **130** [75] | healthappd **190 -> 107**, healthd +62, geod +23 |
+| Safari | 89 [81] | 82 [74] | WebContent +135 (+230 at H: aot.map 75 / runtime-files 32 of it), mtlvk +37, GPU +31, Networking +27 |
+| News | 145 [130] | 146 [128] | backboardd +18, mobiletimerd +17, geod +23 |
+
+Every app maps 0.85-1.1 GB of file pages in its first 2-4 s (dyld cache 550-600, aot.map ~200, aot.idx ~100: 64 KB
+fault-around, ~10k faults); the trim normally drops them seconds later.
+
+1. **Swift conformance index leak (swiftconf.cpp)**. A SIGUSR1 memlog census of glibc's mmapped chunks (new, in
+   memlog_once; walks anon VMAs reading through a pipe) showed Health / healthappd with 60 MB arena + 87-106 MB in
+   ~200-240 power-of-two blocks of (section, offset) pairs: swiftconf's by_proto vectors. Every rebuild of the
+   lock-free index (each burst of image loads) left the old index allocated "because a reader may still use it".
+   Now readers publish the index in a per-thread hazard slot; retired indexes are freed when no slot holds them.
+   Host glibc: healthappd 147 -> 22 MB (anon 178 -> 80), Health 166 -> 35 (anon 179 -> 88), SpringBoard 69 -> 51.
+2. **Settled file trim (host.cpp)**: the trim needed < 3% CPU over a 3 s tick; Health in front idles at ~5% and kept
+   937 MB of file pages as long as it was open. Also trim when RssFile grew >= 64 MB since the last trim, did not grow
+   in the last tick, and CPU < 25% (X86CODE_A64_FILETRIM_SETTLE MB, 0 = off). Health 959 -> 97 MB at the next tick.
+
+| point (PSS MB) | before (RAM 10 r2) | after (g1) |
+|---|---|---|
+| gate | 0 failed | 0 failed |
+| gate "after apps" | 2219 | **2088** |
+| after gate + 15 min | 1170 | 1210 (mtlvk +45: nvctl-small 84 vs 50, RAM 10's high-water variance; guest side -7) |
+| sampled peak | 3792 | 4045 (Maps at 1.1 GB of route-time file pages, trimmed to ~300 within 20 s; RAM 8-10 runs 3.8-4.3) |
+| home before the per-app pass (5 min) | 1095 (b0) | 1048 (a1) |
+
+Speed, HEAD vs new (fresh boots, openm N=2, second figure = round 2): Settings cold 4.81/4.64 vs 4.19/4.59 s, warm
+0.74/0.85 vs 0.80/0.85; Maps 3.08/3.15 vs 3.12/3.12; Safari 5.71/5.94 vs 6.73/5.86; News 4.82/4.74 vs 4.71/4.75;
+scroll 51.8 vs 52.8 fps (p50 16.7). OCR time to content (hw.sh, 3 rounds): Health 5.1-6.5 vs 3.6-4.3 s, Wallet 1.2 vs
+1.0, Safari 6.6-7.0 vs 4.9-5.3. Screenshots (home, Settings, Health, Wallet, Maps, News, Safari) correct.
+
+Not fixed / found:
+- The image is full (hot set 1213 MB, slab 1080 = 1344 rel32 reach - 256 live room) and cuts the "one program" tier:
+  app-private code (News' frameworks: codecache 21 + JIT metadata ~20 MB; NewsArticles/NewsAnalytics missing; 60
+  chunks stale). More coverage needs a different code model, not a scope change.
+- Spotlight (45-50 MB, started by each home press) and searchd (40-44 MB, each app launch) are reclaimed and relaunched
+  in a loop (jetsam grace doubling softens it); keeping them resident would move ~90 MB into fresh home.
+- mtlvk keeps a backgrounded app's IOSurface imports (+12 MB the snapshot; Maps/Safari +53-56) until the app is
+  killed; iosurfaced answers SetPurgeable with "non-volatile", so volatile surfaces are never dropped (next lever).
+- The Settings-time Siri wave (assistantd, corespeechd, sirittsd, ContextService, ...: ~140 MB) is RAM 5's mobileassetd
+  startup posting, transient (reclaimed after idle).
+- Do not install libarm64jit under a running phone: live processes share translated code tied to the build (SIGILL
+  in every process).

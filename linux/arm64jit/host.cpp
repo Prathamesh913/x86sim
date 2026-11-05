@@ -5,6 +5,7 @@
 #include <malloc.h>
 #include <thread>
 #include <map>
+#include <array>
 #include <mutex>
 #include <string>
 // libarm64jit: process setup. Called by the x86_64 host program (host/arm64host) after Darling's libSystem is up.
@@ -617,6 +618,41 @@ static void memlog_once() {
          mi.arena >> 20, mi.uordblks >> 20, mi.hblkhd >> 20, mi.hblks, mi.fordblks >> 20);
     memlog_shared_stats();
     gheap_stats();
+    // RAM 11: glibc's mmapped chunks (each its own anon mapping starting with the chunk header: size | IS_MMAPPED),
+    // as a size histogram with the first payload words of one of each size, for attribution without ptrace
+    int pfd[2];
+    if (pipe2(pfd, O_CLOEXEC) == 0) {
+      if (FILE *f = fopen("/proc/self/maps", "r")) {
+        std::map<u64, std::pair<int, u64>> h;
+        std::map<u64, std::array<u64, 4>> w4;
+        char l[512];
+        while (fgets(l, sizeof l, f)) {
+            unsigned long a, b; char perm[8]; int n = 0;
+            if (sscanf(l, "%lx-%lx %7s %*s %*s %*s %n", &a, &b, perm, &n) < 3 || strcmp(perm, "rw-p") || l[n]) continue;
+            if (a < (64ull << 30)) continue;  // the guest range
+            for (u64 x = a; x + 4096 <= b;) {  // adjacent chunks share a VMA: walk it a page at a time
+                u64 c[6];  // read through a pipe: a VMA can go away under the scan (EFAULT, not a fault)
+                if (write(pfd[1], (const void *)x, sizeof c) != (ssize_t)sizeof c || read(pfd[0], c, sizeof c) != (ssize_t)sizeof c) break;
+                const u64 sz = ((c[1] & ~7ull) + 4095) & ~4095ull;  // glibc keeps the mapping's size less 16 here
+                if (c[0] == 0 && (c[1] & 2) && sz >= (128u << 10) && x + sz <= b) {
+                    auto &e = h[sz]; if (!e.first++) { e.second = x; w4[sz] = {c[2], c[3], c[4], c[5]}; }
+                    x += sz;
+                } else x += 4096;
+            }
+        }
+        fclose(f);
+        std::vector<std::pair<u64, u64>> v;  // bytes, size
+        for (auto &[s, e] : h) v.push_back({s * e.first, s});
+        std::sort(v.rbegin(), v.rend());
+        for (size_t k = 0; k < v.size() && k < 12; k++) {
+            const auto &e = h[v[k].second];
+            const auto &w = w4[v[k].second];
+            logf("memlog: mmapped chunk %lu KB x %d at %#lx: %016lx %016lx %016lx %016lx", (unsigned long)(v[k].second >> 10), e.first,
+                 (unsigned long)e.second, (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2], (unsigned long)w[3]);
+        }
+      }
+      close(pfd[0]); close(pfd[1]);
+    }
 }
 static void on_usr1(int, siginfo_t *, void *) { memlog_once(); }
 // X86CODE_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS.
@@ -937,7 +973,9 @@ static void start_file_trim() {
         if (tick <= 0 || tick > secs) tick = secs;
         auto now = [] { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; };
         auto pct = [](double c, double w) { return c * 100.0 / (w > 1 ? w : 1); };
-        long base = 0;
+        long base = 0, prev = 0;
+        const char *se = getenv("X86CODE_A64_FILETRIM_SETTLE");
+        const long settle_kb = (se && *se ? atol(se) : 64) << 10;
         double c0 = cpu(), w0 = now(), fc0 = c0, fw0 = w0;
         for (;;) {
             sleep(tick);
@@ -947,18 +985,25 @@ static void start_file_trim() {
                 if (pct(c1 - fc0, w1 - fw0) < 3.0) fastdispatch_trim();
                 fc0 = c1; fw0 = w1;
             }
-            if (busy >= 3.0) continue;
+            // RAM 11: a foreground app that keeps a few % of CPU (Health ~5%: an animation, a timer) never went quiet,
+            // so its whole launch (0.85-1.1 GB of file pages per app: dyld cache, AOT image and index fault-around)
+            // stayed mapped as long as it was open. Also trim once the file RSS stopped growing for a tick, grew by
+            // >= X86CODE_A64_FILETRIM_SETTLE MB (default 64, 0 off) since the last trim, and CPU is under 25%.
             const long r = rss_file_kb();
+            const long grew = r - prev;
+            prev = r;
+            const bool settled = settle_kb > 0 && busy < 25.0 && grew < 1024 && r - base >= settle_kb;
+            if (busy >= 3.0 && !settled) continue;
             if (r < 0 || r - base < 2048) continue;
             timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
             file_trim_once();
             clock_gettime(CLOCK_MONOTONIC, &t1);
-            base = rss_file_kb();
+            base = prev = rss_file_kb();
             c0 = cpu(); w0 = now();
             if (getenv("X86CODE_A64_FILETRIM_LOG"))
-                logf("filetrim: RssFile %ld -> %ld MB in %.1f ms (cpu %.1f%%)", r >> 10, base >> 10,
-                     (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6, busy);
+                logf("filetrim: RssFile %ld -> %ld MB in %.1f ms (cpu %.1f%%%s)", r >> 10, base >> 10,
+                     (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6, busy, busy >= 3.0 ? ", settled" : "");
         }
     }).detach();
     pthread_sigmask(SIG_SETMASK, &old, nullptr);

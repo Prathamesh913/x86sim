@@ -73,6 +73,46 @@ struct Index {
     std::unordered_map<u64, std::vector<std::pair<u32, u32>>> by_proto;
 };
 std::atomic<Index *> g_index{nullptr};
+// RAM 11: a rebuilt index replaces the old one, which a reader on another thread may still be walking. They used to
+// stay allocated for good: Health and healthappd load images in bursts and kept ~10 of them (70-90 MB of host glibc,
+// the by_proto vectors). Readers now publish the index they use in a per-thread hazard slot; a replaced index is freed
+// once no slot holds it (checked after each build and, while some wait, on the lookup path).
+struct Hazard {
+    std::atomic<const Index *> p{nullptr};
+    std::atomic<bool> used{false};
+};
+std::mutex g_hz_mu;
+std::vector<Hazard *> g_hz;          // slots are reused, never freed (one per thread alive at once)
+std::vector<Index *> g_retired;      // under g_mu
+std::atomic<bool> g_have_retired{false};
+struct HazardRef {
+    Hazard *h = nullptr;
+    ~HazardRef() { if (h) { h->p.store(nullptr, std::memory_order_release); h->used.store(false, std::memory_order_release); } }
+};
+thread_local HazardRef t_hz;
+Hazard &my_hazard() {
+    if (!t_hz.h) {
+        std::lock_guard<std::mutex> lk(g_hz_mu);
+        for (Hazard *h : g_hz)
+            if (!h->used.load(std::memory_order_acquire)) { h->used.store(true); t_hz.h = h; break; }
+        if (!t_hz.h) { t_hz.h = new Hazard; t_hz.h->used.store(true); g_hz.push_back(t_hz.h); }
+    }
+    return *t_hz.h;
+}
+// under g_mu: free the retired indexes no hazard slot holds
+void reclaim_locked() {
+    std::lock_guard<std::mutex> lk(g_hz_mu);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    size_t k = 0;
+    for (Index *r : g_retired) {
+        bool held = false;
+        for (Hazard *h : g_hz) held = held || h->p.load(std::memory_order_seq_cst) == r;
+        if (held) g_retired[k++] = r;
+        else delete r;
+    }
+    g_retired.resize(k);
+    g_have_retired.store(k != 0, std::memory_order_release);
+}
 std::atomic<u64> g_seen_base{0}, g_seen_count{0};
 std::mutex g_mu;
 // X86CODE_A64_SWIFT_CONF_DEBUG=1: counters, logged every 16K steps
@@ -154,14 +194,23 @@ bool cannot_match(u64 desc, const Query &q) {
     return true;
 }
 
-const Index *index_for(u64 base, u64 count) {
-    Index *ix = g_index.load(std::memory_order_acquire);
-    if (ix && ix->base == base && ix->count == count) return ix;
+// the current index for this snapshot (protected by the caller's hazard slot h until it clears it), or nullptr
+const Index *index_for(u64 base, u64 count, Hazard &h) {
+    Index *ix;
+    do {
+        ix = g_index.load(std::memory_order_seq_cst);
+        h.p.store(ix, std::memory_order_seq_cst);
+    } while (ix != g_index.load(std::memory_order_seq_cst));
+    if (ix && ix->base == base && ix->count == count) {
+        if (g_have_retired.load(std::memory_order_relaxed) && g_mu.try_lock()) { reclaim_locked(); g_mu.unlock(); }
+        return ix;
+    }
+    h.p.store(nullptr, std::memory_order_release);
     const bool new_base = g_seen_base.exchange(base) != base, new_count = g_seen_count.exchange(count) != count;
     if (new_base || new_count) return nullptr;  // first sighting of this snapshot
     std::lock_guard<std::mutex> lk(g_mu);
     ix = g_index.load(std::memory_order_acquire);
-    if (ix && ix->base == base && ix->count == count) return ix;
+    if (ix && ix->base == base && ix->count == count) { h.p.store(ix, std::memory_order_seq_cst); return ix; }
     auto *n = new Index{base, count, {}, {}, {}};
     for (u64 i = 0; i < count; i++) {
         const u64 b = *(const u64 *)(base + 16 * i), e = *(const u64 *)(base + 16 * i + 8);
@@ -174,7 +223,10 @@ const Index *index_for(u64 base, u64 count) {
         }
     }
     COUNT(g_builds);
-    g_index.store(n, std::memory_order_release);  // the old one stays allocated: a reader may still use it
+    h.p.store(n, std::memory_order_seq_cst);
+    g_index.store(n, std::memory_order_seq_cst);
+    if (ix) g_retired.push_back(ix);
+    reclaim_locked();
     return n;
 }
 
@@ -212,7 +264,9 @@ void swiftconf_step(GuestThread &t) {
         logf("swiftconf: %llu calls, %llu skipped, %llu indexed, %llu builds, %llu no index, %llu mismatched (count %llu base %#llx)",
              (unsigned long long)g_calls.load(), (unsigned long long)g_skipped.load(), (unsigned long long)g_hits.load(), (unsigned long long)g_builds.load(),
              (unsigned long long)g_nobase.load(), (unsigned long long)g_mism.load(), (unsigned long long)count, (unsigned long long)base);
-    const Index *ixp = count && entry >= base && entry < last ? index_for(base, count) : nullptr;
+    Hazard &hz = my_hazard();
+    struct Clear { Hazard &h; ~Clear() { h.p.store(nullptr, std::memory_order_release); } } clear{hz};
+    const Index *ixp = count && entry >= base && entry < last ? index_for(base, count, hz) : nullptr;
     if (!ixp) COUNT(g_nobase);
     if (const Index *ix = ixp) {
         const u32 si = (u32)((entry - base) / 16);
