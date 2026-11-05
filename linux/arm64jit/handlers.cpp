@@ -282,6 +282,48 @@ static void h_vm_deallocate(GuestThread &t, u32 i) {
     }
     h_generic(t, i);
 }
+// RAM 12: madvise(addr, len, advice). XNU's MADV_FREE (5) and MADV_FREE_REUSABLE (7) give the kernel the pages of
+// anonymous private memory (contents undefined until written again); libmalloc frees with them (tiny/small/medium
+// madvise_free, nano, xzone's madvise batches, and its memory-pressure relief), as do libpas/bmalloc and JSC. Darling's
+// sys_madvise answered every advice >= 5 with 0 and did nothing, so no freed malloc page ever went back to the host:
+// a process kept the high water of its heap for life. Now: Linux MADV_FREE as a probe (it only takes private anonymous
+// memory: a range with a file, shared or memfd mapping in it fails with EINVAL, which is the XNU behaviour for those:
+// vm_map_reusable_pages skips them), then MADV_DONTNEED so the pages go at once (MADV_FREE alone waits for host
+// pressure and stays in PSS). Whole pages inside the range only. MADV_FREE_REUSE (8) / MADV_CAN_REUSE (9) are
+// accounting on XNU: 0. X86CODE_A64_MADV_FREE=0: the old pass-through (no-op); X86CODE_A64_MADVLOG=1: census in the log.
+static void h_madvise(GuestThread &t, u32 i) {
+    static const bool off = getenv("X86CODE_A64_MADV_FREE") && atoi(getenv("X86CODE_A64_MADV_FREE")) == 0;
+    static const bool census = getenv("X86CODE_A64_MADVLOG") != nullptr;
+    const int adv = (int)t.x(2);
+    if (off || (adv != 5 && adv != 7)) {
+        if (census) logf("madvise %#lx +%#lx advice %d (pass-through)", (unsigned long)t.x(0), (unsigned long)t.x(1), adv);
+        h_generic(t, i);
+        return;
+    }
+    const u64 a = t.x(0), n = t.x(1), pg = 4096;
+    const u64 lo = (a + pg - 1) & ~(pg - 1), hi = (a + n) & ~(pg - 1);
+    long r = 0;
+    if (hi > lo) {
+        r = syscall(SYS_madvise, (void *)lo, (size_t)(hi - lo), 8 /* Linux MADV_FREE */);
+        if (r == 0) r = syscall(SYS_madvise, (void *)lo, (size_t)(hi - lo), MADV_DONTNEED);
+    }
+    if (census) {
+        static std::atomic<u64> calls{0}, bytes{0}, refused{0};
+        const u64 c = ++calls;
+        if (r == 0) bytes += hi > lo ? hi - lo : 0; else ++refused;
+        if ((c & (c - 1)) == 0 || r != 0)
+            logf("madvise free: %lu calls, %lu MB given back, %lu refused (last %#lx +%#lx advice %d -> %ld)",
+                 (unsigned long)c, (unsigned long)(bytes >> 20), (unsigned long)refused.load(), (unsigned long)a,
+                 (unsigned long)n, adv, r);
+    }
+    t.set_x(0, 0);  // XNU: KERN_SUCCESS for ranges it skips, too
+}
+// RAM 12 census only (X86CODE_A64_MADVLOG): (mach_)vm_behavior_set(task, addr, size, behavior)
+static void h_behavior_set(GuestThread &t, u32 i) {
+    static const bool census = getenv("X86CODE_A64_MADVLOG") != nullptr;
+    if (census) logf("vm_behavior_set %#lx +%#lx behavior %d", (unsigned long)t.x(1), (unsigned long)t.x(2), (int)t.x(3));
+    h_generic(t, i);
+}
 // (mach_)vm_map(task, addr*, size, mask, flags, object, offset, copy | int cur, int max, uint inherit)
 static void h_vm_map(GuestThread &t, u32 i) {
     u64 ints[16]; load_regs(t, ints);
@@ -768,6 +810,8 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_vm_remap", h_cachelock<h_vm_remap>}, {"_mach_vm_remap_new", h_cachelock<h_vm_remap>},
         {"_vm_remap_new", h_cachelock<h_vm_remap>}, {"_mach_vm_allocate", h_cachelock<h_vm_allocate>},
         {"_vm_allocate", h_cachelock<h_vm_allocate>}, {"_mmap", h_cachelock<h_mmap>}, {"_munmap", h_munmap}, {"___munmap", h_munmap},
+        {"_madvise", h_madvise}, {"___madvise", h_madvise},
+        {"_mach_vm_behavior_set", h_behavior_set}, {"_vm_behavior_set", h_behavior_set},
         {"_mach_vm_deallocate", h_vm_deallocate}, {"_vm_deallocate", h_vm_deallocate}, {"___mmap", h_cachelock<h_mmap>},
         {"_mprotect", h_cachelock<h_generic>}, {"___mprotect", h_cachelock<h_generic>},
         {"_mach_vm_protect", h_cachelock<h_generic>}, {"_vm_protect", h_cachelock<h_generic>},

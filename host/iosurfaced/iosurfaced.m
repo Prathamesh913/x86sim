@@ -19,6 +19,7 @@
 
 extern xpc_connection_t x86_xpc_connection_create_mach_service(const char* name, dispatch_queue_t q, uint64_t flags)
 	__asm__("_xpc_connection_create_mach_service");
+extern pid_t x86_xpc_connection_get_pid(xpc_connection_t c) __asm__("_xpc_connection_get_pid");
 extern xpc_object_t xpc_shmem_create(void* region, size_t length);
 extern size_t xpc_shmem_map(xpc_object_t xshmem, void** region);
 extern CFDataRef IOCFSerialize(CFTypeRef object, CFOptionFlags options);
@@ -278,6 +279,7 @@ static void handle(xpc_connection_t peer, Refs* refs, xpc_object_t msg) {
 			if (!props || CFGetTypeID(props) != CFDictionaryGetTypeID()) { kr = kIOReturnBadArgument; if (props) CFRelease(props); break; }
 			xpc_object_t cs = xpc_dictionary_get_value(msg, "ClientProvidedShmem");
 			kr = surfCreate(props, cs, &s);
+			if (!kr) LOG("created %u by pid %d\n", s->id, x86_xpc_connection_get_pid(peer));
 			CFRelease(props);
 		} else if (xpc_dictionary_get_value(msg, "LookupID")) {
 			s = surfFor((uint32_t)xpc_dictionary_get_uint64(msg, "LookupID"));
@@ -351,7 +353,10 @@ static void handle(xpc_connection_t peer, Refs* refs, xpc_object_t msg) {
 		break;
 	}
 	case 12: CFDictionaryRemoveAllValues(s->values); break;
-	case 13: xpc_dictionary_set_uint64(reply, "OldState", 0); break;  // SetPurgeable: always non-volatile
+	case 13:  // SetPurgeable: always non-volatile
+		LOG("purgeable %u pid %d new %llu size %u refs %d %ux%u\n", s->id, x86_xpc_connection_get_pid(peer),
+		    xpc_dictionary_get_uint64(msg, "NewState"), s->st.allocSize, s->refs, s->st.width, s->st.height);
+		xpc_dictionary_set_uint64(reply, "OldState", 0); break;
 	case 14: {  // CreateMachPort
 		if (!s->port) {
 			mach_port_t p = MACH_PORT_NULL;

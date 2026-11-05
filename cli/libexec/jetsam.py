@@ -15,7 +15,10 @@ libsystem_kernel records it in the container, cleared at each boot):
       XPC transaction); darwin bg 1 = RunningBoard backgrounded it (PRIO_DARWIN_BG), 0 = brought back; darwin role
       (PRIO_DARWIN_ROLE) 3 = off screen (NON_UI), 6 = DARWIN_BG, 1/2/4 = on screen.
 Kills (SIGKILL, as jetsam; launchd / RunningBoard relaunch what is needed on the next lookup or open):
-  - an app extension (.appex) suspended for more than X86SIM_JETSAM_EXT s (default 10)
+  - an app extension (.appex) suspended for more than X86SIM_JETSAM_EXT s (default 10); RAM 12: not WebKit's WebContent /
+    GPU / Networking while an app runs (they go with their host app; X86SIM_JETSAM_WEBKIT=0 off)
+  - RAM 12: an app going to the background touches $SIMULATOR_MEMORY_WARNINGS (the simulator's memory-pressure event,
+    PRESSURE_WARN to every process), at most every X86SIM_JETSAM_WARN_EVERY s (10); X86SIM_JETSAM_WARN=0 off
   - a background app (.app) after X86SIM_JETSAM_APP s (default 30); the most recently backgrounded one after
     X86SIM_JETSAM_LAST s (default 90), so switching back to the last app soon is a warm resume. X86SIM_JETSAM_KEEP
     (default 1): how many get the longer time. Only on a positive "this is background" signal, never by inference:
@@ -103,6 +106,11 @@ FRONT = os.path.join(DEVDATA, "tmp/x86code-frontmost")
 INPUT = os.path.join(DEVDATA, "tmp/x86code-input")   # simhid: mtime = the last touch / key / button
 INPUT_KEEP = float(os.environ.get("X86SIM_JETSAM_INPUT", "60"))
 FRONT_EVERY = 10.0
+WARN = os.environ.get("X86SIM_JETSAM_WARN", "1") != "0"
+WARN_EVERY = float(os.environ.get("X86SIM_JETSAM_WARN_EVERY", "10"))
+WARN_FILE = os.path.join(DEVDATA, "var/run/memory_warning_simulation")
+_warned = {"t": 0.0}
+WEBKIT_WITH_APP = os.environ.get("X86SIM_JETSAM_WEBKIT", "1") != "0"
 RB_SUSPENDED = 3   # RBSTaskStateRunningSuspended
 _front = {"asked": 0.0}
 _bundle_ids = {}
@@ -328,6 +336,22 @@ def last_input():
         return 0.0
 
 
+def memory_warning(now):
+    """RAM 12: the simulator's memory-pressure event. Its libdispatch makes DISPATCH_SOURCE_TYPE_MEMORYPRESSURE a vnode
+    watch (NOTE_ATTRIB) on $SIMULATOR_MEMORY_WARNINGS and reports PRESSURE_WARN to every process watching (libmalloc's
+    pressure relief, UIKit's didReceiveMemoryWarning, WebKit's and CoreAnimation's cache purges). Nothing touched it, so
+    no guest process ever saw pressure. Touched when an app goes to the background (as a device under load does), at
+    most every WARN_EVERY s. X86SIM_JETSAM_WARN=0 off."""
+    if not WARN or now - _warned["t"] < WARN_EVERY:
+        return
+    _warned["t"] = now
+    try:
+        os.utime(WARN_FILE)
+        print("%s jetsam: memory warning" % time.strftime("%H:%M:%S"), flush=True)
+    except OSError:
+        pass
+
+
 def grace(exe, base):
     return min(BACKOFF_MAX, base * (2 ** _kills.get(exe, 0)))
 
@@ -377,6 +401,8 @@ def sweep(verbose=False, status=False):
     for dpid, lpid, exe, st, sm, jm, idle in app_rows:
         back, fore = app_view(exe, dpid, sm, jm, fs, now - procs[dpid][2])
         if back and not fore:
+            if "bg" not in st:
+                memory_warning(now)
             since = st.setdefault("bg", sm[0] if sm else now)
             st["why"] = ", ".join(back)
             if any(k in exe for k in UISVC):
@@ -421,8 +447,14 @@ def sweep(verbose=False, status=False):
     # phone came up) it no longer applies: the HOT daemons that background launch waves (passd every few minutes, the
     # Siri / MobileAsset set) relaunch then exit after IDLE like the rest, not 10 min later (~100 MB at fresh home).
     warm = now - max(last_input(), START) < IDLE_HOT
+    host_apps = [r for r in app_rows if not any(k in r[2] for k in UISVC)]
     for dpid, lpid, exe, st, sm, jm, idle in rows:
         if ".appex/" in exe:
+            # RAM 12: WebKit's WebContent / GPU / Networking go with their host app (launchd's teardown of its
+            # process-scoped services when the app is killed), not 10 s after RunningBoard suspends them: Safari kept
+            # running in the background, its page's process killed, then sometimes relaunched (~200 MB at launch).
+            if WEBKIT_WITH_APP and "com.apple.WebKit." in exe and host_apps:
+                continue
             if sm and now - sm[0] > grace(exe, EXT):
                 killed.append((lpid, dpid, exe, "extension suspended %.0f s" % (now - sm[0])))
             continue

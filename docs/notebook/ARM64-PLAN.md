@@ -3023,3 +3023,71 @@ Not fixed / found:
   startup posting, transient (reclaimed after idle).
 - Do not install libarm64jit under a running phone: live processes share translated code tied to the build (SIGILL
   in every process).
+
+## RAM 12 (2026-11-05, main phone alone): madvise free, pressure warnings, WebKit with its app; surfaces measured
+
+Same procedure as RAM 11 (~/scratch/x86code/ram12/: all.sh TAG = fresh boot + 15 min (two snapshots 25 s apart),
+apps.sh per-app pass, then fresh boot + run.sh gate + 15 min idle; tab.py per-app totals; trace.sh surface trace;
+wc.sh Safari/WebContent over time). b0 = the new libarm64jit and jetsam.py with every new switch off
+(X86CODE_A64_MADV_FREE=0 X86SIM_JETSAM_WARN=0 X86SIM_JETSAM_WEBKIT=0), n1 = defaults.
+
+Findings:
+- **Purgeable IOSurfaces are not the lever RAM 11 thought** (iosurfaced trace, X86CODE_IOSURFACE_LOG=1, now with pid
+  and state; off by default). Only Metal-layer apps create surfaces through iosurfaced (Maps: 3 full-screen
+  CAMetalLayer drawables 12.7 MB each + two 900x900; Settings none). At home CA frees 2 of the 3; ~19 MB stays until
+  jetsam takes the app (30-90 s). Nobody marks them volatile: SetPurgeable comes only as KeepCurrent (3) queries from
+  the app and backboardd; Volatile (1) only for 84-192 px icon surfaces freed seconds later. Purging would also need
+  mtlvk to drop its VK_EXT_external_memory_host imports (NVIDIA pins the pages: a hole punch would leave the GPU on
+  the old pages). Not implemented: ~19 MB for under 90 s does not pay for it.
+- **Safari's WebContent "+230 MB at H" (RAM 11) was not growth**: a different pid. jetsam.py killed WebContent / GPU /
+  Networking as "extension suspended 10 s" while Safari lived on (the last app, 90 s), and Safari sometimes started a
+  new WebContent (208 MB mid-launch: file pages). w1: WebContent 131 -> 128 MB at home 10 s, then killed.
+- **Memory-pressure events never reached a guest process.** The simulator's libdispatch makes
+  DISPATCH_SOURCE_TYPE_MEMORYPRESSURE a vnode watch (NOTE_ATTRIB) on $SIMULATOR_MEMORY_WARNINGS
+  (<data>/var/run/memory_warning_simulation, set by mksimdevice), reported as PRESSURE_WARN; ~14 daemons and every app
+  watch it (libkqueue inotify, works), but nothing ever touched the file. WARN only (no CRITICAL / NORMAL in the sim).
+- **madvise(MADV_FREE / MADV_FREE_REUSABLE) was a no-op** (Darling sys_madvise returns 0 for advice >= 5). libmalloc,
+  libpas/bmalloc and JSC free with it: census (X86CODE_A64_MADVLOG=1) in one Safari visit: WebContent 1091 calls,
+  Networking 256, GPU 128, MobileSafari 128, SpringBoard and searchd at home; none of it went back to the host.
+
+Changes:
+1. libarm64jit handlers.cpp `h_madvise` (`_madvise`/`___madvise`): advice 5/7 -> Linux MADV_FREE as a probe (succeeds
+   only on private anonymous memory; file / shared / memfd ranges fail EINVAL and are left alone, as XNU's
+   vm_map_reusable_pages skips them) then MADV_DONTNEED, whole pages inside the range. X86CODE_A64_MADV_FREE=0 = before.
+2. jetsam.py: an app going to the background touches the memory-warning file (at most every 10 s;
+   X86SIM_JETSAM_WARN=0 off). WebKit's WebContent / GPU / Networking are not reclaimed by the extension rule while an
+   app runs (launchd's teardown takes them with their host, RAM 7); X86SIM_JETSAM_WEBKIT=0 off.
+
+| point (PSS MB) | b0 | n1 |
+|---|---|---|
+| fresh home 15 min | 901 (32 procs) | 907 (32; 25 s later 1433: RAM 9's launch wave, assistantd/STExtractionService) |
+| gate | 0 failed | 0 failed |
+| gate "after apps" / "idle after the pass" | 1998 / 1346 | 1990 / 1523 (Safari's WebKit kept with Safari) |
+| after gate + 15 min | 1163 | 1186 (mtlvk +14, a relaunched localspeechrecognition +14; guest anon ~0) |
+| sampled peak | 3489 | 3796 (RAM 8-11 range 3.8-4.3) |
+
+Per app (tab.py; app PSS at A / H): Settings 93/90 -> 96/91, Maps 199/224 -> 183/212, Wallet 88/98 -> 87/86, Health
+212/101 -> 129/101, Safari 128/85 -> 82/82 (WebKit 189/189 -> 198/184), News 147/142 -> 145/140.
+Direct pressure test (n1 phone, Maps at home, touch): Maps 210 -> 211, total within noise. So neither the freed
+pages nor the WARN move the totals: what stays in a live process is in use, and the steady-state anon (411 -> 427)
+is long-lived daemons. Kept because both are what the guest expects (XNU semantics, a device's pressure events) and
+cost nothing measurable.
+Speed (n1): Settings cold 4.55 / 3.65 s, warm 0.76 / 0.73; Maps 3.20 / 3.12; Safari 4.85; News 3.45; scroll 51.9 fps,
+p50 16.7 (RAM 11: 4.19-4.59 / 0.80-0.85 / 3.12 / 5.86-6.73 / 4.71 / 52.8). Screenshots (Maps, Health, Safari, News) correct.
+
+Background retention vs a device: here an app lives 30 s in the background (the last one 90 s), extensions 10 s; a
+device keeps suspended apps until pressure (typically 3-8 on a 6-8 GB phone). A backgrounded app costs 85-210 MB here
+(mostly its own heap, which pressure frees little of: above), so the short grace stays: keeping 3-8 apps would add
+0.5-1.5 GB per phone. What matters is warm resume of the last app (90 s); not changed.
+
+AOT image design note (item 4, not implemented). The slab must stay within rel32 reach of libarm64jit/glibc because
+image code calls host helpers with `call rel32` and links blocks with jmp/jcc rel32; reach 2 GB minus the library
+distance leaves 1344 MB, minus 256 MB live room = 1080 MB for an image that wants 1213+. Options:
+(a) host calls through a per-slab veneer page (call rel32 -> veneer -> jmp [rip+abs]): a second slab placed anywhere
+    gets its own veneers; cost one extra indirect jump per host call (hot: memory/syscall helpers), codegen bump;
+(b) a second image segment within reach on the other side of the library (below it now; above it is glibc/ld.so
+    space, layout not fixed per process): needs a fixed address both sides of a library whose own address is random;
+(c) put libarm64jit's host-call targets in a fixed-address trampoline block next to the slab (as FixedData is), so
+    the reach constraint is to that block, not to the library: the slab can then be ~2 GB below it minus live room.
+(c) is the clean one: one fixed page of `jmp [rip+x]` stubs filled at startup, image code calls only those; it frees
+~650 MB of reach (about the missing 133 MB plus app-private tiers). Needs a codegen bump and a full image rebuild.
