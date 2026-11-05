@@ -684,6 +684,10 @@ static bool cache_const_trim() {  // X86CODE_A64_FILETRIM_CONST=0: leave the cac
     static const bool on = !(getenv("X86CODE_A64_FILETRIM_CONST") && atoi(getenv("X86CODE_A64_FILETRIM_CONST")) == 0);
     return on;
 }
+static bool priv_trim() {  // X86CODE_A64_FILETRIM_PRIV=0: leave non-cache read-only private file mappings alone
+    static const bool on = !(getenv("X86CODE_A64_FILETRIM_PRIV") && atoi(getenv("X86CODE_A64_FILETRIM_PRIV")) == 0);
+    return on;
+}
 static void file_trim_once() {
     struct V { u64 a, b; int kind; };  // 0 cache (g_text_patch_mu), 1 shared, 2 AOT image (emitter lock)
     static const bool image = !(getenv("X86CODE_A64_FILETRIM_IMAGE") && atoi(getenv("X86CODE_A64_FILETRIM_IMAGE")) == 0);
@@ -751,7 +755,15 @@ static void file_trim_once() {
                 char *n = l + path;
                 n[strcspn(n, "\n")] = 0;
                 if (perm[0] != 'r' || perm[1] == 'w' || perm[3] != 'p' || b - a < 0x10000) continue;
-                if (!strstr(n, "dyld_sim_shared_cache") && !strstr(n, "dyld_shared_cache")) continue;
+                if (!strstr(n, "dyld_sim_shared_cache") && !strstr(n, "dyld_shared_cache")) {
+                    // RAM 9: other read-only private file mappings (a non-cache Mach-O's __TEXT, Assets.car, model
+                    // weights, host libraries' text): the same rule, present file pages only. libarm64jit's own text
+                    // patches hold g_text_patch_mu (taken per step), guest protection changes g_cache_prot_mu.
+                    if (priv_trim() && n[0] == '/' && strncmp(n, "/dev/", 5) && strncmp(n, "/memfd:", 7) &&
+                        strncmp(n, "/SYSV", 5) && !strstr(n, ".aot."))
+                        w.push_back({a, b, 4});
+                    continue;
+                }
                 auto it = rw.find(n);
                 if (it == rw.end()) it = rw.emplace(n, cache_ro_ranges(n, true)).first;
                 for (auto [lo, hi] : it->second) {
@@ -765,7 +777,8 @@ static void file_trim_once() {
             st.ok = true;
             for (u64 s = m.a; s < m.b && st.ok; s += 0x200000) {
                 st.s = s; st.e = std::min(m.b, s + 0x200000);
-                step(&st);
+                if (m.kind == 4) { std::lock_guard t(g_text_patch_mu); step(&st); }
+                else step(&st);
             }
         }
     }
@@ -913,15 +926,28 @@ static void start_file_trim() {
         g_non_darling_thread = true;
         setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 19);
         auto cpu = [] { timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; };
+        // RAM 9: file pages come back in bursts: a launched daemon maps ~100+ MB of fault-around in its first seconds,
+        // and SpringBoard's status bar clock maps ~110 MB of the AOT image every minute (~2700 faults, 0.1 s of CPU).
+        // With one check every 15 s (the first at 30 s, its window counting the launch twice) they stayed 15-60 s, and
+        // a memcat snapshot caught them or not. Now the file RSS is checked every X86CODE_A64_FILETRIM_TICK s (default
+        // 3; busy measured over that real window) and trimmed after a quiet tick; the fast dispatch table (a refill
+        // costs) is still dropped only after a quiet window of <secs>.
+        const char *te = getenv("X86CODE_A64_FILETRIM_TICK");
+        int tick = te && *te ? atoi(te) : 3;
+        if (tick <= 0 || tick > secs) tick = secs;
+        auto now = [] { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; };
+        auto pct = [](double c, double w) { return c * 100.0 / (w > 1 ? w : 1); };
         long base = 0;
-        double c0 = cpu();
-        sleep(secs);
+        double c0 = cpu(), w0 = now(), fc0 = c0, fw0 = w0;
         for (;;) {
-            sleep(secs);
-            const double c1 = cpu(), busy = (c1 - c0) / (secs * 10.0);  // percent of one CPU
-            c0 = c1;
+            sleep(tick);
+            const double c1 = cpu(), w1 = now(), busy = pct(c1 - c0, w1 - w0);
+            c0 = c1; w0 = w1;
+            if (w1 - fw0 >= secs * 1e3 - 100) {
+                if (pct(c1 - fc0, w1 - fw0) < 3.0) fastdispatch_trim();
+                fc0 = c1; fw0 = w1;
+            }
             if (busy >= 3.0) continue;
-            fastdispatch_trim();
             const long r = rss_file_kb();
             if (r < 0 || r - base < 2048) continue;
             timespec t0, t1;
@@ -929,7 +955,7 @@ static void start_file_trim() {
             file_trim_once();
             clock_gettime(CLOCK_MONOTONIC, &t1);
             base = rss_file_kb();
-            c0 = cpu();
+            c0 = cpu(); w0 = now();
             if (getenv("X86CODE_A64_FILETRIM_LOG"))
                 logf("filetrim: RssFile %ld -> %ld MB in %.1f ms (cpu %.1f%%)", r >> 10, base >> 10,
                      (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6, busy);

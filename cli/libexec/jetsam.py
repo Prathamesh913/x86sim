@@ -35,7 +35,8 @@ Kills (SIGKILL, as jetsam; launchd / RunningBoard relaunch what is needed on the
   - an idle-exit daemon (tracked, allows idle exit, clean) that has been clean and used no CPU for X86SIM_JETSAM_IDLE s
     (default 30); the daemons every app launch talks to (HOT, X86SIM_JETSAM_HOT) after X86SIM_JETSAM_IDLE_HOT s
     (default 600), so app opens don't pay their relaunch. While an app is in the foreground every daemon gets the HOT
-    time (the app's own daemons, e.g. geod under Maps, stay warm).
+    time (the app's own daemons, e.g. geod under Maps, stay warm). RAM 9: HOT applies only within X86SIM_JETSAM_IDLE_HOT s
+    of the last touch (or of jetsam's start); at an untouched home screen HOT daemons get IDLE too.
   - X86SIM_JETSAM_DEMAND (default below): on-demand daemons without EnablePressuredExit that a basic phone only needs
     for a feature in use (Siri's assets, Wallet's passd): as idle-exit daemons once clean (tracked, not dirty).
     assistantd too (RAM 4: dictation / Siri; the keyboard and Siri look it up and launchd starts it).
@@ -77,7 +78,12 @@ DEMAND = set(os.environ.get("X86SIM_JETSAM_DEMAND", "passd,assistant_cdmd,Contex
 # 5 min (0.2 s of CPU). Reclaimed 30 s after each ask, every ask relaunched it: ~140 MB PSS (dyld cache fault-around)
 # for the ~30 s until libarm64jit's file trim, then the kill. Resident and trimmed it is 7 MB. On a device an idle
 # XPC service whose client lives sits in the idle band until real memory pressure.
-RESIDENT = set(os.environ.get("X86SIM_JETSAM_RESIDENT", "UserFontManager").split(",")) - {""}
+# RAM 9: nsurlsessiond keeps a file in its plist QueueDirectories (Library/com.apple.nsurlsessiond-launchd/
+# nsurlsessiond.launch) while it holds background tasks, so launchd restarts it 0 s after any kill; each restart redid
+# its startup (containermanagerd_system, its clients' LaunchOnDemand events: passd -> financed, searchd, tccd ...).
+# fontservicesd: HOT kept it (its 300 s activity never let it idle 600 s); with HOT off at an untouched home it would
+# be killed between activities and relaunch with UserFontManager (~170 MB at launch) every 5 min.
+RESIDENT = set(os.environ.get("X86SIM_JETSAM_RESIDENT", "UserFontManager,fontservicesd,nsurlsessiond").split(",")) - {""}
 # RAM 4: on-demand daemons that stay dirty (an XPC transaction nobody ends) with nothing to do: reclaimed once CPU-idle for
 # X86SIM_JETSAM_DIRTY_IDLE s anyway, as a device's jetsam takes dirty background daemons under pressure. siriactionsd: a
 # relaunch by a launch event (LaunchServices / Biome / defaults notifications) leaves it dirty for good (~80 MB).
@@ -101,6 +107,7 @@ CPU_WIN = 10.0
 CLK = os.sysconf("SC_CLK_TCK")
 BOOT = time.time() - float(open("/proc/uptime").read().split()[0])
 RELAUNCH = 60.0
+START = time.time()
 # system apps and UI services (angels: the keyboard, Siri's UI) RunningBoard may background: never reclaimed here, and
 # never "the app in the foreground"
 NEVER = ("SpringBoard.app/", "PosterBoard.app/", "InputUI.app/", "Campo.app/")
@@ -406,6 +413,10 @@ def sweep(verbose=False, status=False):
                 st.pop("bg", None)
                 continue
             killed.append((lpid, dpid, exe, why))
+    # RAM 9: HOT's long grace is for app opens. At home with no touch or app for IDLE_HOT s (and IDLE_HOT after the
+    # phone came up) it no longer applies: the HOT daemons that background launch waves (passd every few minutes, the
+    # Siri / MobileAsset set) relaunch then exit after IDLE like the rest, not 10 min later (~100 MB at fresh home).
+    warm = now - max(last_input(), START) < IDLE_HOT
     for dpid, lpid, exe, st, sm, jm, idle in rows:
         if ".appex/" in exe:
             if sm and now - sm[0] > grace(exe, EXT):
@@ -422,7 +433,7 @@ def sweep(verbose=False, status=False):
             st.pop("clean", None)
             continue
         since = max(jm[0], st.setdefault("clean", now))   # clean since its last dirty flip and since we saw it idle
-        g = grace(exe, max(DIRTY_IDLE, IDLE_HOT if fg_app else 0) if (dirty & 4) else IDLE_HOT if (name in HOT or fg_app) else IDLE)
+        g = grace(exe, max(DIRTY_IDLE, IDLE_HOT if fg_app else 0) if (dirty & 4) else IDLE_HOT if (fg_app or (name in HOT and warm)) else IDLE)
         if now - since > g:
             killed.append((lpid, dpid, exe, "daemon %s and idle %.0f s" % ("dirty" if dirty & 4 else "clean", now - since)))
         elif status:

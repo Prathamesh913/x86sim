@@ -2856,3 +2856,56 @@ recorder's replays (one burst of ~35 on one thread).
 Screenshots of the gate's apps, the Maps route and Settings opened after a trim (fresh phone, 15 min idle) render
 correctly. Left: ~110 MB fragmented free in glibc's arenas and ~80 MB of NVIDIA command chunks (device high water);
 the live variants' own objects (shader modules, layouts, plans) stay with their states.
+
+## RAM 9 (2026-11-04, main phone alone): fresh idle was noise; burst trims, HOT only after use, nsurlsessiond kept
+
+Same procedure (main phone only, fresh boot, home; ~/scratch/x86code/ram9/: fresh.sh = boot + memcat every minute for
+15 min + SpringBoard CPU/RssFile, pss10.sh = total PSS every 10 s, run.sh = gate + 15 min idle).
+
+**The 1144 MB of RAM 8 was not a regression.** HEAD (RAM 8) fresh runs: a1 955 MB at 15 min (= RAM 7's 960), a2 1260
+(securityd 171 + tccd 119 just launched), RAM 8's fr 1144 (SpringBoard +99, tccd/trustd/appprotectiond/
+usernotificationsd alive). A single snapshot at 15:00 landed on guest activity that comes and goes:
+- **A launch wave ~14.5-15 min after boot** (also at ~6.5 min in one boot): assistantd by an xpc event, then securityd,
+  tccd, siri*, corespeechd, geod, trustd, usernotificationsd, mobileassetd's Builtin (14-17 spawns). Each new process
+  maps ~100+ MB of dyld cache fault-around; libarm64jit's first file trim came at >= 30 s (its first window counted the
+  launch twice), so they stayed big for 45-60 s (securityd still 171 MB at 48 s).
+- **SpringBoard every minute** (the status bar clock): ~2700 minor faults on the main thread in 0.1 s of CPU map
+  ~110 MB of the AOT image (aot.map 92 + aot.idx 15), trimmed 15-30 s later. A snapshot inside that window read
+  SpringBoard +85..+112 MB (fr's +99).
+- **HOT daemons relaunched by background waves** (passd by xpc events in pairs 2 min apart, the wave above) kept HOT's
+  600 s grace at an untouched home: tccd, trustd, appprotectiond, usernotificationsd, containermanagerd(_system),
+  securityd ~100 MB for 10 min.
+- **nsurlsessiond relaunch loop**: it keeps Library/com.apple.nsurlsessiond-launchd/nsurlsessiond.launch (its plist
+  QueueDirectories) while it holds background tasks, so launchd restarts it 0 s after each jetsam kill ("came back 0 s",
+  grace doubling), redoing its startup (containermanagerd_system, clients' LaunchOnDemand events).
+
+Fixes:
+1. libarm64jit file trim (host.cpp start_file_trim): RssFile checked every X86CODE_A64_FILETRIM_TICK s (default 3),
+   busy measured over the real window, trim after a quiet tick with >= 2 MB growth; the fast dispatch table still only
+   after a quiet X86CODE_A64_FILETRIM window (15 s). SpringBoard's minute burst now lasts <= 4 s (RssFile 80 -> 128 ->
+   80 MB instead of 88 -> 201 for 15 s); a launched daemon is trimmed seconds after it goes quiet (securityd 25 MB at
+   35 s). SpringBoard CPU at home 53 -> 62 ticks/min (+0.15% of a core).
+2. libarm64jit: non-cache read-only private file mappings (a Mach-O's own __TEXT, Assets.car, model weights, host
+   library text) trimmed like the cache's __DATA_CONST (present file pages only, under g_cache_prot_mu exclusive +
+   g_text_patch_mu per step; X86CODE_A64_FILETRIM_PRIV=0 off). SpringBoard runtime-files 95 -> 50 MB at fresh home.
+3. jetsam.py: HOT's 600 s grace applies only within IDLE_HOT of the last touch (or of jetsam's start); at an untouched
+   home HOT daemons exit after IDLE like the rest. RESIDENT += nsurlsessiond (queue-dir relaunch) and fontservicesd
+   (HOT kept it before: its 300 s activity never let it idle 600 s; at 30 s it relaunched with UserFontManager, ~170 MB
+   at launch, every 5 min: seen in e1).
+
+| fresh home (PSS MB, procs) | m10 | m12 | m14 | m15 | after the 15 min wave |
+|---|---|---|---|---|---|
+| RAM 8 HEAD a1 / a2 | 1116 / 1118 | 1000 / 1035 | - | 955 / **1260** | b1 (fix 1 only): 1385 at +35 s, 1068 at +2 min |
+| fixes 1+2 (c1, d1) | 1074 / 1156 | 1001 / 1051 | 922 / 1001 | 903 / 1001 | c1 1131 m16, 1100 m20 (HOT relaunches) |
+| all (e2) | 929 / 33 | 899 / 32 | 900 / 32 | **903 / 32** | 910 m17, 897 m19, 897 m22 |
+
+| point | RAM 8 | RAM 9 |
+|---|---|---|
+| fresh home 15 min | 955-1260 (a1, a2, fr 1144) | 903 (e2), flat 897-910 from min 10 to 22 |
+| after gate + 15 min | 1420 (f1); 1377 (g1, fix 1) | 1418 (g2: mtlvk 481 vs 429-445, passd 41 left after Wallet; guest side -40) |
+| gate's "after apps" / sampled peak | 3034 / 4322 (g1) | 2118 / 3911 (g2) |
+| gate | | g1, g2 0 failed |
+| Settings cold / warm / scroll | 3.47 3.29 / 0.75 0.74 / 52.5 fps | 3.67 3.33, 3.67 3.30 / 0.77 0.75, 0.75 0.74 / 51.3, 52.6 fps, p50 16.7 |
+
+Left: the launch wave's trigger (assistantd's xpc event at ~15 min) not identified; it now costs ~2 min. mtlvk after
+use varies 429-481 between gate runs (RAM 8's command-chunk high water). passd stayed after the gate's Wallet (41 MB).
