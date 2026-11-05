@@ -103,6 +103,28 @@ pub fn start(device: metal2vulkan_runtime::Device) {
             device.pipeline_census()
         );
         crate::conn::STATS_REQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        prof_dump_on_request();
         std::thread::sleep(std::time::Duration::from_secs_f64(secs));
     });
+}
+
+/// x86Code RAM 10: with jemalloc preloaded with prof:true, a heap profile now (jemalloc's `prof.dump`) when the file
+/// MTLVK_PROF_TRIGGER names exists (removed); checked at each memstats line.
+fn prof_dump_on_request() {
+    let Some(trigger) = std::env::var_os("MTLVK_PROF_TRIGGER") else { return };
+    if std::fs::remove_file(&trigger).is_err() {
+        return;
+    }
+    type Mallctl = unsafe extern "C" fn(*const libc::c_char, *mut libc::c_void, *mut usize, *mut libc::c_void, usize) -> libc::c_int;
+    // SAFETY: looking up and calling jemalloc's mallctl with its documented arguments for "prof.dump".
+    unsafe {
+        let f = libc::dlsym(libc::RTLD_DEFAULT, c"mallctl".as_ptr());
+        if f.is_null() {
+            eprintln!("mtlvk: MTLVK_PROF_TRIGGER: no mallctl (jemalloc not preloaded)");
+            return;
+        }
+        let f: Mallctl = std::mem::transmute(f);
+        let r = f(c"prof.dump".as_ptr(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), 0);
+        eprintln!("mtlvk: prof.dump {r}");
+    }
 }

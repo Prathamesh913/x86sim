@@ -40,7 +40,8 @@ Kills (SIGKILL, as jetsam; launchd / RunningBoard relaunch what is needed on the
   - X86SIM_JETSAM_DEMAND (default below): on-demand daemons without EnablePressuredExit that a basic phone only needs
     for a feature in use (Siri's assets, Wallet's passd): as idle-exit daemons once clean (tracked, not dirty).
     assistantd too (RAM 4: dictation / Siri; the keyboard and Siri look it up and launchd starts it).
-  - X86SIM_JETSAM_DIRTY (default siriactionsd): such daemons also when dirty, after X86SIM_JETSAM_DIRTY_IDLE s CPU-idle.
+  - X86SIM_JETSAM_XPC (default 1): system XPC services (.xpc bundles) as idle-exit daemons once tracked and clean (RAM 10).
+  - X86SIM_JETSAM_DIRTY (default siriactionsd, corespeechd): such daemons also when dirty, after X86SIM_JETSAM_DIRTY_IDLE s CPU-idle.
 Something relaunched within RELAUNCH s of its kill (a launch event, or a client that needed it) doubles its grace
 period each time, up to X86SIM_JETSAM_MAX s (default 1800): it is never kept forever, and never killed in a loop.
 X86SIM_JETSAM=0 disables it; X86SIM_JETSAM_DAEMONS=0 leaves daemons alone (extensions and apps only).
@@ -87,7 +88,10 @@ RESIDENT = set(os.environ.get("X86SIM_JETSAM_RESIDENT", "UserFontManager,fontser
 # RAM 4: on-demand daemons that stay dirty (an XPC transaction nobody ends) with nothing to do: reclaimed once CPU-idle for
 # X86SIM_JETSAM_DIRTY_IDLE s anyway, as a device's jetsam takes dirty background daemons under pressure. siriactionsd: a
 # relaunch by a launch event (LaunchServices / Biome / defaults notifications) leaves it dirty for good (~80 MB).
-DIRTY_OK = set(os.environ.get("X86SIM_JETSAM_DIRTY", "siriactionsd").split(",")) - {""}
+# RAM 10: corespeechd: the gate's Siri press starts it; it stays dirty (~30 MB) with nothing to do (no voice trigger here:
+# its KeepAlive PathState /var/mobile/Library/VoiceTrigger/KeepAlive does not exist).
+DIRTY_OK = set(os.environ.get("X86SIM_JETSAM_DIRTY", "siriactionsd,corespeechd").split(",")) - {""}
+XPC_IDLE = os.environ.get("X86SIM_JETSAM_XPC", "1") != "0"
 DIRTY_IDLE = float(os.environ.get("X86SIM_JETSAM_DIRTY_IDLE", "300"))
 POLL = 2.0
 # RAM 2: RunningBoard's and SpringBoard's view of the apps, from com.x86code.openurl (host/openurl frontmost()): the
@@ -427,7 +431,10 @@ def sweep(verbose=False, status=False):
         dirty, name = jm[1][1], name_of(exe)
         if name in RESIDENT:
             continue
-        if not (dirty & 1) or not ((dirty & 2) or name in DEMAND):
+        # RAM 10: a system XPC service (a framework's .xpc bundle, ServiceType System: mediaaccessibilityd,
+        # VideoSubscriberAccount.DeveloperService) is tracked without idle exit here, so the one an app's use started stayed
+        # for good once the app was gone; on a device an idle XPC service is in the idle band and the first jetsam takes.
+        if not (dirty & 1) or not ((dirty & 2) or name in DEMAND or (XPC_IDLE and ".xpc/" in exe)):
             continue
         if not idle or ((dirty & 4) and name not in DIRTY_OK):
             st.pop("clean", None)

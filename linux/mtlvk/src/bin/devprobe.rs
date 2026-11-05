@@ -20,6 +20,10 @@ fn main() {
         cbgrow();
         return;
     }
+    if mode == "cbhigh" {
+        cbhigh();
+        return;
+    }
     if mode == "cbmalloc" {
         cbmalloc();
         return;
@@ -234,5 +238,87 @@ fn cbgrow() {
         dev.queue_submit(queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()).unwrap();
         println!("40 small in flight: nvctl {}", nvctl());
         dev.device_wait_idle().unwrap();
+    }
+}
+
+/// x86Code RAM 10: where NVIDIA's command memory high water lives. 40 pools record BIG commands at once (on THREADS
+/// threads), submitted together; then every pool destroyed; then the recording threads ended; then a fresh pool of
+/// small work. nvctl after each step.
+fn cbhigh() {
+    use ash::vk;
+    use ash::vk::Handle;
+    unsafe {
+        let entry = ash::Entry::load().unwrap();
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let inst = entry.create_instance(&vk::InstanceCreateInfo::default().application_info(&app), None).unwrap();
+        let pd = inst.enumerate_physical_devices().unwrap().into_iter().find(|p| inst.get_physical_device_properties(*p).device_type == vk::PhysicalDeviceType::DISCRETE_GPU).unwrap();
+        let prio = [1.0f32];
+        let q = [vk::DeviceQueueCreateInfo::default().queue_family_index(0).queue_priorities(&prio)];
+        let dev = inst.create_device(pd, &vk::DeviceCreateInfo::default().queue_create_infos(&q), None).unwrap();
+        let queue = dev.get_device_queue(0, 0);
+        let buf = dev.create_buffer(&vk::BufferCreateInfo::default().size(1 << 20).usage(vk::BufferUsageFlags::TRANSFER_DST), None).unwrap();
+        let req = dev.get_buffer_memory_requirements(buf);
+        let mem = dev.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(1), None).unwrap();
+        dev.bind_buffer_memory(buf, mem, 0).unwrap();
+        let big: u32 = std::env::var("BIG").ok().and_then(|v| v.parse().ok()).unwrap_or(20000);
+        let threads: usize = std::env::var("THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+        println!("device: nvctl {}", nvctl());
+        let devr = &dev;
+        let record = move |cb: vk::CommandBuffer, n: u32| {
+            devr.begin_command_buffer(cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)).unwrap();
+            for i in 0..n {
+                devr.cmd_fill_buffer(cb, buf, ((i % 1024) * 4) as u64, 4, i);
+            }
+            devr.end_command_buffer(cb).unwrap();
+        };
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let done_rx = std::sync::Arc::new(std::sync::Mutex::new(done_rx));
+        let (pool_tx, pool_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                let pool_tx = pool_tx.clone();
+                let done_rx = done_rx.clone();
+                s.spawn(move || {
+                    for _ in 0..40 / threads {
+                        let pool = devr.create_command_pool(&vk::CommandPoolCreateInfo::default().flags(vk::CommandPoolCreateFlags::TRANSIENT | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER).queue_family_index(0), None).unwrap();
+                        let cb = devr.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(1)).unwrap()[0];
+                        record(cb, big);
+                        pool_tx.send((pool.as_raw(), cb.as_raw())).unwrap();
+                    }
+                    let _ = done_rx.lock().unwrap().recv();
+                });
+            }
+            drop(pool_tx);
+            let pools: Vec<(u64, u64)> = pool_rx.iter().take(40 / threads * threads).collect();
+            println!("{} big recorded at once: nvctl {}", pools.len(), nvctl());
+            let cbs: Vec<vk::CommandBuffer> = pools.iter().map(|p| vk::CommandBuffer::from_raw(p.1)).collect();
+            dev.queue_submit(queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()).unwrap();
+            dev.device_wait_idle().unwrap();
+            for (p, _) in &pools {
+                dev.destroy_command_pool(vk::CommandPool::from_raw(*p), None);
+            }
+            println!("all pools destroyed: nvctl {}", nvctl());
+            for _ in 0..threads {
+                done_tx.send(()).unwrap();
+            }
+        });
+        println!("recording threads ended: nvctl {}", nvctl());
+        dev.device_wait_idle().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("2 s later: nvctl {}", nvctl());
+        dev.destroy_buffer(buf, None);
+        dev.free_memory(mem, None);
+        dev.destroy_device(None);
+        println!("device destroyed: nvctl {}", nvctl());
+        inst.destroy_instance(None);
+        println!("instance destroyed: nvctl {}", nvctl());
+        if std::env::var("AGAIN").is_ok() {
+            let inst = entry.create_instance(&vk::InstanceCreateInfo::default().application_info(&app), None).unwrap();
+            let pd = inst.enumerate_physical_devices().unwrap()[0];
+            let pd = inst.enumerate_physical_devices().unwrap().into_iter().find(|p| inst.get_physical_device_properties(*p).device_type == vk::PhysicalDeviceType::DISCRETE_GPU).unwrap_or(pd);
+            let dev = inst.create_device(pd, &vk::DeviceCreateInfo::default().queue_create_infos(&q), None).unwrap();
+            println!("second device: nvctl {}", nvctl());
+            dev.destroy_device(None);
+        }
     }
 }

@@ -2909,3 +2909,63 @@ Fixes:
 
 Left: the launch wave's trigger (assistantd's xpc event at ~15 min) not identified; it now costs ~2 min. mtlvk after
 use varies 429-481 between gate runs (RAM 8's command-chunk high water). passd stayed after the gate's Wallet (41 MB).
+
+## RAM 10 (2026-11-05, main phone alone): NVIDIA's chunk cache is per instance; release on give, recorder logs, idle XPC services
+
+Same procedure as RAM 9 (main phone only; ~/scratch/x86code/ram10/: run.sh = gate + 20 s sampler + 15 min idle with
+MTLVK_MEMSTATS=60, the 15-min snapshot taken twice 25 s apart and the lower kept (SpringBoard's minute burst: r1's
+single snapshot caught it, +94 MB); fresh.sh as RAM 9; prof.sh = jemalloc-profiled mtlvk (mtlvk-prof.sh) dumped on
+request at fresh home and after gate + 7 min (mtlvk: MTLVK_PROF_TRIGGER=<file>, checked per memstats line, calls
+jemalloc's prof.dump)). Baseline b0 = HEAD with METAL2VULKAN_POOL_RELEASE_ON_GIVE=0 (the RAM 9 behaviour).
+
+**Device recreation would not return the command chunks.** devprobe `cbhigh` (40 pools recording 20000 fills each at
+once on 1/4/40 threads, submitted, then every pool destroyed, the threads ended, the VkDevice destroyed): nvctl 9 ->
+46 MB, and 46 after the pools, 46 after the threads, 41 after vkDestroyDevice; 0 only after vkDestroyInstance. NVIDIA
+615.78's 2 MB command chunk cache is the instance's (driver-global), not the device's. Recreating the device on idle
+would return nothing of it; only a new instance (= every object, imported memfd and texture content rebuilt) or a new
+process does. Not taken: a transparent mtlvk restart needs metalhostd to replay every live object and keep a copy of
+private textures, far past this step. Instead the high water itself was lowered:
+
+1. **Settled spare pools reset with RELEASE_RESOURCES when given back** (metal2vulkan spares.rs give_command_pool;
+   METAL2VULKAN_POOL_RELEASE_ON_GIVE=0 = before). RAM 8's releasing reset ran only on a pool taken while it had a
+   command buffer still recording; a settled pool kept its command buffers, whose implicit reset at the next begin
+   keeps the chunks, so each waiting spare held its own busiest recording and the next burst mapped new chunks
+   (b0: nvctl-small 124 MB 2 min after boot, 12 spares holding 1269 primaries). Now a settled pool's chunks go back to
+   the cache as it is given back (on the completing thread; a reset, not the destroy that once spun there).
+   nvctl-small after use 126 -> 50 MB (fresh 31).
+2. **Recorder logs kept for reuse trimmed when idle** (metal2vulkan recorder/handles.rs trim, from Device::trim_idle
+   on mtlvk's trim thread). jemalloc diff home -> after gate + 7 min idle: +84.5 MB, of it 46 MB in the recorder's
+   command logs (handles::record / render_command logged -> Vec growth): FREE keeps up to 1024 emptied logs, each
+   with the room of its largest command buffer. Where no deferred command buffer was made for MTLVK_TRIM_IDLE (10 s)
+   all but the 16 reused first go. malloc in use after use 127 -> 94 MB.
+3. **jetsam.py**: system XPC services (.xpc bundles, ServiceType System) are tracked without idle exit here
+   (launchd_sim: "Unknown key for Boolean: EnablePressuredExit"), so mediaaccessibilityd (7 MB) and
+   VideoSubscriberAccount.DeveloperService (10 MB) started by the gate's apps stayed for good; they are now idle-exit
+   daemons once clean and CPU-idle (X86SIM_JETSAM_XPC=0 off; RESIDENT still wins, UserFontManager stays).
+   corespeechd joins DIRTY (siriactionsd's rule): the gate's Siri press leaves it dirty with nothing to do (no voice
+   trigger; its KeepAlive PathState file does not exist), reclaimed after 300 s CPU-idle (it may come back by a
+   launch event and is reclaimed again, clean, after 30 s).
+
+| point (PSS MB) | b0 (before) | r1 (fix 1) | r2 (all) |
+|---|---|---|---|
+| phone after gate + 15 min | 1314 | 1329 (SpringBoard burst +94 in the snapshot; ~1235 without) | **1170** |
+| mtlvk after use | 451 (nvctl-small 126, malloc in use 138) | 364 (50, 127) | **335** (50, 94) |
+| gate "after apps" / sampled peak | 2130 / 3962 | 2103 / 3877 | 2219 / 3792 |
+| gate | 0 failed | 0 failed | 0 failed |
+| fresh home 15 min | 903 (RAM 9 e2) | | 899 (f1; flat 895-899 from min 11) |
+
+Settings cold / warm / scroll (r10a, all fixes): 3.68 3.32 / 0.74 0.75 s / 54.3 fps, p50 16.7 (RAM 9: 3.67 3.33 /
+0.77 0.75 / 51.3-52.6). Screenshots after the 15-min idle trims (pools released, logs dropped, pipelines trimmed):
+home, Settings, Maps (tiles, places), Safari (Wikipedia page), home again all correct.
+
+What remains after use (r2 vs fresh e2: 1170 vs 903, +267):
+- mtlvk +113 (222 -> 335): arenas 98 (malloc in use 94 incl. 31 mmap; ~35 MB of the arenas is fragmentation
+  malloc_trim cannot return), nvctl-small 50 (+19: the instance's chunk cache high water of one burst; 2 x 2 MB
+  minimum per in-flight command buffer), libs +11 (NVIDIA's compiler pages touched), nvctl-big 20 (host-visible
+  blocks). Live: 160 render variants and 12 kept instances that CoreAnimation keeps (states), the render plans
+  (settle/plan ~13 MB in the profile), generate_mipmaps' kept objects (~6.5 MB).
+- kbd 63: TextInput's daemon, started by the gate's keyboard use, JetsamPriority 5 and no idle exit: resident as on a
+  device. corespeechd 24 (relaunched by a launch event after its dirty reclaim; idle-exits clean).
+- backboardd +20, SpringBoard +18 (devzero surfaces +12: app snapshots / icon surfaces), InputUI +9, darlingserver +9.
+- Optional item (assistantd's ~15-min xpc event wave): not reproduced in f1 (no spawn between 3 and 20 min after
+  boot); not chased further.

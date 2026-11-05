@@ -83,7 +83,7 @@ fn start_trim(device: Device) {
                 unsafe { libc::malloc_trim(0) != 0 }
             };
             if log && (pools > 0 || descriptors > 0) {
-                eprintln!("mtlvk trim: {pools} command pools, {descriptors} descriptor pools released, malloc_trim {malloc}");
+                eprintln!("mtlvk trim: {pools} command pools (and recorder logs), {descriptors} descriptor pools released, malloc_trim {malloc}");
             }
         }
     });
