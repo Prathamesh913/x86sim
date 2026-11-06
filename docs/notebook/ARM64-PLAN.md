@@ -3273,3 +3273,24 @@ Shift through the launcher checked with `wtype -M shift`. Open: tapping Google's
 WebContent (4 logs today: guest read at a page end, MemoryRead64 fault from AOT code, "A problem repeatedly occurred");
 web-page typing could not be measured. A plain boot-a64.sh from a shell (as gate.sh does) aborted launchd_sim twice
 (brk in launchd_sim); the launcher's start (x86code-mcp sim_start/sim_restart) booted fine.
+
+## Safari 1: google.com search box crashed WebContent; direct boot-a64.sh aborted launchd_sim
+
+- **Crash** (deterministic, same addresses every time): tapping Google's search box -> WebContent `signal 11` at
+  0xb9911d000 from AOT code, then `MemoryRead64` (libarm64jit.so+0x1e743d, the fallback) faulted on the same page ->
+  "fatal native fault". Guest: WTF::StringImpl hash (dyld_sim_shared_cache +0x169f28d0, x0 = data 0xb9911c3c8,
+  length 0xc4e, x14 = 0xb9911cff8 the last good word). Not a JIT bug: the string lives in an XPC shmem mapped from
+  a mach memory entry (host maps: one `r--s memfd:darling-memory-entry` page, then the guest's 16K reservation as
+  `---p`). Data starts at 0x3c8 into the entry's first page and ends 0x16 bytes into the second.
+- **Cause** (darlingserver duct-tape memory.c, mach_vm_map_external): the mapping size was round_page(initial_size)
+  and ignored the in-page start of the data (entry->data_offset with VM_FLAGS_RETURN_DATA_ADDR, plus offset's page
+  offset). Any payload that starts mid-page and crosses a page boundary lost its last page. **Fix**: map
+  round_page(in-page start + size) from trunc_page(data_offset + offset), clamped to the entry, as XNU's
+  vm_map_enter_mem_object does.
+- **Boot**: launchd_sim's brk (0x100042168) is its fatal-log path. The message was "missing or invalid configuration
+  plist". boot-a64.sh hands it `/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist`, so a relative A64_DEVICE
+  from a shell gave a path that doesn't exist (reproduced with the old script: `A64_DEVICE=var/device-a64` -> abort; the
+  launcher passes absolute paths). Fix: boot-a64.sh realpaths A64_DEVICE. A direct relative boot now reaches home.
+- **Gate**: new step google_search (google.com, tap box, type "wikipedia linux", return, results OCR, no WebContent
+  crash). Gate gsearch2: 0 failed. Settings cold/warm t+3s/t+3s, Safari t+3s (kb2: 3/7/3). google.com and Wikipedia
+  checked by screenshot.

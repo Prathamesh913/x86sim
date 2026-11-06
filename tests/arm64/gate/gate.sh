@@ -69,6 +69,15 @@ f open_check wallet com.apple.Passbook 'Wallet|Passes|Apple Pay|Tickets' 120
 f open_check messages com.apple.MobileSMS 'Messages|Edit|Filters|New Message|Start a conversation' 120
 f open_check news com.apple.news 'Today|News\+|Following|Audio|Sports|Puzzles|Top Stories' 150
 home 5; open_ 'https://en.wikipedia.org/wiki/Paris'; f wait_proc safari MobileSafari 60 && PROC=MobileSafari f wait_ocr safari 'Paris|Wikipedia|France' 150
+# Safari 1: google.com search (tap the box, type, return): WebContent faulted on the tap (an XPC shmem whose data starts
+# mid-page mapped one page short, darlingserver mach_vm_map RETURN_DATA_ADDR)
+google_search() {
+	open_ 'https://www.google.com'; wait_ocr google-home 'Google|Trending|Sign in' 90 || return 1
+	touch_ tap 400 805; sleep 4; timeout 30 python3 cli/libexec/simtouch.py text 'wikipedia linux' >/dev/null 2>&1; sleep 2
+	touch_ key 40; PROC=MobileSafari wait_ocr google-results 'Wikipedia|Linux kernel|Torvalds' 90 || return 1
+	! crashed_proc com.apple.WebKit.WebContent || { say "CRASH google-search: WebContent"; return 5; }
+}
+f google_search
 # Speed 29: Maps route (search, Plan, origin, route). Speed 36: on by default (GATE_ROUTE=0 skips it): the AttributeGraph
 # abort was darlingserver's shared vm_remap losing the old table's aliasing on the second growth (speed36.md).
 [ "${GATE_ROUTE:-1}" = 1 ] && O="$O/route" f tests/arm64/gate/mapsroute.sh maps-route

@@ -15,7 +15,11 @@
 #        X86CODE_METAL=0|1|backboardd|all  (default 0 = software; needs host/metalhostd/arm64/metalhostd)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 export X86SIM_ARCH=arm64
-export X86SIM_DEVICE=${A64_DEVICE:-$X86SIM_ROOT/var/device-a64}
+# Safari 1: absolute, as the launcher passes it. launchd_sim gets "/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist"
+# and the phone's processes are matched by A64_DEVICE=$D: a relative A64_DEVICE from a shell (A64_DEVICE=var/device-a64)
+# aborted launchd_sim ("missing or invalid configuration plist", brk in launchd_sim) at every boot.
+A64_DEVICE=$(realpath -m "${A64_DEVICE:-$X86SIM_ROOT/var/device-a64}")
+export A64_DEVICE X86SIM_DEVICE=$A64_DEVICE
 # Speed 24: a device's iOS version is its <device>/runtime (a runtimes/ dir name, device-a64.py create --ios); A64_RUNTIME
 # overrides. Each runtime has its own JIT/AOT cache dir ($X86SIM_SCRATCH/jc-<build>; 27.0: jitcache) and placement table.
 A64_RT_DIR=$(cat "$X86SIM_DEVICE/runtime" 2>/dev/null)
