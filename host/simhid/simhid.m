@@ -255,6 +255,7 @@ static void dispatch_event(VService* s, IOHIDEventRef e) {
 // --- events
 
 static bool touching;
+static uint64_t touch_up_ns;  // last touch lift (focus guard for keys, see handle_line)
 static uint32_t touch_identity = 2;
 
 static void send_touch(const char* phase, double x, double y, int edge) {
@@ -263,7 +264,7 @@ static void send_touch(const char* phase, double x, double y, int edge) {
 	if (move && !touching) return;
 	if (down) { if (touching) send_touch("up", x, y, 0); touching = true; touch_identity++; touch_edge = edge; }
 	// (a single-finger down while two fingers are down: the two-finger contact is lifted first, see send_touch2)
-	if (up) { if (!touching) return; touching = false; }
+	if (up) { if (!touching) return; touching = false; touch_up_ns = now_ns(); }
 	uint64_t ts = mach_absolute_time();
 	uint32_t mask = kDigitizerPosition | (down || up ? kDigitizerTouch | kDigitizerRange | kDigitizerIdentity : 0);
 	mask |= edge_mask[touch_edge];
@@ -316,7 +317,7 @@ static void send_key(VService* s, uint32_t page, uint32_t usage, bool down) {
 	dispatch_event(s, IOHIDEventCreateKeyboardEvent(kCFAllocatorDefault, mach_absolute_time(), page, usage, down, 0));
 }
 
-typedef struct { int fd; uint64_t kb_idle_ns; } Client;  // kb_idle_ns 0: default
+typedef struct { int fd; uint64_t kb_idle_ns; int kb_settle_ms; } Client;  // kb_idle_ns 0: default; kb_settle_ms -1: default
 
 // x86Code (RAM 2): the time of the last user input, for cli/libexec/jetsam.py (an app the user is touching or typing
 // into is never reclaimed): <SIMULATOR_SHARED_RESOURCES_DIRECTORY>/tmp/x86code-input, its mtime touched at each touch,
@@ -351,24 +352,37 @@ static void handle_line(char* line, Client* cl) {
 	unsigned usage;
 	if (sscanf(line, "key %15s %i", a, &usage) == 2) {
 #if __arm64__
-		// x86Code arm64: the keyboard service is attached at the first key command (see initUsingHIDService)
-		// Speed 31: the first key used to be followed by the next ones 300 ms later, and those were lost: the new
-		// keyboard puts UIKit into hardware-keyboard mode and the focused field's keyboard session restarts (the
-		// software keyboard goes away) before it takes keys. The keys are not dropped here: this client's later lines
-		// wait (they queue in the socket, in order) until the session had time to come back. SIMHID_KB_SETTLE_MS
-		// (default 1500) after the first attach; the first key itself waits too.
+		// x86Code arm64: the keyboard service is attached at the first key command (see initUsingHIDService).
+		// Speed 31 held this client's keys for a fixed 1.5 s after every attach (keys 300 ms after the first were
+		// lost or scrambled). Input: host keyboard latency (kblat.py) found the attach itself is ready in ~0.1 s
+		// (backboardd sets the service's properties within 110 ms) and a burst typed 0 ms after it lands whole; what
+		// scrambles keys is a field still taking focus: keys typed < ~0.7 s after the tap that focused it land
+		// reordered ("settingsifi") whether or not the keyboard was attached just then. So: a short attach settle
+		// (SIMHID_KB_SETTLE_MS, default 150) and a focus guard: a key within SIMHID_KB_TOUCH_GUARD_MS (default 1000)
+		// of the last touch lift waits for the rest of it. Every other key goes out at once (was: the first burst
+		// after each attach, i.e. after every 5 min pause in the launcher, came 1.2-1.5 s late).
+		// The wait does not hold cmd_mu (the caller's lock is dropped around it): touches and keys of other clients
+		// and the idle thread go on. This client's later lines queue in the socket, in order.
+		int64_t wait_ns = 0;
 		if (!keyboard_svc.service && hid_system) {
 			add_service(hid_system, &keyboard_svc);
 			const char* ms = getenv("SIMHID_KB_SETTLE_MS");
-			// The settle no longer holds cmd_mu (the caller's lock is dropped around it): touches and keys of other
-			// clients, and the idle thread, are not frozen for 1.5 s. This client's later lines still wait (in order).
-			// kb_last_ns is set first so the idle thread cannot detach the service during the settle.
+			wait_ns = (int64_t)(cl && cl->kb_settle_ms >= 0 ? cl->kb_settle_ms : ms && *ms ? atoi(ms) : 150) * 1000000;
+		}
+		{
+			static int64_t guard = -1;
+			if (guard < 0) { const char* g = getenv("SIMHID_KB_TOUCH_GUARD_MS"); guard = (int64_t)(g && *g ? atoi(g) : 1000) * 1000000; }
+			const int64_t since = touch_up_ns ? (int64_t)(now_ns() - touch_up_ns) : INT64_MAX;
+			if (guard - since > wait_ns) wait_ns = guard - since;
+		}
+		if (wait_ns > 0) {
+			// kb_last_ns / kb_down first so the idle thread cannot detach the service meanwhile
 			kb_last_ns = now_ns(); kb_down++;
 			pthread_mutex_unlock(&cmd_mu);
-			usleep((ms && *ms ? atoi(ms) : 1500) * 1000);
+			usleep((useconds_t)(wait_ns / 1000));
 			pthread_mutex_lock(&cmd_mu);
 			kb_down--;
-			slog("keyboard settled");
+			slog("key held %lld ms (attach settle / focus guard)", (long long)(wait_ns / 1000000));
 		}
 		kb_last_ns = now_ns();
 		kb_idle_ns = cl ? cl->kb_idle_ns : 0;
@@ -380,6 +394,11 @@ static void handle_line(char* line, Client* cl) {
 		return;
 	}
 	int secs;
+	if (sscanf(line, "kbsettle %d", &secs) == 1) {
+		if (cl) cl->kb_settle_ms = secs;
+		slog("client fd=%d kbsettle %d", cl ? cl->fd : -1, secs);
+		return;
+	}
 	if (sscanf(line, "kbidle %d", &secs) == 1) {
 #if __arm64__
 		// <= 0: never detach after this client's keys (like SIMHID_KB_IDLE_S=0)
@@ -404,7 +423,7 @@ static void handle_line(char* line, Client* cl) {
 static pthread_mutex_t cmd_mu = PTHREAD_MUTEX_INITIALIZER;
 static void* client_thread(void* arg) {
 	int fd = (int)(intptr_t)arg;
-	Client cl = { fd, 0 };
+	Client cl = { fd, 0, -1 };
 	slog("client_thread fd=%d", fd);
 	char buf[4096];
 	size_t n = 0;

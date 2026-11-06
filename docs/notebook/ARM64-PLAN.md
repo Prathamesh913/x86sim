@@ -3236,3 +3236,40 @@ Speed (fresh boot, openm N=2): Settings cold 3.26 s, warm 0.75; Maps 2.67, warm 
 News 3.39 / 3.39; scroll 53.6 fps p50 16.7 (RAM 13: 3.93 / 3.73, 0.74; 2.57 / 2.92; 4.64 / 4.72; 3.77 / 3.50; 53.3).
 OCR time to content (hw.sh, 3 rounds): Health 3.2-3.5 s, Wallet 1.0, Safari 4.4-4.8 (RAM 13: 3.5-4.1, 1.0, 4.6-4.9).
 Screenshots (Settings, Maps, Wallet, Health, Safari, News) correct.
+
+## Input: host keyboard latency (2026-11-06, main phone alone)
+Report: typing from the host keyboard into the phone lags. New tests/arm64/gate/kblat.py RATE TEXT: types into the
+focused field via simhid's socket (or `--wtype`: through the launcher window, which must have focus), records the frame
+ring meanwhile and OCRs the field crop of every changed frame; per key, send -> first frame whose field holds that many
+characters, plus the final text (`\b` = backspace; `--clear N`; KBLAT_PRE, KBSETTLE env for experiments).
+
+Where the time goes (steady state, keyboard already attached): socket -> screen 26-33 ms p50 in Spotlight, ~90 ms in
+Safari's URL field; through the launcher (wtype -> egui -> simhid) 49-57 ms p50. Flat from 2 to 10 keys/s, no queue
+growth, no drops, Shift / punctuation / backspace exact (15 keys/s too). Not the launcher (no batching or sleeps in the key
+path), not simhid's idle thread, not per-key guest work. **The lag was the attach settle**: simhid attaches its
+keyboard at the first key and detaches it after the client's kbidle (launcher: 300 s), and Speed 31 held every key
+for a fixed **1.5 s** after each attach, so the first burst after each pause came 1.1-1.3 s late (last key of a 10/s
+"wifi settings" burst: 992 ms Spotlight, 1092 ms Safari).
+
+Measured why the settle existed: backboardd finishes the new service (CapsLockDelayOverride) 110 ms after the attach,
+and a burst typed 0 ms after it lands whole (Spotlight, Safari with the software keyboard up). What scrambles keys
+("settingsifi") is typing < ~0.7 s after the tap that focused the field, **with or without** an attach in between
+(the field still taking focus under the JIT). Fix (simhid.m): attach settle SIMHID_KB_SETTLE_MS default 1500 -> 150,
+plus a focus guard: a key within SIMHID_KB_TOUCH_GUARD_MS (default 1000) of the last touch lift waits out the rest of
+it (logged "key held N ms"). Keys at any other time go out at once. New per-client `kbsettle <ms>` command.
+
+| 10 keys/s burst | before (fixed 1.5 s) | after |
+|---|---|---|
+| Spotlight, first burst after attach, last key | 992 ms | 49-55 ms |
+| same through the launcher (wtype) | 897 ms (p90 1186) | 49-65 ms (p90 99-110) |
+| Safari URL field (soft keyboard up), attach, last key | 1092 ms | 119-150 ms |
+| Safari, typed 0.3 s after the tap | correct (masked by 1.5 s) | correct (guard), last key 1-436 ms |
+| steady, Spotlight socket 2/5/10 keys/s p50 | 33 / 30 / 26 ms | 32 / 28 / 27 ms |
+| steady, launcher 2/5/10 keys/s p50 | 57 / 48 / 50 ms | 56 / 52 / 49 ms |
+
+Gate kb2 (SKIPBOOT on a launcher-booted phone with the new simhid): 0 failed, "wifi typed whole", maps-route typed.
+Notes: wtype types capitals without a Shift modifier (its own keymap), so `--wtype` text should be lower case; real
+Shift through the launcher checked with `wtype -M shift`. Open: tapping Google's search box on google.com crashed
+WebContent (4 logs today: guest read at a page end, MemoryRead64 fault from AOT code, "A problem repeatedly occurred");
+web-page typing could not be measured. A plain boot-a64.sh from a shell (as gate.sh does) aborted launchd_sim twice
+(brk in launchd_sim); the launcher's start (x86code-mcp sim_start/sim_restart) booted fine.
