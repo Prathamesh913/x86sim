@@ -19,10 +19,18 @@
 //                                  children, finger indexes 1 and 2 with their own identities
 //   key down|up <usage>            keyboard usage (page 7), e.g. 4 = 'a', 0x28 = return
 //   button home|lock|volup|voldown down|up
+//   @<screenID> <touch command>    (Models 2) the touch on another integrated display (iPhone Duo: @3 = the inner
+//                                  "LCD-1"; x, y normalized to that display's framebuffer as simfb publishes it)
+//   hinge <degrees>                (Models 2, devices with two integrated displays) the hinge angle: 0 folded (closed),
+//   fold | unfold                  180 flat (open); fold / unfold = hinge 0 / 180. CoreMotion reads it from the hinge
+//                                  service (Apple vendor motion page 0xff0c, usage 0x21, as CoreMotion's CLAngleNotifier matches it: kIOHIDEventTypeHingeAngle events, copied
+//                                  and dispatched) and SpringBoard's device pose picks the outer or inner display.
 //   kbidle <seconds>               (arm64) this client's keyboard idle detach: after its last key the on-demand
 //                                  keyboard stays attached that long (default SIMHID_KB_IDLE_S). Interactive viewers
 //                                  send a long one so a human's typing pauses do not pay the re-attach settle.
 #import <Foundation/Foundation.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 typedef int IOReturn;
 typedef uint32_t IOOptionBits;
 #include <dispatch/dispatch.h>
@@ -71,6 +79,15 @@ extern IOHIDEventRef IOHIDEventCreateKeyboardEvent(CFAllocatorRef, uint64_t ts, 
 	Boolean down, IOOptionBits flags);
 extern void IOHIDEventAppendEvent(IOHIDEventRef, IOHIDEventRef, IOOptionBits);
 extern void IOHIDEventSetIntegerValue(IOHIDEventRef, uint32_t field, CFIndex value);
+// Models 2: kIOHIDEventTypeHingeAngle (44): fields 1 AngleDegrees, 2 MechanicalAngleDegrees, 3 velocity (deg/s),
+// 4 state (0 unknown, 1 closed, 2 open)
+extern IOHIDEventRef IOHIDEventCreateHingeAngleEvent(CFAllocatorRef, uint64_t ts, IOOptionBits, double angle, double mechanical, double velocity);
+#define kIOHIDEventTypeHingeAngle 44
+#define kFieldHingeState ((44 << 16) | 4)
+// CoreMotion's CLAngleNotifier drops a hinge event whose phase is 0 ("copied event is invalid")
+extern void IOHIDEventSetPhase(IOHIDEventRef, uint16_t phase);
+extern IOHIDEventRef IOHIDEventCreateVendorDefinedEvent(CFAllocatorRef, uint64_t ts, uint32_t page, uint32_t usage, uint32_t version,
+	const uint8_t* data, CFIndex length, IOOptionBits options);
 
 #define kDigitizerTransducerHand 3
 #define kDigitizerRange 0x1
@@ -128,6 +145,60 @@ typedef struct {
 } VService;
 
 static VService touch_svc, buttons_svc, keyboard_svc;
+// Models 2: a device with two integrated displays (capabilities) gets a touchscreen per extra display and a hinge
+static VService inner_touch_svc, hinge_svc;
+static uint32_t inner_display_id;
+static VService* cur_touch = &touch_svc;   // the touchscreen of the command being handled (@<screenID> prefix)
+static double hinge_deg, hinge_vel;
+static uint16_t hinge_phase = 2;
+// Models 2: CoreMotion's device state (the magic pose SpringBoard's SBFDevicePoseProvider combines with the angle:
+// "hinge .unknown" without it, and no display swap). On a device it is the SPU's {0xff0c, 0x22} report; the simulator
+// build of CMDeviceStateManager also observes the distributed notification CMDeviceStateEventSendNotification with
+// NSNumber properties A, A0, A1 (device orientation and that of each half, 0..6), B (hinge state, 0..5), C (tabletop
+// pose, 0..11), D (stable orientation state, 0..4); -[CMMagicPoseManager createMagicPoseEventFromDeviceStateEvent:]
+// copies them 1:1 into a CMMagicPoseEvent. Hinge state from the strings: 1 Closed, 2 PartiallyOpen, 3 OpenFlat.
+// the angle for the launcher (which screen to show): <SIMULATOR_SHARED_RESOURCES_DIRECTORY>/hinge, degrees
+static void write_hinge_file(double deg) {
+	const char* d = getenv("SIMULATOR_SHARED_RESOURCES_DIRECTORY");
+	if (!d) return;
+	char p[1100], t[1110];
+	snprintf(p, sizeof p, "%s/hinge", d);
+	snprintf(t, sizeof t, "%s.tmp", p);
+	FILE* f = fopen(t, "w");
+	if (!f) return;
+	fprintf(f, "%.1f\n", deg);
+	fclose(f);
+	rename(t, p);
+}
+static void post_device_state(double deg) {
+	write_hinge_file(deg);
+	long hs = deg <= 5 ? 1 : deg >= 170 ? 3 : 2;
+	Class c = NSClassFromString(@"NSDistributedNotificationCenter");
+	id center = c ? ((id (*)(id, SEL))objc_msgSend)((id)c, sel_registerName("defaultCenter")) : nil;
+	if (!center) { slog("hinge: no NSDistributedNotificationCenter"); return; }
+	NSDictionary* info = @{ @"CMDeviceStateEventPropertyAKey": @1, @"CMDeviceStateEventPropertyA0Key": @1,
+		@"CMDeviceStateEventPropertyA1Key": @1, @"CMDeviceStateEventPropertyBKey": @((float)deg),
+		@"CMDeviceStateEventPropertyCKey": @0, @"CMDeviceStateEventPropertyDKey": @2 };
+	((void (*)(id, SEL, id, id, id, BOOL))objc_msgSend)(center, sel_registerName("postNotificationName:object:userInfo:deliverImmediately:"),
+		@"CMDeviceStateEventSendNotification", nil, info, YES);
+	slog("hinge: device state B=%ld posted", hs);
+}
+static IOHIDEventRef hinge_event(void) {
+	IOHIDEventRef e = IOHIDEventCreateHingeAngleEvent(kCFAllocatorDefault, mach_absolute_time(), 0, hinge_deg, hinge_deg, hinge_vel);
+	if (e) {
+		IOHIDEventSetIntegerValue(e, kFieldHingeState, hinge_deg <= 5 ? 1 : 2);
+		IOHIDEventSetPhase(e, hinge_phase);
+		// CLAngleNotifier takes CMAngle.progress (the fold progress SpringBoard's pose uses, "fold:") from a vendor child
+		// {0xff0c, 0x80} of 21 bytes: u64 gesture-began and u64 message-sent continuous timestamps, float progress,
+		// flags (bit 0: wake event); without it progress is 0 and the pose stays fully closed
+		struct __attribute__((packed)) { uint64_t began, sent; float progress; uint8_t flags; } d = {
+			mach_continuous_time(), mach_continuous_time(), (float)(hinge_deg / 180.0), 0 };
+		IOHIDEventRef c = IOHIDEventCreateVendorDefinedEvent(kCFAllocatorDefault, mach_absolute_time(), 0xff0c, 0x80, 0,
+			(const uint8_t*)&d, sizeof(d), 0);
+		if (c) { IOHIDEventAppendEvent(e, c, 0); CFRelease(c); }
+	}
+	return e;
+}
 static IOHIDEventSystemRef_ hid_system;
 
 static Boolean v_open(void* t, void* r, IOOptionBits o) {
@@ -166,9 +237,15 @@ static void v_unschedule(void* t, void* r, dispatch_queue_t q) {
 	slog("v_unschedule %s", ((VService*)t)->name);
 	((VService*)t)->queue = NULL;
 }
-static IOHIDEventRef v_copyEvent(void* t, void* r, uint32_t type, IOHIDEventRef m, IOOptionBits o) { return NULL; }
+static IOHIDEventRef v_copyEvent(void* t, void* r, uint32_t type, IOHIDEventRef m, IOOptionBits o) {
+	if (t == &hinge_svc && (type == kIOHIDEventTypeHingeAngle || type == 0)) { slog("hinge copyEvent %.1f", hinge_deg); return hinge_event(); }
+	return NULL;
+}
 static IOReturn v_setOutputEvent(void* t, void* r, IOHIDEventRef e) { return 0; }
-static IOHIDEventRef v_copyMatchingEvent(void* t, void* r, CFDictionaryRef m) { return NULL; }
+static IOHIDEventRef v_copyMatchingEvent(void* t, void* r, CFDictionaryRef m) {
+	if (t == &hinge_svc) { slog("hinge copyMatchingEvent %.1f", hinge_deg); return hinge_event(); }
+	return NULL;
+}
 
 static const VirtualCallbacks callbacks = { 2, v_open, v_close, v_copyProperty, v_setProperty, v_setEventCallback,
 	v_schedule, v_unschedule, v_copyEvent, v_setOutputEvent, v_copyMatchingEvent };
@@ -277,8 +354,8 @@ static void send_touch(const char* phase, double x, double y, int edge) {
 	IOHIDEventSetIntegerValue(finger, kFieldDigitizerIsDisplayIntegrated, 1);
 	IOHIDEventAppendEvent(hand, finger, 0);
 	CFRelease(finger);
-	slog("touch %s (%.4f,%.4f) edge=%d svc=%p queue=%p", phase, x, y, touch_edge, touch_svc.service, touch_svc.queue);
-	dispatch_event(&touch_svc, hand);
+	slog("touch %s (%.4f,%.4f) edge=%d svc=%s %p queue=%p", phase, x, y, touch_edge, cur_touch->name, cur_touch->service, cur_touch->queue);
+	dispatch_event(cur_touch, hand);
 }
 
 // x86Code: two fingers in one hand event, as a multi-touch digitizer reports them (the hand carries the centroid; a
@@ -310,7 +387,7 @@ static void send_touch2(const char* phase, double x1, double y1, double x2, doub
 		IOHIDEventAppendEvent(hand, finger, 0);
 		CFRelease(finger);
 	}
-	dispatch_event(&touch_svc, hand);
+	dispatch_event(cur_touch, hand);
 }
 
 static void send_key(VService* s, uint32_t page, uint32_t usage, bool down) {
@@ -337,6 +414,41 @@ static void note_input(void) {
 }
 
 static void handle_line(char* line, Client* cl) {
+	unsigned scr;
+	int skip = 0;
+	if (line[0] == '@' && sscanf(line, "@%u %n", &scr, &skip) == 1 && skip > 0) {   // Models 2: another display's touch
+		if (scr != 1 && (!inner_touch_svc.service || scr != inner_display_id)) { slog("no touchscreen for display %u", scr); return; }
+		cur_touch = scr == 1 ? &touch_svc : &inner_touch_svc;
+		handle_line(line + skip, cl);
+		cur_touch = &touch_svc;
+		return;
+	}
+	double deg;
+	int ms = 600;
+	if (!strcmp(line, "fold") || !strcmp(line, "unfold") || sscanf(line, "hinge %lf %d", &deg, &ms) >= 1) {
+		if (!hinge_svc.service) { slog("no hinge on this device: %s", line); return; }
+		double to = !strcmp(line, "fold") ? 0 : !strcmp(line, "unfold") ? 180 : deg < 0 ? 0 : deg > 180 ? 180 : deg;
+		// a hinge moving as a hand opens it: 100 Hz reports (the ReportInterval CoreMotion sets) over <ms> with the
+		// velocity, phase Began / Changed / Ended (IOHIDEventPhase 1 / 2 / 4); the device state follows the angle
+		double from = hinge_deg;
+		int steps = ms > 0 ? (ms + 9) / 10 : 0;
+		slog("hinge %.1f -> %.1f in %d ms", from, to, ms);
+		for (int i = 1; i <= steps; i++) {
+			hinge_deg = from + (to - from) * i / steps;
+			hinge_vel = (to - from) * 1000.0 / ms;
+			hinge_phase = i == 1 ? 1 : 2;
+			dispatch_event(&hinge_svc, hinge_event());
+			if (i == 1) post_device_state(hinge_deg);
+			pthread_mutex_unlock(&cmd_mu);
+			usleep(10000);
+			pthread_mutex_lock(&cmd_mu);
+		}
+		hinge_deg = to; hinge_vel = 0; hinge_phase = 4;
+		dispatch_event(&hinge_svc, hinge_event());
+		hinge_phase = 2;
+		post_device_state(hinge_deg);
+		return;
+	}
 	char a[16] = "", b[16] = "";
 	double x = 0, y = 0;
 	double x2 = 0, y2 = 0;
@@ -502,6 +614,30 @@ static void* listen_thread(void* arg) {
 	keyboard_svc = (VService){ "keyboard", 0x7863000000000003ull, make_props(@"x86Code keyboard", 0x01, 0x06, nil) };
 	add_service(system, &touch_svc);
 	add_service(system, &buttons_svc);
+	// Models 2: the second integrated display of $SIMULATOR_CAPABILITIES (as host/simfb publishes it: SFB display
+	// <screenID>, UID x86Code-display-<screenID>) gets its own touchscreen, and the device a hinge sensor
+	{
+		const char* cp = getenv("SIMULATOR_CAPABILITIES");
+		NSDictionary* caps = cp ? [NSDictionary dictionaryWithContentsOfFile:@(cp)] : nil;
+		NSArray* disps = [caps[@"capabilities"] isKindOfClass:[NSDictionary class]] ? caps[@"capabilities"][@"displays"] : caps[@"displays"];
+		int n = 0;
+		for (NSDictionary* d in [disps isKindOfClass:[NSArray class]] ? disps : @[]) {
+			if (![d isKindOfClass:[NSDictionary class]] || ![d[@"displayType"] isEqual:@"integrated"]) continue;
+			if (n++ == 1) inner_display_id = [d[@"screenID"] unsignedIntValue];
+		}
+		if (n >= 2 && inner_display_id) {
+			NSString* uid = [NSString stringWithFormat:@"x86Code-display-%u", inner_display_id];
+			inner_touch_svc = (VService){ "touchscreen-inner", 0x7863000000000004ull,
+				make_props([@"com.apple.SimulatorHID.ScreenTouchService." stringByAppendingString:uid], 0x0d, 0x04, @{
+					@"DisplayIntegrated": @YES, @"SupportsInk": @NO, @"displayUUID": uid }) };
+			hinge_svc = (VService){ "hinge", 0x7863000000000005ull, make_props(@"x86Code hinge", 0xff0c, 0x21, nil) };
+			const char* h = getenv("SIMHID_HINGE");
+			hinge_deg = h && *h ? atof(h) : 0;
+			add_service(system, &inner_touch_svc);
+			add_service(system, &hinge_svc);
+			write_hinge_file(hinge_deg);
+		}
+	}
 #if __arm64__
 	// x86Code arm64: an attached keyboard service puts UIKit in hardware-keyboard mode, so a text field never shows the
 	// software keyboard. Attach it only when the host first types (like Xcode's simulator does); SIMHID_KEYBOARD=1: at start.

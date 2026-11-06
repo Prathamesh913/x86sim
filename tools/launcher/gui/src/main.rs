@@ -43,6 +43,8 @@ pub enum View {
 
 pub struct AddDialog {
     pub model: usize,
+    /// the model the runtime choice was last matched to
+    pub last_model: usize,
     pub runtime: usize,
     pub name: String,
     pub busy: Arc<Mutex<Option<Result<std::path::PathBuf, String>>>>,
@@ -153,7 +155,7 @@ impl App {
             let v = host::catalogue(false);
             *c2.lock().unwrap() = Some(v);
         });
-        let aot = global::Aot::new(runtimes.iter().find(|r| r.present).map(|r| r.root.clone()));
+        let aot = global::Aot::new(runtimes.iter().find(|r| r.present && r.restricted_to.is_empty()).map(|r| r.root.clone()));
         // start view / open sections, for scripted screenshots: X86CODE_LAUNCHER_VIEW=ios|aot|settings|add|phone:<id>,
         // X86CODE_LAUNCHER_OPEN=features,logs,perf,adv
         let view = match std::env::var("X86CODE_LAUNCHER_VIEW").unwrap_or_default().as_str() {
@@ -231,9 +233,15 @@ impl App {
             self.viewers.insert(id.to_string(), viewer::Viewer::new(&inst, self.ctx.clone()));
         }
         let bt = self.status.get(id).and_then(|s| s.boot_time);
-        let ring = self.inst(id)?.ring.clone();
+        // Models 2: a two-screen phone shows the screen SpringBoard uses: the inner one while the hinge is open
+        let inst = self.inst(id)?;
+        let (ring, screen, display) = match &inst.inner {
+            Some(d) if inst.inner_active() => (d.ring.clone(), d.upright(), Some((d.id, d.rotation))),
+            _ => (inst.ring.clone(), inst.screen, None),
+        };
         let v = self.viewers.get_mut(id)?;
         v.set_ring(&ring);
+        v.set_display(screen, display);
         v.set_boot_time(bt);
         Some(v)
     }

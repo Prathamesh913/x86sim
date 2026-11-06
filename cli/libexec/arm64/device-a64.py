@@ -41,7 +41,21 @@ def runtimes():
         m = re.match(r"ios-([0-9.]+)-([0-9A-Za-z]+)-arm64$", d)
         if m and os.path.isdir(os.path.join(ROOT, "runtimes", d, "RuntimeRoot")):
             out.append((m[1], m[2], d))
-    return sorted(out, key=lambda r: [int(x) for x in r[0].split(".")])
+    return sorted(out, key=lambda r: ([int(x) for x in r[0].split(".")], bool(restricted_to(r[2])), r[1]))
+
+
+def restricted_to(rt):
+    """Models 2: the model ids a runtime is limited to (its profile's restrictedToDeviceTypes; [] = any). iOS 27.2
+    24B91016s is the iPhone Duo's (iPhone19,4) build. The profile is a binary plist; its strings are plain ASCII."""
+    root = os.path.realpath(os.path.join(ROOT, "runtimes", rt, "RuntimeRoot"))
+    try:
+        with open(os.path.join(os.path.dirname(root), "profile.plist"), "rb") as f:
+            b = f.read()
+    except OSError:
+        return []
+    if b"restrictedToDeviceTypes" not in b:
+        return []
+    return sorted({m.decode() for m in re.findall(rb"(?:iPhone|iPad)[0-9]+,[0-9]+", b)})
 
 
 def runtime_of(dev):
@@ -90,12 +104,16 @@ def cmd_create(args):
     if model not in types:
         sys.exit(f"device create: --model one of: {', '.join(types)}")
     rts = runtimes()
-    rt = DEFAULT_RT
+    # Models 2: a runtime limited to some models (the iPhone Duo's 27.2 build) is taken for them, never for others
+    mid = types[model].get("model", "") if isinstance(types[model], dict) else ""
+    fits = [r for r in rts if not restricted_to(r[2]) or mid in restricted_to(r[2])]
+    own = [r for r in fits if mid in restricted_to(r[2])]
+    rt = DEFAULT_RT if not own else own[0][2]
     if ios:
-        hit = [r for r in rts if ios in (r[0], r[1], r[2])]
+        hit = [r for r in fits if ios in (r[0], r[1], r[2])]
         if not hit:
-            sys.exit(f"device create: --ios one of: {', '.join(r[0] for r in rts)}")
-        rt = hit[0][2]
+            sys.exit(f"device create: --ios one of: {', '.join(r[0] for r in fits)}")
+        rt = ([r for r in hit if r in own] or hit)[0][2]
     name = name or model
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     dev = os.path.join(VAR, "device-a64-" + slug)

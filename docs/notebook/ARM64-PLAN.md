@@ -3322,3 +3322,73 @@ web-page typing could not be measured. A plain boot-a64.sh from a shell (as gate
   and the resizable scene are not done; with no runtime that supports the device there is nothing to check them
   against. Revisit with a runtime that has iPhone19,4.
 - **Launcher**: models are read from the JSON at start (no rebuild); restarted, its "Add phone" picker lists them.
+
+## Models 2: iPhone Duo (2026-11-06): its own iOS 27.2 build, both screens, the hinge
+
+- **Runtime**: Apple's catalogue has a second iOS 27.2, **24B91016s** (8.3 GB, `runtime-fetch.py fetch 24B91016s`,
+  ~75 s download here). Its bundle is `com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4` (CFBundleVersion 400.1;
+  24B8117: `...iOS-27-2`, 400) and its profile has **`restrictedToDeviceTypes = [iPhone19,4]`** where 24B8117 has
+  `unsupportedDeviceTypes = [iPhone19,4]`: it is the Duo's device-specific build (as 27.1's 24A94425 next to 24A434),
+  **not a superset and not usable for other models**: CoreSimulator would refuse any other device type on it. Same
+  supportedFeatures / requiredHostServices. Content: its own dyld cache (another build: every Mach-O differs, 10168
+  files differ in size, Info.plists mostly), 582451 vs 588416 files: it drops ~12000 (localizations, iPad mini J510/J511
+  wallpapers and MediaToolbox tunings, some PassKitUI assets) and adds ~6000, the Duo's: V68 assets
+  (Wallpaper-Lock-Screen-Tutorial-*-V68-Open-Portrait/Landscape, TouchID-Trailing-V68, SpringBoard
+  display-region-blanking-backdrop, AmbientSettings cover.ca / inner.ca, NFC-interaction-open-tall/wide/closed,
+  MercuryPosterExtension...). The fold machinery (SBFDevicePoseProvider, SBFDisplayContentModeResolver and its
+  FoldingDual / FullyClosed / TentMode / ForceCoverDisplayOnly policies, CMMagicPoseManager, kIOHIDEventTypeHingeAngle) is
+  in both builds' frameworks. So 24B8117 stays the default for everything else; the AOT image is keyed per runtime
+  build (jc-24B91016s has none yet: the Duo boots on per-process JIT caches, 3.8 GB after a few boots; its first start
+  reached home after ~10 min including one relaunch, later restarts in about a minute). Mac: not tried (xcodebuild -downloadPlatform needs an Apple ID; 15 GB free there).
+- **Runtime choice**: `sim::runtime_restricted_to` / `device-a64.py restricted_to` read the restriction from the
+  profile (binary plist, ASCII strings). MCP `sim_add_device` (`ios` may be a build: "24B91016s"), the launcher's Add
+  phone dialog and `device-a64.py create` take a model's own runtime for it (Duo + "27.2" -> 24B91016s) and never a
+  restricted one for another model (iPhone 17 on 24B91016s: refused); `host::runtimes()` orders the general build first
+  within a version, the Add-phone default and the global AOT panel skip restricted runtimes (with read_dir order either
+  27.2 could have been the "newest installed iOS").
+- **Outer screen**: on 24B91016s the Duo boots to home at 1398x2034 with its real cover layout (status bar and dock as a
+  column on the right edge, SpringBoard: "Selected split visual provider STUIStatusBarVisualProvider_AxisAlignableSplitV68Cover",
+  "Resolved screen type to D76 cover") instead of 27.2 24B8117's legacy "Carrier" bar.
+- **Inner screen (host/simfb)**: one SFB display per "integrated" entry of `$SIMULATOR_CAPABILITIES` when there are two or
+  more (others unchanged; `SIMFB_DISPLAYS=1` forces one): display 1 as before ("LCD", UID x86Code-main-display, ring
+  $SIMFB_RING), display 3 = screenID, "LCD-1" / deviceName "primary-1", 2007x2853, UID x86Code-display-3, ring
+  `<ring>-3.ring`; each display has its own ring, present queue (GPU wait) and 60 Hz pacing, the GPU completion hook
+  fires all of them. QuartzCore's _detectSimDisplays makes both type-0 displays (both get the Andromeda helper,
+  `_CADeviceSupportsAndromeda`), FrontBoard "Main" + "Unknown.main[2]", SpringBoard's ShellSceneKit gives primary-1
+  `ssk_surfaceType = 2` (inner) and runs a full second home (SSK.primary-1.root). The inner panel is mounted at 270:
+  its framebuffer shows the landscape UI turned a quarter counter-clockwise (shown upright by turning it clockwise).
+  Touch: a second simhid touchscreen whose `displayUUID` is x86Code-display-3; socket commands `@3 touch ...` (x, y
+  normalized to that framebuffer).
+- **The hinge, the real path** (found in the binaries): CoreMotion (simulator build, in SpringBoard) has two HID
+  clients: **CLAngleNotifier** matches {0xff0c, 0x21} and reads **kIOHIDEventTypeHingeAngle (44)** events (fields 1
+  AngleDegrees, 2 MechanicalAngleDegrees, 3 velocity, 4 state 1 Closed / 2 Open) by copyEvent and dispatch; it drops an
+  event whose **phase is 0** ("copied event is invalid") and takes **CMAngle.progress** (SpringBoard's "fold:") only from
+  a vendor child {0xff0c, 0x80} of 21 bytes (u64 gesture-began and message-sent continuous timestamps, float progress,
+  flags): without it the pose stayed "0.0° fullyClosed" whatever the angle. **CLDeviceStateNotifier** matches {0xff0c,
+  0x22} (the SPU's device-state report, vendor data type 2, 8 bytes); its simulator build also observes the distributed
+  notification **CMDeviceStateEventSendNotification** (NSDistributedNotificationCenter, CMDeviceStateManager
+  onNotification:) with NSNumber properties A, A0, A1 (orientation of the device and of each half), **B = the hinge
+  angle in degrees** (-180..180; 180 -> hingeState OpenFlat, a few degrees -> PartiallyOpen), C (tabletop pose), D;
+  createMagicPoseEventFromDeviceStateEvent: copies them into the CMMagicPoseEvent. SpringBoard's SBFDevicePoseProvider
+  combines the angle (it needs isAngleValid and isVelocityValid) and the magic pose; SBFDisplayContentModeResolver
+  swaps at 85° ("Swap boundary 0° -> 85°").
+- **host/simhid**: the hinge service {0xff0c, 0x21} (copyEvent / copyMatchingEvent answer the current angle), commands
+  `hinge <deg> [ms]` (default 600 ms: 100 Hz reports with velocity, phase Began / Changed / Ended, as a hand opens it),
+  `fold` / `unfold` (0 / 180); every move also posts the device state notification (A = A0 = A1 = 1 portrait, B =
+  angle, D = 2) and writes `<data>/hinge` (degrees) for the launcher. The phone boots folded (SIMHID_HINGE).
+- **Verified** (screenshots of both rings): folded = outer home, inner off; `unfold` -> SpringBoard "currentPose 180.0°
+  (1.00 fold:1.00): openFlat", the outer goes dark (backlight Off, "display content mode transition") and the inner
+  shows the home screen (4x2 icons, dock and status column at its right); tap Settings on the inner screen (`@3 touch`)
+  -> Settings opens there in its two-column layout; tap Accessibility -> its page; `fold` -> Settings continues on the
+  outer screen on the Accessibility page (back button in the side column); tap back on the outer screen -> the
+  Settings list. Unchanged for one-screen phones: a new iPhone 17 (24B8117) boots with one display, no hinge, and passes
+  the gate with the new simfb/simhid (below).
+- **Launcher**: `Instance.inner` (the model's second integrated display from cli/lib/devicetype-<model>.json: id,
+  size, rotation, ring) and `Instance::hinge()` / `inner_active()` (>= 85°); the phone view shows the active screen: the
+  inner ring turned upright (viewer convert with rotation), touches mapped back (`hid::unrotate`, edges too) and sent as
+  `@3 touch ...`; a Fold / Unfold button in the screen toolbar; MCP **`sim_fold`** {phone, open | angle, ms} returns
+  the screen in use. Unit tests: hid::tests (the mapping against the Settings tap above), instance::models2_tests.
+  The GUI itself was built and its logic tested, not looked at (the desktop was in use).
+- **Not done**: the outer screen while unfolded is simply off (the real Duo's "both" modes, tent/tabletop poses and the
+  continuous-fold animation mid-angle are reachable with `hinge <deg>` but were not checked); the resizable 7680x4320
+  scene display; an AOT image for 24B91016s.

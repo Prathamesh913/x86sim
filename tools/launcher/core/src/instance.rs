@@ -31,12 +31,63 @@ pub struct Instance {
     pub screen: (u32, u32),
     pub scale: f32,
     pub ring: PathBuf,
+    /// Models 2: a second integrated screen (iPhone Duo's inner one), else None
+    pub inner: Option<InnerDisplay>,
     pub sock: PathBuf,
     pub state_dir: PathBuf,
     pub prefix: PathBuf,
     pub log_dir: PathBuf,
     pub is_default: bool,
     pub udid: String,
+}
+
+/// Models 2: the second integrated display of a two-screen model (iPhone Duo: "LCD-1", screenID 3, 2007x2853,
+/// nativeRotation 270), as host/simfb publishes it: its own frame ring (<ring>-<id>.ring) and touchscreen (simhid
+/// "@<id> touch ..."). SpringBoard shows it when the hinge is open (host/simhid "hinge"/"fold"/"unfold").
+#[derive(Clone, Debug, Serialize)]
+pub struct InnerDisplay {
+    pub id: u32,
+    /// framebuffer size (the panel's native orientation)
+    pub size: (u32, u32),
+    /// degrees the panel is mounted at (270: its framebuffer is shown turned a quarter clockwise)
+    pub rotation: u32,
+    pub ring: PathBuf,
+}
+
+impl InnerDisplay {
+    /// the size as the user sees it (upright)
+    pub fn upright(&self) -> (u32, u32) {
+        if self.rotation % 180 == 90 { (self.size.1, self.size.0) } else { self.size }
+    }
+}
+
+/// The second "integrated" display of the model's device type (cli/lib/devicetype-<model>.json), if any
+pub fn inner_display(model_id: &str, ring: &Path) -> Option<InnerDisplay> {
+    let txt = std::fs::read_to_string(repo_root().join("cli/lib").join(format!("devicetype-{}.json", model_id.to_lowercase()))).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
+    let d = v["capabilities"]["displays"].as_array()?.iter().filter(|d| d["displayType"] == "integrated").nth(1)?.clone();
+    let id = d["screenID"].as_u64()? as u32;
+    let r = ring.to_string_lossy();
+    Some(InnerDisplay {
+        id,
+        size: (d["width"].as_u64()? as u32, d["height"].as_u64()? as u32),
+        rotation: d["nativeRotation"].as_u64().unwrap_or(0) as u32,
+        ring: PathBuf::from(format!("{}-{id}.ring", r.strip_suffix(".ring").unwrap_or(&r))),
+    })
+}
+
+impl Instance {
+    /// The hinge angle host/simhid last set (<device>/data/hinge: degrees, 0 folded .. 180 flat); None for a
+    /// one-screen phone or before simhid wrote it (the phone boots folded)
+    pub fn hinge(&self) -> Option<f64> {
+        self.inner.as_ref()?;
+        Some(std::fs::read_to_string(self.dir.join("data/hinge")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0))
+    }
+
+    /// Whether the inner screen is the one in use: SpringBoard swaps displays at its 85 degree swap boundary
+    pub fn inner_active(&self) -> bool {
+        self.hinge().is_some_and(|a| a >= 85.0)
+    }
 }
 
 fn env_of(dir: &Path) -> HashMap<String, String> {
@@ -92,6 +143,7 @@ pub fn load(dir: &Path) -> Instance {
     // always the per-phone ring (sim.env may hold a ring copied from another phone; passing it on at start
     // kept that phone drawing into the other one's ring)
     let ring = ring_for(&id);
+    let inner = inner_display(&model_id, &ring);
     let prefix_sfx = if is_default { String::new() } else if sfx.starts_with('-') { sfx.to_string() } else { format!("-{sfx}") };
     Instance {
         sock: dir.join("data/simhid.sock"),
@@ -112,6 +164,7 @@ pub fn load(dir: &Path) -> Instance {
         screen: (w, h),
         scale,
         ring,
+        inner,
         is_default,
     }
 }
@@ -698,4 +751,15 @@ pub fn needs_restart(inst: &Instance, st: Option<&Status>) -> bool {
     let Some(boot) = st.filter(|s| s.phase != Phase::Off).and_then(|s| s.boot_time) else { return false };
     let mtime = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs_f64());
     [crate::features::profile_path(&inst.dir), settings_path(&inst.dir)].into_iter().filter_map(mtime).any(|t| t > boot + 1.0)
+}
+
+#[cfg(test)]
+mod models2_tests {
+    #[test]
+    fn duo_inner_display() {
+        let d = super::inner_display("iPhone19,4", std::path::Path::new("/run/user/1/x86code-a64-d-simfb.ring")).expect("Duo has an inner screen");
+        assert_eq!((d.id, d.size, d.rotation, d.upright()), (3, (2007, 2853), 270, (2853, 2007)));
+        assert_eq!(d.ring, std::path::PathBuf::from("/run/user/1/x86code-a64-d-simfb-3.ring"));
+        assert!(super::inner_display("iPhone18,3", std::path::Path::new("/x.ring")).is_none());
+    }
 }

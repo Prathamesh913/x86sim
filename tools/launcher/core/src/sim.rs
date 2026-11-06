@@ -40,6 +40,42 @@ pub fn devices() -> Vec<(String, PathBuf)> {
     v
 }
 
+/// Models 2: the device types a runtime is limited to (its profile's restrictedToDeviceTypes; empty: any model of
+/// its supported families). iOS 27.2 24B91016s is the iPhone Duo's (iPhone19,4) build; 24B8117 lists the Duo as
+/// unsupported. The profile is a binary plist whose strings are plain ASCII: the model ids in a profile with that
+/// key are its restriction (a restricted profile has no unsupportedDeviceTypes).
+pub fn runtime_restricted_to(runtime_root: &Path) -> Vec<String> {
+    let Some(profile) = std::fs::canonicalize(runtime_root).ok().and_then(|r| r.parent().map(|p| p.join("profile.plist"))) else { return vec![] };
+    let Ok(b) = std::fs::read(profile) else { return vec![] };
+    if !b.windows(23).any(|w| w == b"restrictedToDeviceTypes") {
+        return vec![];
+    }
+    let mut out = vec![];
+    for pre in [&b"iPhone"[..], &b"iPad"[..]] {
+        let mut i = 0;
+        while let Some(p) = b[i..].windows(pre.len()).position(|w| w == pre) {
+            let s = i + p;
+            let mut e = s + pre.len();
+            while e < b.len() && (b[e].is_ascii_digit() || b[e] == b',') {
+                e += 1;
+            }
+            if e > s + pre.len() + 2 && b[s + pre.len()..e].contains(&b',') {
+                out.push(String::from_utf8_lossy(&b[s..e]).into_owned());
+            }
+            i = e;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether a phone of `model_id` can run on this runtime (restriction only; families are not checked)
+pub fn runtime_allows(runtime_root: &Path, model_id: &str) -> bool {
+    let r = runtime_restricted_to(runtime_root);
+    r.is_empty() || r.iter().any(|m| m == model_id)
+}
+
 /// The RuntimeRoot a device boots on: its `runtime` file (a runtimes/ dir name, device-a64.py create --ios), else 27.0
 pub fn device_runtime(dev: &Path) -> PathBuf {
     let d = std::fs::read_to_string(dev.join("runtime")).map(|s| s.trim().to_string()).unwrap_or_default();

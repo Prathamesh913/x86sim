@@ -24,9 +24,11 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["full", "lean", "minimal"]}, "phone": phone}, "required": ["name"]}},
         {"name": "sim_devices", "description": "Phones (folder, label with phone model, iOS), the phone models a new phone can be and the installed iOS versions.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "sim_add_device", "description": "Make a new phone of a model (see sim_devices models), optional name and iOS version (ios, e.g. \"27.2\"; see sim_devices runtimes). Start it with sim_start phone=<name>. Its first start can take a few minutes.",
+        {"name": "sim_add_device", "description": "Make a new phone of a model (see sim_devices models), optional name and iOS version (ios, e.g. \"27.2\", or a build such as \"24B91016s\"; see sim_devices runtimes; a model with a runtime of its own, the iPhone Duo's 24B91016s, gets that one). Start it with sim_start phone=<name>. Its first start can take a few minutes.",
          "inputSchema": {"type": "object", "properties": {"model": {"type": "string"}, "name": {"type": "string"}, "ios": {"type": "string"}}, "required": ["model"]}},
         {"name": "sim_start", "description": "Start a phone (its own container, so other phones keep running). Returns at once; poll phones_list for state running.", "inputSchema": {"type": "object", "properties": {"phone": phone}}},
+        {"name": "sim_fold", "description": "Fold or unfold a two-screen phone (iPhone Duo): open=true opens it flat (the large inner screen takes over), open=false closes it (the outer screen); or angle in degrees (0 closed .. 180 flat; SpringBoard swaps screens at 85). The hinge moves over ms (default 600) as a hand would.",
+         "inputSchema": {"type": "object", "properties": {"phone": phone, "open": {"type": "boolean"}, "angle": {"type": "number"}, "ms": {"type": "integer"}}}},
         {"name": "sim_stop", "description": "Stop a phone (only that phone).", "inputSchema": {"type": "object", "properties": {"phone": phone}}},
         {"name": "sim_restart", "description": "Restart a phone (stop, then start with its current features and the pre-translated code). Returns at once; poll phones_list.",
          "inputSchema": {"type": "object", "properties": {"phone": phone}}},
@@ -70,11 +72,17 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
     }
     if name == "sim_add_device" {
         let want = a["ios"].as_str().unwrap_or("27.2");
-        let rt = sim::runtimes()
-            .into_iter()
-            .find(|r| r.0.starts_with(&format!("iOS {want} ")) || r.0.contains(want))
-            .map(|r| r.1)
-            .ok_or_else(|| anyhow::anyhow!("no iOS {want} installed (see sim_devices runtimes)"))?;
+        // Models 2: a runtime limited to some models (iOS 27.2 24B91016s: iPhone Duo only) is taken for those models
+        // first and never for others
+        let model = a["model"].as_str().unwrap_or("");
+        let model_id = sim::models().into_iter().find(|m| m.0 == model || m.1 == model).map(|m| m.1).unwrap_or_default();
+        let cands: Vec<_> = sim::runtimes().into_iter().filter(|r| r.0.starts_with(&format!("iOS {want} ")) || r.0.contains(want)).filter(|r| sim::runtime_allows(&r.1, &model_id)).collect();
+        let rt = cands
+            .iter()
+            .find(|r| !sim::runtime_restricted_to(&r.1).is_empty())
+            .or(cands.first())
+            .map(|r| r.1.clone())
+            .ok_or_else(|| anyhow::anyhow!("no iOS {want} installed for {model} (see sim_devices runtimes)"))?;
         return Ok(json!({"device": sim::create_device(a["model"].as_str().unwrap_or(""), a["name"].as_str().unwrap_or(""), &rt)?}));
     }
     let inst = phone_of(a, &cfg)?;
@@ -105,6 +113,14 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
         "app_list" => json!({"phone": inst.name, "answer": apps::list(&inst)?}),
         "sim_restart" => json!({"phone": inst.name, "restarting": true, "pid": sim::restart(&device)?}),
         "sim_start" => json!({"phone": inst.name, "starting": true, "pid": sim::start(&device)?}),
+        "sim_fold" => {
+            anyhow::ensure!(inst.inner.is_some(), "{} has one screen", inst.name);
+            let deg = a["angle"].as_f64().unwrap_or(if a["open"].as_bool().unwrap_or(true) { 180.0 } else { 0.0 }).clamp(0.0, 180.0);
+            let ms = a["ms"].as_u64().unwrap_or(600) as u32;
+            x86code_core::hid::Hid::new(&inst.sock).hinge(deg, ms);
+            std::thread::sleep(std::time::Duration::from_millis(ms as u64 + 300));
+            json!({"phone": inst.name, "hinge": inst.hinge(), "screen": if inst.inner_active() { "inner" } else { "outer" }})
+        }
         "sim_stop" => {
             sim::stop(&device)?;
             json!({"phone": inst.name, "stopped": true})

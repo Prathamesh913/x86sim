@@ -93,7 +93,8 @@ def main():
             "json": js}
         if b not in supported:
             out[b[:-len(".simdevicetype")]]["note"] = (
-                f"iOS {rtver} lists it as unsupported (Xcode can't create it on this runtime); main display only")
+                f"iOS {rtver} lists it as unsupported (Xcode can't create it on this runtime); it has a build of its "
+                f"own (iPhone Duo: 27.2 24B91016s, runtime-fetch.py fetch 24B91016s; ARM64-PLAN Models 2)")
         if js not in written:
             written.add(js)
             with open(os.path.join(LIB, js), "w") as f:

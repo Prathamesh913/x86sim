@@ -32,6 +32,8 @@ pub struct Shared {
     pub fps: Mutex<Vec<std::time::Instant>>,
     /// the frame ring this phone publishes to: a boot rewrites sim.env, so the path can change while the viewer lives
     pub ring: Mutex<std::path::PathBuf>,
+    /// Models 2: degrees the shown panel is mounted at (the iPhone Duo's inner screen: 270), turned upright here
+    pub rot: AtomicU32,
 }
 
 pub struct Viewer {
@@ -52,14 +54,29 @@ pub struct Viewer {
     shift_held: bool,
 }
 
-fn convert(f: &x86code_core::ring::Frame, step: usize) -> Img {
+fn convert(f: &x86code_core::ring::Frame, step: usize, rot: u32) -> Img {
     let (w, h) = (f.w as usize / step, f.h as usize / step);
+    let px_at = |x: usize, y: usize| {
+        let o = y * step * f.stride as usize + x * step * 4;
+        egui::Color32::from_rgb(f.bgra[o + 2], f.bgra[o + 1], f.bgra[o])
+    };
     let mut px = Vec::with_capacity(w * h);
+    match rot % 360 {
+        // the panel's framebuffer turned upright: 270 = a quarter clockwise (upright (xo, yo) = framebuffer
+        // (yo, h - 1 - xo)), 90 = counter-clockwise; hid::unrotate is the inverse for touches
+        270 | 90 => {
+            for yo in 0..w {
+                for xo in 0..h {
+                    px.push(if rot % 360 == 270 { px_at(yo, h - 1 - xo) } else { px_at(w - 1 - yo, xo) });
+                }
+            }
+            return Img { w: h, h: w, pixels: px, seq: f.seq };
+        }
+        _ => {}
+    }
     for y in 0..h {
-        let row = y * step * f.stride as usize;
         for x in 0..w {
-            let o = row + x * step * 4;
-            px.push(egui::Color32::from_rgb(f.bgra[o + 2], f.bgra[o + 1], f.bgra[o]));
+            px.push(px_at(x, y));
         }
     }
     Img { w, h, pixels: px, seq: f.seq }
@@ -93,11 +110,13 @@ impl Viewer {
                     let tw = sh.target_w.load(Ordering::Relaxed).max(8) as usize;
                     if seq != 0 {
                         if let Some(f) = ring.latest() {
-                            let step = ((f.w as usize + tw - 1) / tw).max(1);
+                            let rot = sh.rot.load(Ordering::Relaxed);
+                            let src_w = if rot % 180 == 90 { f.h } else { f.w } as usize;
+                            let step = ((src_w + tw - 1) / tw).max(1);
                             if (f.seq, step) != last {
                                 let boot = f64::from_bits(sh.boot_time.load(Ordering::Relaxed));
                                 if (f.t_ns as f64) / 1e9 >= boot - 2.0 {
-                                    let img = convert(&f, step);
+                                    let img = convert(&f, step, rot);
                                     *sh.frame.lock().unwrap() = Some(img);
                                     sh.dirty.store(true, Ordering::Release);
                                     sh.seq.store(f.seq, Ordering::Relaxed);
@@ -132,6 +151,18 @@ impl Viewer {
             *self.shared.frame.lock().unwrap() = None;
             self.clear();
         }
+    }
+
+    /// Models 2: the screen shown and touched: its upright size and, for a second display, (SFB id, rotation)
+    pub fn set_display(&mut self, screen: (u32, u32), display: Option<(u32, u32)>) {
+        self.screen = screen;
+        self.hid.display = display;
+        self.shared.rot.store(display.map(|d| d.1).unwrap_or(0), Ordering::Relaxed);
+    }
+
+    /// Models 2: move the hinge of a two-screen phone (degrees, 0 folded .. 180 flat)
+    pub fn hinge(&mut self, deg: f64) {
+        self.hid.hinge(deg, 600);
     }
 
     pub fn set_boot_time(&self, t: Option<f64>) {

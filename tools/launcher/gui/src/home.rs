@@ -28,9 +28,9 @@ impl App {
     }
 
     pub fn open_add_dialog(&mut self) {
-        // the newest installed iOS
-        let rt = self.runtimes.iter().rposition(|r| r.present).unwrap_or(0);
-        self.add = Some(AddDialog { model: 0, runtime: rt, name: String::new(), busy: Arc::new(Mutex::new(None)), working: false });
+        // the newest installed iOS (one limited to some models, the iPhone Duo's 27.2 build, only when one is chosen)
+        let rt = self.runtimes.iter().rposition(|r| r.present && r.restricted_to.is_empty()).unwrap_or(0);
+        self.add = Some(AddDialog { model: 0, last_model: 0, runtime: rt, name: String::new(), busy: Arc::new(Mutex::new(None)), working: false });
     }
 
     pub fn home(&mut self, ui: &mut egui::Ui) {
@@ -319,10 +319,25 @@ impl App {
                 });
                 ui.add_space(S3);
                 ui.label(egui::RichText::new("iOS version").size(T_SMALL).family(medium()).color(INK_2));
-                let label = |r: &x86code_core::host::Runtime| if r.present { format!("iOS {}", r.version) } else { format!("iOS {} · not installed", r.version) };
+                // Models 2: a runtime limited to some models (iOS 27.2 24B91016s: iPhone Duo) is picked for them and
+                // greyed out for the others
+                let mid = self.models.get(d.model).map(|m| m.1.clone()).unwrap_or_default();
+                let fits = |r: &x86code_core::host::Runtime| r.restricted_to.is_empty() || r.restricted_to.contains(&mid);
+                if d.model != d.last_model {
+                    d.last_model = d.model;
+                    if let Some(i) = self.runtimes.iter().position(|r| r.present && r.restricted_to.contains(&mid)) {
+                        d.runtime = i;
+                    } else if !self.runtimes.get(d.runtime).is_some_and(|r| fits(r)) {
+                        d.runtime = self.runtimes.iter().rposition(|r| r.present && r.restricted_to.is_empty()).unwrap_or(0);
+                    }
+                }
+                let label = |r: &x86code_core::host::Runtime| {
+                    let only = if r.restricted_to.is_empty() { String::new() } else { format!(" ({}) · {} only", r.build, r.restricted_to.join(", ")) };
+                    if r.present { format!("iOS {}{only}", r.version) } else { format!("iOS {}{only} · not installed", r.version) }
+                };
                 egui::ComboBox::from_id_salt("addrt").icon(caret).width(fw).selected_text(body(self.runtimes.get(d.runtime).map(label).unwrap_or("None installed".into()))).show_ui(ui, |ui| {
                     for (i, r) in self.runtimes.iter().enumerate() {
-                        ui.add_enabled_ui(r.present, |ui| {
+                        ui.add_enabled_ui(r.present && fits(r), |ui| {
                             ui.selectable_value(&mut d.runtime, i, label(r));
                         });
                     }

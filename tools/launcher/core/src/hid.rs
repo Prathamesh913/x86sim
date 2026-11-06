@@ -9,11 +9,31 @@ use std::time::Duration;
 pub struct Hid {
     path: PathBuf,
     sock: Option<UnixStream>,
+    /// Models 2: touches go to another display: (SFB display id, its native rotation); x, y given upright
+    pub display: Option<(u32, u32)>,
+}
+
+/// Upright normalized (x, y) on a panel mounted at `rot` degrees -> the panel's framebuffer coordinates
+/// (270: the framebuffer is shown turned a quarter clockwise, so its x runs down the picture and y right to left)
+pub fn unrotate(x: f32, y: f32, rot: u32) -> (f32, f32) {
+    match rot % 360 {
+        270 => (y, 1.0 - x),
+        90 => (1.0 - y, x),
+        180 => (1.0 - x, 1.0 - y),
+        _ => (x, y),
+    }
+}
+
+fn unrotate_edge(e: &str, rot: u32) -> &str {
+    const E: [&str; 4] = ["top", "right", "bottom", "left"];
+    let Some(i) = E.iter().position(|n| *n == e) else { return e };
+    // 270: upright top = panel left, upright right = panel top (the inverse of unrotate)
+    E[(i + (rot % 360 / 90) as usize) % 4]
 }
 
 impl Hid {
     pub fn new(path: &Path) -> Hid {
-        Hid { path: path.to_path_buf(), sock: None }
+        Hid { path: path.to_path_buf(), sock: None, display: None }
     }
 
     pub fn send(&mut self, line: &str) {
@@ -46,14 +66,28 @@ impl Hid {
     /// x, y normalized 0..1; screen (w, h) in device pixels for the edge rule
     pub fn touch(&mut self, phase: &str, x: f32, y: f32, edge: Option<&str>) {
         let (x, y) = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+        let (pre, (x, y), edge) = match self.display {
+            Some((id, rot)) => (format!("@{id} "), unrotate(x, y, rot), edge.map(|e| unrotate_edge(e, rot))),
+            None => (String::new(), (x, y), edge),
+        };
         match edge {
-            Some(e) => self.send(&format!("touch {phase} {x:.5} {y:.5} {e}")),
-            None => self.send(&format!("touch {phase} {x:.5} {y:.5}")),
+            Some(e) => self.send(&format!("{pre}touch {phase} {x:.5} {y:.5} {e}")),
+            None => self.send(&format!("{pre}touch {phase} {x:.5} {y:.5}")),
         }
     }
 
     pub fn touch2(&mut self, phase: &str, x1: f32, y1: f32, x2: f32, y2: f32) {
-        self.send(&format!("touch2 {phase} {:.5} {:.5} {:.5} {:.5}", x1.clamp(0.0, 1.0), y1.clamp(0.0, 1.0), x2.clamp(0.0, 1.0), y2.clamp(0.0, 1.0)));
+        let c = |v: f32| v.clamp(0.0, 1.0);
+        let (pre, (x1, y1), (x2, y2)) = match self.display {
+            Some((id, rot)) => (format!("@{id} "), unrotate(c(x1), c(y1), rot), unrotate(c(x2), c(y2), rot)),
+            None => (String::new(), (c(x1), c(y1)), (c(x2), c(y2))),
+        };
+        self.send(&format!("{pre}touch2 {phase} {x1:.5} {y1:.5} {x2:.5} {y2:.5}"));
+    }
+
+    /// Models 2: the hinge of a two-screen phone, degrees (0 folded .. 180 flat), moved over `ms`
+    pub fn hinge(&mut self, deg: f64, ms: u32) {
+        self.send(&format!("hinge {deg:.1} {ms}"));
     }
 
     pub fn key(&mut self, down: bool, usage: u32) {
@@ -85,5 +119,25 @@ pub fn edge_at(x: f32, y: f32, w: u32, h: u32) -> Option<&'static str> {
         Some("right")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inner_screen_touch_mapping() {
+        // iPhone Duo inner screen (nativeRotation 270): Settings drawn upright at (0.803, 0.291) was tapped with
+        // "@3 touch ... 0.291 0.197" on the framebuffer (Models 2)
+        let (x, y) = unrotate(0.803, 0.291, 270);
+        assert!((x - 0.291).abs() < 1e-6 && (y - 0.197).abs() < 1e-3);
+        assert_eq!(unrotate(0.3, 0.4, 0), (0.3, 0.4));
+        // upright top / right / bottom / left of a 270 panel = its left / top / right / bottom
+        assert_eq!(unrotate_edge("top", 270), "left");
+        assert_eq!(unrotate_edge("right", 270), "top");
+        assert_eq!(unrotate_edge("bottom", 270), "right");
+        assert_eq!(unrotate_edge("left", 270), "bottom");
+        assert_eq!(unrotate_edge("bottom", 0), "bottom");
     }
 }

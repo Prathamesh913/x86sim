@@ -18,6 +18,8 @@ pub struct Runtime {
     /// a dir exists but is incomplete (data loss / interrupted download)
     pub partial: bool,
     pub jc: PathBuf,
+    /// Models 2: model ids this runtime is limited to (empty: any), see sim::runtime_restricted_to
+    pub restricted_to: Vec<String>,
 }
 
 pub fn runtimes() -> Vec<Runtime> {
@@ -33,10 +35,11 @@ pub fn runtimes() -> Vec<Runtime> {
             }
             let root = e.path().join("RuntimeRoot");
             let present = crate::dyldcache::Cache::cache_dir(&root).join(crate::dyldcache::CACHE_NAME).exists();
-            Some(Runtime { jc: crate::sim::jc_for(&root), version: parts[1].to_string(), build: parts[2].to_string(), dir, root, present, partial: !present })
+            Some(Runtime { jc: crate::sim::jc_for(&root), version: parts[1].to_string(), build: parts[2].to_string(), restricted_to: crate::sim::runtime_restricted_to(&root), dir, root, present, partial: !present })
         })
         .collect();
-    v.sort_by(|a, b| a.version.cmp(&b.version));
+    // within a version a runtime limited to some models (the iPhone Duo's 27.2 build) after the general one
+    v.sort_by(|a, b| a.version.cmp(&b.version).then(a.restricted_to.is_empty().cmp(&b.restricted_to.is_empty()).reverse()).then(a.build.cmp(&b.build)));
     v
 }
 

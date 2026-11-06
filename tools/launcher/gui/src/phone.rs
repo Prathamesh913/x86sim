@@ -311,6 +311,15 @@ impl App {
                             v.press("lock");
                         }
                     }
+                    // Models 2: a two-screen phone (iPhone Duo) opens and closes like one: the hinge
+                    if let Some(open) = self.inst(id).filter(|i| i.inner.is_some()).map(|i| i.inner_active()) {
+                        let (label, ic, tip) = if open { ("Fold", icon::DEVICE_MOBILE, "Close the phone: the outer screen") } else { ("Unfold", icon::BOOK_OPEN, "Open the phone flat: the inner screen") };
+                        if ui.add_enabled(live, Btn::ghost(if compact { "" } else { label }).icon(ic)).on_hover_text(tip).clicked() {
+                            if let Some(v) = self.viewer(id) {
+                                v.hinge(if open { 0.0 } else { 180.0 });
+                            }
+                        }
+                    }
                     let (sep, _) = ui.allocate_exact_size(egui::vec2(13.0, H_MD), egui::Sense::hover());
                     ui.painter().vline(sep.center().x, sep.y_range().shrink(6.0), egui::Stroke::new(1.0_f32, BORDER));
                     let (t, c) = if !live { ("Not running", INK_3) } else if focused { ("Typing goes to the phone", ACCENT_INK) } else { ("Click the screen to type", INK_3) };
