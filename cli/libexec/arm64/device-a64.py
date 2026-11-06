@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """x86Code (Speed 22): arm64 devices of other phone models.
 
-    device-a64.py models                         the models (cli/lib/devicetypes-a64.json, from Xcode 27.1)
+    device-a64.py models                         the models (cli/lib/devicetypes-a64.json, from Xcode 27.2: tools/devicetypes/extract-devicetypes.py)
     device-a64.py list                           var/device-a64* with model and screen
     device-a64.py create --model MODEL [--ios 27.x] [NAME]
                                                  new var/device-a64-<name>: <device>/model, runtime (+ name), sim.env

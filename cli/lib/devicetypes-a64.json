@@ -1,13 +1,23 @@
 {
- "iPhone 17": {
-  "model": "iPhone18,3",
-  "class": "V57",
+ "iPhone 18 Pro": {
+  "model": "iPhone19,2",
+  "class": "V63",
   "w": "1206",
   "h": "2622",
   "scale": "3.000000",
   "pitch": "460.000000",
   "suffix": "iphone",
-  "json": "devicetype-iphone18,3.json"
+  "json": "devicetype-iphone19,2.json"
+ },
+ "iPhone 18 Pro Max": {
+  "model": "iPhone19,3",
+  "class": "V64",
+  "w": "1320",
+  "h": "2868",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone19,3.json"
  },
  "iPhone 17 Pro": {
   "model": "iPhone18,1",
@@ -29,16 +39,6 @@
   "suffix": "iphone",
   "json": "devicetype-iphone18,2.json"
  },
- "iPhone Air": {
-  "model": "iPhone18,4",
-  "class": "D23",
-  "w": "1260",
-  "h": "2736",
-  "scale": "3.000000",
-  "pitch": "460.000000",
-  "suffix": "iphone",
-  "json": "devicetype-iphone18,4.json"
- },
  "iPhone 17e": {
   "model": "iPhone18,5",
   "class": "V159",
@@ -49,6 +49,376 @@
   "suffix": "iphone",
   "json": "devicetype-iphone18,5.json"
  },
+ "iPhone Air": {
+  "model": "iPhone18,4",
+  "class": "D23",
+  "w": "1260",
+  "h": "2736",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,4.json"
+ },
+ "iPhone 17": {
+  "model": "iPhone18,3",
+  "class": "V57",
+  "w": "1206",
+  "h": "2622",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone18,3.json"
+ },
+ "iPhone 16 Pro": {
+  "model": "iPhone17,1",
+  "class": "D93",
+  "w": "1206",
+  "h": "2622",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone17,1.json"
+ },
+ "iPhone 16 Pro Max": {
+  "model": "iPhone17,2",
+  "class": "D94",
+  "w": "1320",
+  "h": "2868",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone17,2.json"
+ },
+ "iPhone 16e": {
+  "model": "iPhone17,5",
+  "class": "V59",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone17,5.json"
+ },
+ "iPhone 16": {
+  "model": "iPhone17,3",
+  "class": "D47",
+  "w": "1179",
+  "h": "2556",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone17,3.json"
+ },
+ "iPhone 16 Plus": {
+  "model": "iPhone17,4",
+  "class": "D48",
+  "w": "1290",
+  "h": "2796",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone17,4.json"
+ },
+ "iPhone 15 Pro": {
+  "model": "iPhone16,1",
+  "class": "D83",
+  "w": "1179",
+  "h": "2556",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone16,1.json"
+ },
+ "iPhone 15 Pro Max": {
+  "model": "iPhone16,2",
+  "class": "D84",
+  "w": "1290",
+  "h": "2796",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone16,2.json"
+ },
+ "iPhone 15": {
+  "model": "iPhone15,4",
+  "class": "D37",
+  "w": "1179",
+  "h": "2556",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone15,4.json"
+ },
+ "iPhone 15 Plus": {
+  "model": "iPhone15,5",
+  "class": "D38",
+  "w": "1290",
+  "h": "2796",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone15,5.json"
+ },
+ "iPhone 14 Pro": {
+  "model": "iPhone15,2",
+  "class": "D73",
+  "w": "1179",
+  "h": "2556",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone15,2.json"
+ },
+ "iPhone 14 Pro Max": {
+  "model": "iPhone15,3",
+  "class": "D74",
+  "w": "1290",
+  "h": "2796",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone15,3.json"
+ },
+ "iPhone 14": {
+  "model": "iPhone14,7",
+  "class": "D27",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,7.json"
+ },
+ "iPhone 14 Plus": {
+  "model": "iPhone14,8",
+  "class": "D28",
+  "w": "1284",
+  "h": "2778",
+  "scale": "3.000000",
+  "pitch": "458.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,8.json"
+ },
+ "iPhone SE (3rd generation)": {
+  "model": "iPhone14,6",
+  "class": "D49",
+  "w": "750",
+  "h": "1334",
+  "scale": "2.000000",
+  "pitch": "326.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,6.json"
+ },
+ "iPhone 13 Pro": {
+  "model": "iPhone14,2",
+  "class": "D63",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,2.json"
+ },
+ "iPhone 13 Pro Max": {
+  "model": "iPhone14,3",
+  "class": "D64",
+  "w": "1284",
+  "h": "2778",
+  "scale": "3.000000",
+  "pitch": "458.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,3.json"
+ },
+ "iPhone 13": {
+  "model": "iPhone14,5",
+  "class": "D17",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,5.json"
+ },
+ "iPhone 13 mini": {
+  "model": "iPhone14,4",
+  "class": "D16",
+  "w": "1080",
+  "h": "2340",
+  "scale": "3.000000",
+  "pitch": "476.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone14,4.json"
+ },
+ "iPhone 12 Pro": {
+  "model": "iPhone13,3",
+  "class": "D53p",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone13,3.json"
+ },
+ "iPhone 12 Pro Max": {
+  "model": "iPhone13,4",
+  "class": "D54p",
+  "w": "1284",
+  "h": "2778",
+  "scale": "3.000000",
+  "pitch": "458.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone13,4.json"
+ },
+ "iPhone 12": {
+  "model": "iPhone13,2",
+  "class": "D53g",
+  "w": "1170",
+  "h": "2532",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone13,2.json"
+ },
+ "iPhone 12 mini": {
+  "model": "iPhone13,1",
+  "class": "D52g",
+  "w": "1080",
+  "h": "2340",
+  "scale": "3.000000",
+  "pitch": "476.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone13,1.json"
+ },
+ "iPhone SE (2nd generation)": {
+  "model": "iPhone12,8",
+  "class": "D79",
+  "w": "750",
+  "h": "1334",
+  "scale": "2.000000",
+  "pitch": "326.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone12,8.json"
+ },
+ "iPhone 11 Pro": {
+  "model": "iPhone12,3",
+  "class": "D421",
+  "w": "1125",
+  "h": "2436",
+  "scale": "3.000000",
+  "pitch": "458.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone12,3.json"
+ },
+ "iPhone 11 Pro Max": {
+  "model": "iPhone12,5",
+  "class": "D431",
+  "w": "1242",
+  "h": "2688",
+  "scale": "3.000000",
+  "pitch": "458.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone12,5.json"
+ },
+ "iPhone 11": {
+  "model": "iPhone12,1",
+  "class": "N104",
+  "w": "828",
+  "h": "1792",
+  "scale": "2.000000",
+  "pitch": "326.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone12,1.json"
+ },
+ "iPad Pro 13-inch (M5) (16GB)": {
+  "model": "iPad17,4",
+  "class": "J821",
+  "w": "2064",
+  "h": "2752",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad17,4.json"
+ },
+ "iPad Pro 13-inch (M5)": {
+  "model": "iPad17,4",
+  "class": "J821",
+  "w": "2064",
+  "h": "2752",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad17,4.json"
+ },
+ "iPad Pro 11-inch (M5) (16GB)": {
+  "model": "iPad17,2",
+  "class": "J818",
+  "w": "1668",
+  "h": "2420",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad17,2.json"
+ },
+ "iPad Pro 11-inch (M5)": {
+  "model": "iPad17,2",
+  "class": "J818",
+  "w": "1668",
+  "h": "2420",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad17,2.json"
+ },
+ "iPad Pro 11-inch (M4) (16GB)": {
+  "model": "iPad16,4",
+  "class": "J718",
+  "w": "1668",
+  "h": "2420",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,4.json"
+ },
+ "iPad Pro 11-inch (M4)": {
+  "model": "iPad16,4",
+  "class": "J718",
+  "w": "1668",
+  "h": "2420",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,4.json"
+ },
+ "iPad Pro 13-inch (M4) (16GB)": {
+  "model": "iPad16,6",
+  "class": "J721",
+  "w": "2064",
+  "h": "2752",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,6.json"
+ },
+ "iPad Pro 13-inch (M4)": {
+  "model": "iPad16,6",
+  "class": "J721",
+  "w": "2064",
+  "h": "2752",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,6.json"
+ },
+ "iPad Air 13-inch (M4)": {
+  "model": "iPad16,11",
+  "class": "J738",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,11.json"
+ },
  "iPad Air 11-inch (M4)": {
   "model": "iPad16,9",
   "class": "J708",
@@ -58,5 +428,206 @@
   "pitch": "264.000000",
   "suffix": "ipad",
   "json": "devicetype-ipad16,9.json"
+ },
+ "iPad (A16)": {
+  "model": "iPad15,7",
+  "class": "J481",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad15,7.json"
+ },
+ "iPad Air 13-inch (M3)": {
+  "model": "iPad15,5",
+  "class": "J637",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad15,5.json"
+ },
+ "iPad Air 11-inch (M3)": {
+  "model": "iPad15,3",
+  "class": "J607",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad15,3.json"
+ },
+ "iPad Air 11-inch (M2)": {
+  "model": "iPad14,9",
+  "class": "J508",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,9.json"
+ },
+ "iPad Air 13-inch (M2)": {
+  "model": "iPad14,11",
+  "class": "J538",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,11.json"
+ },
+ "iPad mini (A17 Pro)": {
+  "model": "iPad16,2",
+  "class": "J411",
+  "w": "1488",
+  "h": "2266",
+  "scale": "2.000000",
+  "pitch": "326.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad16,2.json"
+ },
+ "iPad Pro (11-inch) (4th generation) (16GB)": {
+  "model": "iPad14,4",
+  "class": "J618",
+  "w": "1668",
+  "h": "2388",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,4.json"
+ },
+ "iPad Pro (11-inch) (4th generation)": {
+  "model": "iPad14,3",
+  "class": "J617",
+  "w": "1668",
+  "h": "2388",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,3.json"
+ },
+ "iPad Pro (12.9-inch) (6th generation) (16GB)": {
+  "model": "iPad14,5",
+  "class": "J620",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,5.json"
+ },
+ "iPad Pro (12.9-inch) (6th generation)": {
+  "model": "iPad14,5",
+  "class": "J620",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,5.json"
+ },
+ "iPad (10th generation)": {
+  "model": "iPad13,18",
+  "class": "J271",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad13,18.json"
+ },
+ "iPad Air (5th generation)": {
+  "model": "iPad13,17",
+  "class": "J408",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad13,17.json"
+ },
+ "iPad mini (6th generation)": {
+  "model": "iPad14,1",
+  "class": "J310",
+  "w": "1488",
+  "h": "2266",
+  "scale": "2.000000",
+  "pitch": "326.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad14,1.json"
+ },
+ "iPad Pro (11-inch) (3rd generation)": {
+  "model": "iPad13,5",
+  "class": "J517",
+  "w": "1668",
+  "h": "2388",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad13,5.json"
+ },
+ "iPad Pro (12.9-inch) (5th generation)": {
+  "model": "iPad13,10",
+  "class": "J522",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad13,10.json"
+ },
+ "iPad (9th generation)": {
+  "model": "iPad12,2",
+  "class": "J182",
+  "w": "1620",
+  "h": "2160",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad12,2.json"
+ },
+ "iPad Air (4th generation)": {
+  "model": "iPad13,2",
+  "class": "J308",
+  "w": "1640",
+  "h": "2360",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad13,2.json"
+ },
+ "iPad Pro (11-inch) (2nd generation)": {
+  "model": "iPad8,9",
+  "class": "J417",
+  "w": "1668",
+  "h": "2388",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad8,9.json"
+ },
+ "iPad Pro (12.9-inch) (4th generation)": {
+  "model": "iPad8,12",
+  "class": "J420",
+  "w": "2048",
+  "h": "2732",
+  "scale": "2.000000",
+  "pitch": "264.000000",
+  "suffix": "ipad",
+  "json": "devicetype-ipad8,12.json"
+ },
+ "iPhone Duo": {
+  "model": "iPhone19,4",
+  "class": "V68",
+  "w": "1398",
+  "h": "2034",
+  "scale": "3.000000",
+  "pitch": "460.000000",
+  "suffix": "iphone",
+  "json": "devicetype-iphone19,4.json",
+  "note": "iOS 27.2 lists it as unsupported (Xcode can't create it on this runtime); main display only"
  }
 }

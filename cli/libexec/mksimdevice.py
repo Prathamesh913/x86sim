@@ -48,7 +48,7 @@ DEVTYPE ={"model": "iPhone18,3", "class": "V57", "w": "1206", "h": "2622", "json
            "version": "26.5", "build": "23F73", "arch": "x86_64"}
 
 
-# Speed 22: arm64 devices of other models. <device>/model names an entry of cli/lib/devicetypes-a64.json (Xcode 27.1's
+# Speed 22: arm64 devices of other models. <device>/model names an entry of cli/lib/devicetypes-a64.json (Xcode 27.2's
 # device types: identifier, product class, screen, capabilities); written by `x86sim device create --model`. No file:
 # iPhone 17, as before.
 DEVTYPES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", "devicetypes-a64.json")

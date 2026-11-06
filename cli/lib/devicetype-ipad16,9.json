@@ -143,50 +143,32 @@
  },
  "iconState": {
   "buttonBar": [
-   "com.apple.mobilephone",
-   "com.apple.mobilemail",
    "com.apple.mobilesafari",
-   "com.apple.mobileipod"
+   "com.apple.mobilemail",
+   "com.apple.mobileslideshow",
+   "com.apple.Music"
   ],
   "iconLists": [
    [
-    "com.apple.mobileslideshow",
-    "com.apple.MobileAddressBook",
-    "com.apple.Preferences",
-    "com.apple.gamecenter",
     "com.apple.MobileSMS",
     "com.apple.mobilecal",
-    "com.apple.camera",
-    "com.apple.youtube",
-    "com.apple.stocks",
-    "com.apple.Maps",
-    "com.apple.weather",
     "com.apple.mobilenotes",
     "com.apple.reminders",
-    "com.apple.mobiletimer",
+    "com.apple.Maps",
+    "com.apple.youtube",
+    "com.apple.videos",
+    "com.apple.MobileAddressBook",
+    "com.apple.gamecenter",
+    "com.apple.MobileStore",
+    "com.apple.AppStore",
     {
      "displayName": "Newsstand",
      "iconLists": [
       []
      ],
      "listType": "newsstand"
-    }
-   ],
-   [
-    "com.apple.videos",
-    "com.apple.MobileStore",
-    "com.apple.AppStore",
-    {
-     "defaultDisplayName": "Utilities",
-     "iconLists": [
-      [
-       "com.apple.calculator",
-       "com.apple.compass",
-       "com.apple.VoiceMemos"
-      ]
-     ]
     },
-    "com.apple.nike"
+    "com.apple.Preferences"
    ]
   ]
  }

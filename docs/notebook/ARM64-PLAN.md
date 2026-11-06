@@ -3294,3 +3294,31 @@ web-page typing could not be measured. A plain boot-a64.sh from a shell (as gate
 - **Gate**: new step google_search (google.com, tap box, type "wikipedia linux", return, results OCR, no WebContent
   crash). Gate gsearch2: 0 failed. Settings cold/warm t+3s/t+3s, Safari t+3s (kb2: 3/7/3). google.com and Wikipedia
   checked by screenshot.
+
+## Models 1: every iPhone/iPad of Xcode 27.2's device types; iPhone 18 Pro / 18 Pro Max / Duo booted
+
+- **Extraction, reproducible**: `tools/devicetypes/extract-devicetypes.py --include-unsupported` (ssh to the Mac,
+  default bobby@192.168.1.217) tars every device type's profile.plist + capabilities.plist from
+  /Library/Developer/CoreSimulator/Profiles/DeviceTypes and takes the iPhones/iPads that `xcrun simctl list runtimes -j`
+  says iOS 27.2 (24B8117) supports, writing cli/lib/devicetypes-a64.json (same fields as Speed 22) and
+  devicetype-<model>.json (capabilities.plist as JSON, the same form as before: the 7 existing files are equal as
+  JSON). Only plist-derived data. Xcode 27.2 (27B52): 63 models (was 6): iPhone 11 ... 16 families, SE 2/3, 16e, 17
+  family, Air, **18 Pro (iPhone19,2, V63, 1206x2622)**, **18 Pro Max (iPhone19,3, V64, 1320x2868)**, **iPhone Duo
+  (iPhone19,4, V68)**, and 30 iPads (mini 6/A17 Pro, iPad 9/10/A16, Air 4/5/M2-M4, Pro 11/12.9 2nd-6th gen, M4/M5;
+  8GB/16GB variants share one capabilities file). iPads with minRuntimeVersion <= 27.2 but outside 27.2's
+  supportedDeviceTypes (older generations, iPhone X/8/SE1 etc.) are not taken.
+- **iPhone 18 Pro / 18 Pro Max**: sim_add_device + sim_start (x86code-mcp) -> home in ~3.5 min first boot, at
+  1206x2622 and 1320x2868. The Pro Max home has a black wallpaper: wallpaper is off by default and the reflinked data
+  carries the main phone's 1206x2622 wallpaper image only (the 18 Pro, same size, shows it).
+- **iPhone Duo**: a two-screen phone. capabilities displays: "primary" LCD 1398x2034 @3x (cover/outer, chrome
+  phone15, corner radii 8/59, Dynamic Island), "primary-1" LCD-1 2007x2853 @3x, nativeOrientation/Rotation 270, sRGB,
+  chrome phone14, surfaceType 2 (the large inner screen), plus TVOut, CarPlay and a "resizable" 7680x4320 scene
+  display (needs com.apple.CoreSimulator.display.resizableScene). main-screen 1398x2034, ArtworkDeviceSubType 2034,
+  fallback iPhone18,3, touch-id (no pearl-id), APPLE11 GPU, memory class 12, model A3447. **The 27.2 runtime lists
+  iPhone19,4 in its profile's unsupportedDeviceTypes** (Xcode can't create one on 27.2; minRuntimeVersion 27.1 is
+  not enough), so its entry carries a "note". Booted anyway: home at 1398x2034 (the outer screen), but the status
+  bar is the legacy "Carrier" layout (27.2 has no layout for this product) and the inner display does not exist:
+  host/simfb is one fixed display (SFBConnectionCopyDisplays returns one "LCD"). A second SFB display, fold state
+  and the resizable scene are not done; with no runtime that supports the device there is nothing to check them
+  against. Revisit with a runtime that has iPhone19,4.
+- **Launcher**: models are read from the JSON at start (no rebuild); restarted, its "Add phone" picker lists them.
