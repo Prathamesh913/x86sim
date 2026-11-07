@@ -200,25 +200,51 @@ esac
 # Speed 18: the device's feature toggles ($D/features.json; definitions, costs and presets in features-def.json, edited
 # by tools/launcher: x86code-aot features, the launcher GUI, x86code-mcp). A job is left out only when every feature
 # listing it is off; boot-critical jobs are never listed. Applied at boot, so changes take effect at the next boot.
-eval "$(python3 - "$D/features.json" "$X/cli/libexec/arm64/features-def.json" <<'PY'
-import json, sys
+eval "$(python3 - "$D/features.json" "$X/cli/libexec/arm64/features-def.json" "$D" <<'PY'
+import glob, json, os, plistlib, sys
 try:
 	prof = json.load(open(sys.argv[1])).get("features", {})
 except Exception:
 	prof = {}
 d = json.load(open(sys.argv[2]))["features"]
 on = {f["id"]: prof.get(f["id"], f.get("default", False)) for f in d}
+# RAM 15: with the wallpaper off SpringBoard shows the poster's saved snapshot (RuntimeSnapshot-<hardware id>-home), which
+# PosterKit keys by the screen. A phone made from another model's data (every new phone copies the main phone's) has
+# none for its own screen and its home was black (iPhone 18 Pro Max from an iPhone 17's data). Such a boot runs the
+# wallpaper's jobs once: PosterBoard renders and saves this screen's snapshot, later boots find it and stay without.
+note = ""
+if not on.get("wallpaper"):
+	env = dict(l.rstrip("\n").split("=", 1) for l in open(os.path.join(sys.argv[3], "sim.env")) if "=" in l)
+	try:
+		want = {(int(float(env["SIMULATOR_MAINSCREEN_WIDTH"])), int(float(env["SIMULATOR_MAINSCREEN_HEIGHT"])))}
+	except (KeyError, ValueError):
+		want = set()
+	want |= {(h, w) for w, h in want}
+	have = set()
+	for m in glob.glob(os.path.join(sys.argv[3], "data/Library/Application Support/PRBPosterExtensionDataStore/*/Extensions/*/configurations/*/versions/*/RuntimeSnapshotMetadata-*-home.plist")):
+		try:
+			md = plistlib.load(open(m, "rb"))
+			w, h = (float(x) for x in md["PUIPosterSnapshotBundleInfoKeyAssetSize"].strip("{}").split(","))
+			sc = float(md.get("PUIPosterSnapshotBundleInfoKeyScale", 1))
+			have.add((round(w * sc), round(h * sc)))
+		except Exception:
+			pass
+	if want and not want & have:
+		on["wallpaper"] = True
+		note = "no wallpaper snapshot for this screen: PosterBoard runs this boot to make one"
 keep = {j for f in d if on[f["id"]] for j in f.get("jobs", [])}
 drop = sorted({j for f in d if not on[f["id"]] for j in f.get("jobs", [])} - keep)
 add = [j for f in d if on[f["id"]] for j in f.get("add_jobs", [])]
 park = [p for f in d if not on[f["id"]] for p in f.get("park", [])]
 unpark = [p for f in d if on[f["id"]] for p in f.get("unpark", [])]
 keepw = any(on[f["id"]] and f.get("keep_widgets") for f in d)
-off = [f["id"] for f in d if on[f["id"]] != f.get("default", False)]
+off = [f["id"] for f in d if on[f["id"]] != f.get("default", False) and not (note and f["id"] == "wallpaper")]
+print(f'FEAT_NOTE="{note}"')
 print(f'FEAT_DROP="{" ".join(drop)}" FEAT_ADD="{" ".join(add)}" FEAT_PARK="{",".join(park)}" FEAT_UNPARK="{" ".join(unpark)}" FEAT_KEEPW={int(keepw)} FEAT_CHANGED="{" ".join(off)}"')
 PY
 )"
 [ -n "$FEAT_CHANGED" ] && echo "  features changed from the defaults: $FEAT_CHANGED"
+[ -n "$FEAT_NOTE" ] && echo "  $FEAT_NOTE"
 JOBS="$JOBS $FEAT_ADD"
 [ "$FEAT_KEEPW" = 1 ] && A64_KEEP_WIDGETS=${A64_KEEP_WIDGETS:-1}
 [ -n "$FEAT_PARK" ] && A64_PARK_EXTRA=${A64_PARK_EXTRA:+$A64_PARK_EXTRA,}$FEAT_PARK
@@ -418,6 +444,10 @@ rm -f "$ST/simaudio.pid"
 # (A64_KEEP_MTLVK=1: the container only -- the launcher's restart keeps the GPU helper, its stop ends it itself)
 if [ "${A64_STOP_ONLY:-0}" = 1 ]; then
 	[ "${A64_KEEP_MTLVK:-0}" = 1 ] || stop_a64_mtlvk
+	# RAM 15: the frame rings live in /run/user (tmpfs, RAM): a stopped phone's stayed resident (4 frames each, 50 MB
+	# for an iPhone 17, 140 MB for the Duo's two screens) until its next boot replaced them. The next boot makes new ones.
+	R=$(sed -n 's#^SIMFB_RING=/Volumes/SystemRoot##p' "$D/sim.env" 2>/dev/null)
+	[ -n "$R" ] && rm -f "$R" "${R%.ring}"-[0-9].ring
 	exit 0
 fi
 # the marks of the last boot (Darling pids are reused)

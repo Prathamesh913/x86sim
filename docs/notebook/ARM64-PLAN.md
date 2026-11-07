@@ -3392,3 +3392,107 @@ web-page typing could not be measured. A plain boot-a64.sh from a shell (as gate
 - **Not done**: the outer screen while unfolded is simply off (the real Duo's "both" modes, tent/tabletop poses and the
   continuous-fold animation mid-angle are reachable with `hinge <deg>` but were not checked); the resizable 7680x4320
   scene display; an AOT image for 24B91016s.
+
+## RAM 15: per model (2026-11-06, one phone at a time)
+
+Scripts in ~/scratch/x86code/ram15/ (fresh.sh SLUG TAG = launcher-path boot of one phone (x86code-aot sim start),
+15 min, memcat x2 + mtlvk smaps + ring sizes; apps.sh = Settings / Safari (Wikipedia) / Maps open 20 s each, memcat +
+screenshot; speed.sh = openm N=2 cold+warm of Settings, Maps, Safari + Settings scroll; model.sh / models.sh chain them;
+scal.py = the parts that scale with the screen; pdiff.py = process sets of two runs; train-duo.sh, duo2.sh, duo3.sh).
+Temporary phones: iPhone 18 Pro Max (1320x2868), iPhone SE 3 (750x1334 @2x), iPad Pro 13-inch M5 (2064x2752 @2x), all
+copied from the main phone's data; deleted afterwards. The host had another project's processes at 100-250% CPU during
+all speed runs (same for every model).
+
+1. **iPhone Duo had no AOT image and no placement table for its runtime (24B91016s).** Per-runtime keying itself works
+   (sim.env X86CODE_A64_JITCACHE_DIR=jc-24B91016s, image name = that dyld cache's UUID). Training on the Duo
+   (train-duo.sh: home on both screens, then Settings, Safari, Maps, News, Health, Wallet, Messages, Calendar, Photos,
+   each unfolded too), `x86code-aot --device var/device-a64-iphone-duo config budget_mb 960` (as the main phone's;
+   its default was 1616) and `build --full`: 787 chunks, 1030 MB, built in 14 s. That took the cache libraries' JIT
+   away but launchd_sim (52 MB of its own warm .bin), every app executable, MobileSafariUI and the WebKit processes still
+   translated live: **jc-24B91016s had no placement.txt**, so no non-cache Mach-O was placed and none was eligible for
+   the image (the key's placement hash was 00000000). Made with `PLACEMENT_RUNTIME=<24B91016s RuntimeRoot>
+   cli/libexec/arm64/mkplacement.py jc-24B91016s/placement.txt jc-24B8117/placement.txt` (372 files: the main
+   runtime's keys found in this one, plus the Duo's own DockFolderViewService and three UI frameworks; ShellSceneKit is
+   in this build's dyld cache). New key, so one more training boot (duo3.sh) and `build --full`: **1062 chunks, 5.1M
+   blocks, 1059 MB**. A new runtime needs: placement table, training boot, full build, in that order.
+2. **jetsam: the Duo's (and iPads') DockFolderViewService.app counted as "the app in the foreground".** The home screen
+   runs it for the dock column; jetsam.py took any non-UI-service .app without a background signal for the
+   foreground app, and while there is one every daemon gets 600 s instead of 30 s: 20 more daemons (~420 MB) at the
+   Duo's idle home for the whole boot. It is now a UI service (UISVC) like Spotlight: reclaimed when RunningBoard says
+   it shows nothing, never "the foreground app". Duo boot after: the daemons go after 30 s as on the iPhone 17.
+3. **darlingserver aborted when an app was SIGKILLed** (three times in the Duo's training, once per kill of Safari /
+   News / Health): `Thread::doWork` threw "Thread has both a pending call and a pending continuation", the uncaught
+   exception aborted darlingserver and every process of the phone died with SIGILL (Darling's trap on a dead server).
+   Now the new call wins and the stale continuation (its stack already freed) is dropped and logged as an error; with a
+   pending call override the throw stays. Not seen again (0 drops logged in the later kills: rare).
+4. **Frame rings: idle slots given back (simfb).** Each display's ring is 4 whole frames in tmpfs, all resident once
+   written although a still screen only needs the latest: iPhone 17 4 x 12.2 MB, 18 Pro Max 4 x 14.5, SE 4 x 3.9, iPad
+   Pro 13 4 x 22.2, Duo 4 x 11.2 + 4 x 22.9 (inner). After SIMFB_RING_IDLE_MS (default 1500; 0 = off) without a frame,
+   the slots but the latest are released (MADV_REMOVE through libarm64jit's Linux-syscall svc; a later write takes new
+   zeroed pages; at most 4 log lines "display N idle: 3 of 4 ring slots given back"). The Duo's hidden screen costs one
+   frame (23 MB) instead of four. Readers only read the latest slot, so nothing they show changes.
+5. **A stopped phone's rings stayed in RAM.** /run/user/1000 held the rings of ram2, ram3, ram4 and a deleted ramclone1
+   (4 x 50 MB) until their next boot. boot-a64.sh A64_STOP_ONLY (the launcher's Stop and restart) now deletes the
+   phone's ring files (`<ring>` and `<ring>-N`); the next boot makes new ones.
+6. **Wallpaper on a phone of another screen size (the 18 Pro Max's black home).** With the wallpaper feature off
+   SpringBoard shows MercuryPoster's saved snapshot, RuntimeSnapshot-<hardware id>-home.atx, keyed by the screen
+   (metadata AssetSize x Scale = 402x874 @3 for the iPhone 17). A phone made from the main phone's data has none for its
+   own size. boot-a64.sh: when no RuntimeSnapshotMetadata matches this screen (SIMULATOR_MAINSCREEN_*, either
+   orientation) the boot runs the wallpaper's jobs once ("no wallpaper snapshot for this screen: PosterBoard runs this
+   boot to make one"); PosterBoard saves this screen's snapshot and later boots run without it. Checked: 18 Pro Max,
+   SE, iPad (prime boot with PosterBoard, then the measured boot without: wallpaper shown, MercuryPosterExtension
+   parked), Duo outer screen (its inner screen shows a plain wallpaper colour: no snapshot is made for the second
+   display).
+
+Fresh home, 15 min (PSS MB, the phone alone; two snapshots 25 s apart). The new phones (and once the Duo) show a burst
+at ~14 min: assistantd, geod, sirittsd, corespeechd, ContextService, STExtractionService etc. relaunched together and
+killed 30 s later by jetsam (the same set each time, from the copied data's schedules); that is the 1st/2nd difference.
+
+| model (screen) | before | after | scaling parts after: SpringBoard / backboardd / mtlvk / IOSurfaces / ring |
+|---|---|---|---|
+| iPhone 17 (1206x2622, main) | 774-797 (RAM 14), ring 50 | **769 / 768** (32 procs), ring 12 | 210 / 80 / 153 / 38 / 12 |
+| iPhone Duo (1398x2034 + 2007x2853) | **3351 / 3359** (36 procs; JIT 2.3 GB: codecache 1745, SpringBoard 1062) + ring 136 | image without placement + jetsam: 1061 / 1048 (33); with placement: **1122 / 1130** (50, burst; JIT 13 MB codecache, as the iPhone 17) | 197 / 136 / 195 / 106 / 28 |
+| iPhone 18 Pro Max (1320x2868) | home black (no wallpaper); ring 60 | 1300 / 1083 (49, burst) | 203 / 87 / 154 / 46 / 15 |
+| iPhone SE 3 (750x1334 @2x) | ring 16 | 1660 / 933 (49, burst) | 185 / 45 / 136 / 13 / 4 |
+| iPad Pro 13 M5 (2064x2752 @2x) | ring 91 | 1493 / 1214 (51, burst) | 217 / 111 / 164 / 68 / 22 |
+
+What scales with the screen: the IOSurfaces (CA's 3 swapchain surfaces per display, PSS split between backboardd and
+mtlvk: 13 MB SE -> 38 iPhone 17 -> 68 iPad -> 106 Duo), the ring (now one frame per display at rest) and some of
+backboardd. SpringBoard and mtlvk barely (136-196). The Duo's extra over the iPhone 17 at rest: its inner screen's
+surfaces (+68), backboardd (+56, of which surfaces +32), mtlvk (+43), DockFolderViewService (31). The surfaces belong to
+CA's swapchain of a display that is off; QuartzCore keeps them, nothing here frees them safely (CA may redraw only
+damage), so they stay.
+
+App pass (phone total at "app open 20 s", Settings / Safari / Maps; end = home after the pass): iPhone 17 1295 / 1376 /
+1460, end 1003; Duo before placement 1655 / 2005 / 1909 (Safari + WebContent 252 MB of JIT), after **1268 / 1458 /
+1666**, end 1177; 18 Pro Max 1191 / 1425 / 1598; SE 1092 / 1415 / 1325; iPad 1415 / 1791 / - (see below). Screenshots
+of every model's Settings, Wikipedia and Maps correct (Duo on its cover screen, iPad in its split Settings).
+
+Speed (openm N=2, cold content s / warm s; scroll fps):
+
+| | Settings | Maps | Safari | warm | scroll |
+|---|---|---|---|---|---|
+| iPhone 17 | 3.65 / 3.96 | 3.32 / 2.85 | 5.05 / 5.23 | 0.69-0.80 | 54.6 |
+| Duo, first image (no placement) | 4.07 / 3.94 | 5.45 / 5.17 | 8.82 / 8.27 | 0.79-1.05 | 52.4 |
+| Duo, placement image | 4.43 / 4.45 | 5.21 / 6.53 | 5.30 / 9.32 | 0.84-1.14 | 53.7 |
+
+The Duo's first visible response to a tap is ~0.15 s later than the iPhone 17's (0.50-0.55 vs 0.38-0.40 s), with and
+without the image; not found.
+
+Found, not fixed:
+- **iPad: touch does nothing.** simhid dispatches the touches (backboardd logs every touch down / move / up) but no
+  tap opens an app and no swipe moves the home screen, at the framebuffer position and at all 8 rotations / mirrors of
+  it (the panel's nativeOrientation / nativeRotation are 270, main-screen-orientation pi/2). Opening by bundle id
+  (openurl) works. Open: needs backboardd's digitizer -> display mapping on iPad (os_log of backboardd).
+- **iPad first boot shows blank widget tiles**: SpringBoard writes the iPad's own default layout (World Clock, Calendar
+  ... widgets) on its first boot; the next boot strips them (boot-a64.sh), so only the first boot shows them.
+- Once on the main phone, during the speed pass after a Siri AI app was reclaimed and memory warnings went out: ~15
+  daemons each spun one thread at ~95% (mostly system time) with darlingserver at 92% until the phone was stopped.
+  Not reproduced on the next boot (same pass clean); ptrace is not allowed here, so not identified.
+- Duo: backboardd once died at boot with "*** stack smashing detected ***" before its first frame (not the ring trim:
+  no frame had been copied yet); the next boot was fine.
+
+Gate ram15 (main phone, all of the above; 24B8117 image updated for 39 chunks gone stale with the day's training):
+**0 failed** (25 checks), PSS after apps 1974 MB / idle after the pass 1236 (RAM 14: 1768 / 1415). Leftovers: the
+temporary phones' prefixes' overlay workdirs (a64prefix-<name>.workdir/work, root-owned, empty) need root to remove,
+like Models 1's.

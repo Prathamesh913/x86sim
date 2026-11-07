@@ -101,6 +101,8 @@ struct disp {
 	struct ring_hdr* ring;
 	size_t ring_slot_bytes;
 	uint64_t ring_frames;
+	uint64_t ring_last_ns;   // RAM 15: last frame copied; ring_trimmed: the slots but the latest given back
+	bool ring_trimmed;
 	// presents waiting for the GPU, refresh pacing (see below)
 	struct waiting present[PRESENT_QUEUE];
 	size_t npresent;
@@ -385,6 +387,42 @@ static void ring_wake(void* addr) {
 static uint64_t now_ns(void) { static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb); return mach_absolute_time() * tb.numer / tb.denom; }
 static uint64_t wall_ns(void) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec; }
 
+// RAM 15: a ring holds RING_SLOTS whole frames in a tmpfs file (shared memory: iPhone 17 4 x 12.2 MB, Pro Max 4 x 14.5,
+// iPad Pro 13 4 x 22.3, the Duo's inner screen 4 x 22.9 MB) and every slot stays resident once written, though only the
+// latest one is read while the screen is still. After RING_IDLE_MS without a frame (a still home screen, the Duo's
+// hidden screen) the other slots go back to the system (MADV_REMOVE frees a shared tmpfs range; a later write takes new
+// zeroed pages): idle cost one frame per display. SIMFB_RING_IDLE_MS (default 1500; 0 = never trim).
+#define RING_IDLE_MS_DEFAULT 1500
+static long ring_madvise_remove(void* addr, size_t len) {
+#if defined(__arm64__)
+	// under libarm64jit, "svc #0xfffe" is a Linux syscall (x8 = x86_64 number): madvise(addr, len, MADV_REMOVE)
+	register long x0 __asm__("x0") = (long)addr, x1 __asm__("x1") = (long)len, x2 __asm__("x2") = 9;
+	register long x8 __asm__("x8") = 28;
+	__asm__ volatile("svc #0xfffe" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+	return x0;
+#else
+	long r;
+	__asm__ volatile("syscall" : "=a"(r) : "a"(28L), "D"(addr), "S"((long)len), "d"(9L) : "rcx", "r11", "memory");
+	return r;
+#endif
+}
+static uint64_t ring_idle_ns;
+static dispatch_source_t ring_trim_timer;
+static void ring_trim_tick(void) {   // on dump_q (the only writer of slots)
+	for (int i = 0; i < ndisps; i++) {
+		struct disp* D = &disps[i];
+		if (!D->ring || D->ring_trimmed || !D->ring_frames || now_ns() - D->ring_last_ns < ring_idle_ns) continue;
+		uint32_t latest = atomic_load(&D->ring->latest);
+		long r = 0;
+		for (uint32_t k = 0; k < RING_SLOTS; k++)
+			if (k != latest) r |= ring_madvise_remove((char*)D->ring + RING_HDR + k * D->ring_slot_bytes, D->ring_slot_bytes);
+		D->ring_trimmed = true;
+		static int logged;
+		if (logged++ < 4) fprintf(stderr, "simfb: display %u idle: %d of %d ring slots given back (%zu MB each)%s\n", D->id,
+			RING_SLOTS - 1, RING_SLOTS, D->ring_slot_bytes >> 20, r ? " (madvise failed)" : "");
+	}
+}
+
 static void ring_open(struct disp* D, size_t stride, size_t height) {
 	if (D->ring_tried) return;
 	D->ring_tried = true;
@@ -412,6 +450,17 @@ static void ring_open(struct disp* D, size_t stride, size_t height) {
 	ring->st_pid = getpid();
 	rename(tmp, path);
 	fprintf(stderr, "simfb: frame ring %s (%d slots of %zu bytes)\n", path, RING_SLOTS, ring_slot_bytes);
+	if (!ring_trim_timer) {
+		const char* e = getenv("SIMFB_RING_IDLE_MS");
+		long ms = e ? atol(e) : RING_IDLE_MS_DEFAULT;
+		if (ms > 0) {
+			ring_idle_ns = (uint64_t)ms * 1000000ull;
+			ring_trim_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dump_q);
+			dispatch_source_set_timer(ring_trim_timer, dispatch_time(DISPATCH_TIME_NOW, ring_idle_ns), ring_idle_ns / 2, 100 * NSEC_PER_MSEC);
+			dispatch_source_set_event_handler(ring_trim_timer, ^{ ring_trim_tick(); });
+			dispatch_resume(ring_trim_timer);
+		}
+	}
 }
 
 static void file_write(const void* px, uint32_t w, uint32_t h, uint32_t stride, uint64_t seq) {   // on dump_q
@@ -464,6 +513,7 @@ static void dump(SFBSwapchainRef sc, IOSurfaceRef s, uint64_t submit_ns) {   // 
 		rs->time_ns = wall_ns(); rs->width = w; rs->height = h; rs->stride = stride;
 		{ uint64_t age = submit_ns ? (now_ns() - submit_ns) / 1000 : 0; rs->age_us = age > 0xffffffffu ? 0xffffffffu : (uint32_t)age; }
 		ring->width = w; ring->height = h; ring->stride = stride;
+		D->ring_last_ns = now_ns(); D->ring_trimmed = false;
 		atomic_store_explicit(&rs->seq, ++D->ring_frames, memory_order_release);
 		atomic_store_explicit(&ring->latest, slot, memory_order_release);
 		atomic_store_explicit(&ring->seq, D->ring_frames, memory_order_release);

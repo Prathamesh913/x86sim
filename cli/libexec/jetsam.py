@@ -127,7 +127,10 @@ NEVER = ("SpringBoard.app/", "PosterBoard.app/", "InputUI.app/", "Campo.app/")
 # visible / NON_UI), after X86SIM_JETSAM_UISVC s, and never counted as "the app in the foreground". Spotlight: SpringBoard
 # starts it at boot in the background (role NON_UI, ~170 MB) and draws the home screen's Search pill itself; a pull-down
 # relaunches it (search up ~3 s after the swipe, typing intact). As on a device, where it stays suspended / jetsammable.
-UISVC = ("Spotlight.app/",)
+# RAM 15: DockFolderViewService: the iPhone Duo's home screen runs it for the dock column (a view service in an .app
+# bundle); taken for "the app in the foreground", it gave every daemon the foreground's 600 s instead of the home
+# screen's 30 s for the whole boot (20 more daemons, ~420 MB at a 15-min idle home).
+UISVC = ("Spotlight.app/", "DockFolderViewService.app/")
 UISVC_GRACE = float(os.environ.get("X86SIM_JETSAM_UISVC", "60"))
 _kills = {}       # executable -> quick relaunches so far (each doubles its grace period)
 _killed_at = {}   # executable -> time of its last kill
