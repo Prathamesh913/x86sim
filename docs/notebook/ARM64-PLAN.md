@@ -3496,3 +3496,82 @@ Gate ram15 (main phone, all of the above; 24B8117 image updated for 39 chunks go
 **0 failed** (25 checks), PSS after apps 1974 MB / idle after the pass 1236 (RAM 14: 1768 / 1415). Leftovers: the
 temporary phones' prefixes' overlay workdirs (a64prefix-<name>.workdir/work, root-owned, empty) need root to remove,
 like Models 1's.
+
+## Align 1: xnu/libmalloc (2026-11-07, main phone)
+
+Spec: Apple's newest sources (xnu-12377.121.6, libmalloc-812.100.31, libdispatch-1542.100.32, dyld-1378; cloned to
+~/scratch/x86code/oss, not in the repo). The simulator's kernel is macOS's (no CONFIG_JETSAM), so that build of
+xnu is the reference where iOS and macOS differ. Scripts/results: ~/scratch/x86code/align1/.
+
+**Census first.** libsystem_kernel now appends one line per process and (kind, number) to
+/private/var/run/x86code-unsupported.log (`x86code_unsupported`, common/base.c; cleared by boot-a64.sh) for unknown
+syscalls / machdep traps, UNIMPLEMENTED_TRAP, proc_info callnums and pidinfo flavors answered ENOTSUP, and every
+memorystatus_control command but SET_PRIORITY_PROPERTIES (the "Unimplemented syscall" printf goes to a job's stdout,
+i.e. nowhere). A fresh boot to home + 15 min asked for: syscalls 165 quotactl and 482 thread_selfusage (searchd), 451
+telemetry (runningboardd), 446 proc_rlimit_control (coreaudiod); proc_info 9 PIDRUSAGE (launchd_sim, securityd,
+mobileassetd); pidinfo 25 EXITREASONBASICINFO (launchd_sim, left ENOTSUP); memorystatus_control 14/15
+(containermanagerd), 16, 18, 25, 28 (runningboardd), 24 (SpringBoard, Spotlight, InputUI). After the fixes below only
+memorystatus_control (answered as macOS does) and pidinfo 25 remain.
+
+Divergences found and fixed:
+1. **mach_vm_map / mach_vm_allocate trap, fixed without VM_FLAGS_OVERWRITE** (xnu vm_map.c vm_map_enter: KERN_NO_SPACE
+   over an existing mapping). Darling's `_kernelrpc_mach_vm_map_trap` used MAP_FIXED, which silently unmapped whatever
+   was there; libmalloc-812's xzone realloc-in-place (`mvm_allocate_plat(..., VM_FLAGS_FIXED, VM_MEMORY_REALLOC)`,
+   xzone_segment.c) and any fixed-hint allocation rely on the failure. Now MAP_FIXED_NOREPLACE -> KERN_NO_SPACE; every
+   allocation failure returns KERN_NO_SPACE (was KERN_FAILURE; libmalloc's mvm_allocate_pages retries on exactly that).
+   The magazine REALLOC path (mremap without MAYMOVE) is kept, now only for fixed requests.
+2. **vm_protect(set_maximum = TRUE)** (xnu vm_map_protect: new max, current &= max, never grants). Both the trap and
+   darlingserver set the *current* protection to the new maximum: vm_protect(..., TRUE, VM_PROT_ALL) made guard / RO
+   pages RWX. Trap: each mapping of the range (from /proc/self/maps) keeps cur & max; range rounded to whole pages
+   (Linux failed an unaligned address). darlingserver (other tasks): set_maximum is a no-op.
+3. **mach_make_memory_entry from a parent entry with MAP_MEM_USE_DATA_ADDR** (vm_memory_entry.c
+   mach_make_memory_entry_from_parent_entry adds parent->data_offset): ignored, so a sub-entry of an entry whose data
+   starts mid-page pointed that many bytes early (the Safari 1 class). Bound check now on the page-rounded end; the
+   returned size is entry size - data_offset as XNU (was the caller's size with USE_DATA_ADDR).
+4. **mach_vm_purgable_control**: darlingserver's MIG path was dtape_stub_unsafe (abort = whole phone); the in-process
+   trap had PURGE_ALL (2) and SET_STATE_FROM_KERNEL (3) swapped. Now both: SET/GET_STATE -> NONVOLATILE, PURGE_ALL 0,
+   FROM_KERNEL EINVAL from user space (vm_user.c). Nothing is purged here (no purgeable object is ever emptied).
+5. **mincore** (kern_mman.c: one byte per page of the caller's map): went to Linux, which writes one byte per 4K page,
+   4x what a 16K-page guest sized vec for (heap overflow on any multi-page query). libarm64jit h_mincore folds Linux's
+   answer to one byte per 16K page (MINCORE_INCORE); an unmapped range fails ENOMEM through the native path.
+6. **madvise**: MADV_PAGEOUT (10) ENOTSUP and unknown advice EINVAL (was 0); MADV_ZERO already ENOTSUP (callers bzero),
+   MADV_FREE/FREE_REUSABLE as RAM 12, FREE_REUSE / CAN_REUSE 0 (accounting only on XNU) — what libmalloc expects.
+7. **proc_info PIDRUSAGE (proc_pid_rusage)** implemented: rusage_info_v0..v6 written whole (libproc passes no size),
+   CPU times, pageins, resident, phys_footprint (RssAnon+RssShmem), lifetime max (VmHWM), start time. **PROC_PIDTASKINFO**
+   units: resident size was in pages (4096x small), CPU times in clock ticks (now bytes / ns as fill_taskprocinfo).
+8. **memorystatus_control**: on the macOS kernel (no CONFIG_JETSAM) commands 5, 6, 25, 26, 28, 36 are EINVAL; we
+   answered 0, so RunningBoard's CONVERT_MEMLIMIT_MB read a 0 MB limit. Others stay 0 (containermanagerd needs 14/15).
+9. **Syscalls**: quotactl ENOTSUP, telemetry ENOTSUP, proc_rlimit_control 0 for flavors 0-7, thread_selfusage = thread
+   CPU time (ns, Darling's mach time) — they returned ENOSYS (thread_selfusage's caller read -78 as a time).
+
+Checked, no change needed:
+- **mach_vm_map_external** with an entry (Safari 1 fix) matches vm_map_enter_mem_object; RETURN_DATA_ADDR handled.
+- **Memory pressure (item 2)**: libdispatch-1542 in the simulator undefines DISPATCH_USE_MEMORYPRESSURE_SOURCE (no
+  internal source, so libmalloc's malloc_memory_event_handler is never called by libdispatch) and turns
+  DISPATCH_SOURCE_TYPE_MEMORYPRESSURE into a vnode NOTE_ATTRIB watch of $SIMULATOR_MEMORY_WARNINGS whose
+  dispatch_source_get_data/get_mask are hard-coded NOTE_MEMORYSTATUS_PRESSURE_WARN (source.c, event_kevent.c). No
+  EVFILT_MEMORYSTATUS is ever registered by simulator code, so CRITICAL / NORMAL cannot be delivered without patching
+  the guest's libdispatch; WARN (RAM 12's touch) is all the real simulator has either. UIKit's memory warning and
+  WebKit's handler (which calls malloc_zone_pressure_relief itself) already react to it. Not changed.
+- **jetsam (item 3)**: the census confirms launchd_sim and RunningBoard set no bands in the simulator (no posix_spawn
+  jetsam attributes, no SET_PRIORITY_PROPERTIES: every x86code-jetsam record has priority -1); RunningBoard only marks
+  processes managed (16) / freezable (18). So kern_memorystatus.c's bands (IDLE 0, AGING_BAND1 10, BACKGROUND 30,
+  FOREGROUND 100 ...) cannot drive jetsam.py; its rules already model them: clean idle-exit daemons = idle band after
+  an aging delay (IDLE 30 s vs memorystatus_sysprocs_idle_delay_time), suspended extensions / background apps =
+  background bands, the foreground app never. proc_terminate matches proc_terminate_with_proc (SIGKILL for tracked
+  clean, else SIGTERM, EPERM self). Kept as is (RAM numbers).
+
+Measured (main phone; the iPad agent's tipad phone ran meanwhile and **shares the main phone's mtlvk**
+(A64_MTLVK_SOCKET=var/run-a64/mtlvk.sock), so mtlvk's PSS includes the iPad's surfaces: 292-296 MB vs 151 alone;
+totals are given with mtlvk and without it):
+
+| point (PSS MB) | RAM 15 / 14 | Align 1 | without mtlvk (RAM 15 / Align 1) |
+|---|---|---|---|
+| fresh home 15 min | 768 (32 procs) | 1061-1070 at 15 min (48: the ~14-min daemon burst RAM 15 saw on the other models), 826 (33) 2 min later | 617 / 530 |
+| gate | 0 failed | **0 failed** (g1) | |
+| gate "after apps" / "idle after the pass" | 1974 / 1236 | 1922 / 1172 | |
+| after gate + 15 min | 1097 (RAM 14) | 1079 (39 procs) | ~946 / 787 |
+
+Boot to home 18 s (launcher path); gate response times as before (Settings cold/warm t+4 s, Maps t+8-9, Safari t+8).
+No RAM effect expected or seen: these are correctness fixes (memory safety: mincore, fixed mappings; wrong answers:
+taskinfo units, rusage, memlimit), not reclaim.

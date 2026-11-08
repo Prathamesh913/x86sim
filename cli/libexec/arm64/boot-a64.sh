@@ -451,7 +451,8 @@ if [ "${A64_STOP_ONLY:-0}" = 1 ]; then
 	exit 0
 fi
 # the marks of the last boot (Darling pids are reused)
-rm -rf "$DPREFIX/private/var/run/x86code-suspended" "$DPREFIX/private/var/run/x86code-jetsam"
+rm -rf "$DPREFIX/private/var/run/x86code-suspended" "$DPREFIX/private/var/run/x86code-jetsam" \
+	"$DPREFIX/private/var/run/x86code-unsupported.log"
 # the Darling pieces our build fixed (libsystem_kernel ...), also into a recreated prefix: cli/libexec/arm64/prefix-heal.sh
 [ "${A64_PREFIX_HEAL:-1}" != 0 ] && sh "$X/cli/libexec/arm64/prefix-heal.sh" "$DPREFIX"
 # Speed 27: frameworks a Mac host has in /System/Library/Frameworks that the simulator opens there by absolute path (not

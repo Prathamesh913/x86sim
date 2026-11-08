@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <mutex>
+#include <vector>
 // libarm64jit: libsystem_kernel/platform/pthread exports that the generic pass-through can't serve: variadic
 // functions, function-pointer arguments (native -> guest trampolines), bool results, Darling names that differ from
 // the arm64 ones (64-bit-inode stat), the setjmp family (guest code) and the guest-side init functions (no-ops: the
@@ -317,6 +318,33 @@ static void h_madvise(GuestThread &t, u32 i) {
                  (unsigned long)n, adv, r);
     }
     t.set_x(0, 0);  // XNU: KERN_SUCCESS for ranges it skips, too
+}
+// Align 1: mincore(addr, len, vec). XNU (bsd/kern/kern_mman.c mincore) fills one byte per page of the caller's map,
+// and a guest page is 16K here (vm_page_size); the call went through to Darling's sys_mincore, i.e. Linux, which
+// writes one byte per 4K page: 4x the bytes the caller sized vec for (a heap overflow behind any multi-page query),
+// and per-4K answers. Now: Linux's answer for the whole 16K pages the range touches, folded to one byte per 16K page
+// (MINCORE_INCORE if any 4K piece is resident, as XNU reports a page; errors as Linux gives them: ENOMEM unmapped).
+static void h_mincore(GuestThread &t, u32 i) {
+    const u64 gp = 0x4000, a = t.x(0), n = t.x(1);
+    uint8_t *vec = (uint8_t *)t.x(2);
+    const u64 lo = a & ~(gp - 1), hi = (a + n + gp - 1) & ~(gp - 1);
+    if (!n || hi <= lo) { t.set_x(0, 0); return; }
+    const u64 pages4 = (hi - lo) >> 12;
+    uint8_t small[256];
+    std::vector<uint8_t> big;
+    uint8_t *v = small;
+    if (pages4 > sizeof small) { big.resize(pages4); v = big.data(); }
+    long r = syscall(SYS_mincore, (void *)lo, (size_t)(hi - lo), v);
+    if (r != 0) {
+        // XNU answers an unmapped range with ENOMEM (KERN_INVALID_ADDRESS). The native call sets the guest's errno:
+        // page 0 is never mapped, so mincore(0, 1) fails with ENOMEM before Linux writes anything.
+        t.set_x(0, 0); t.set_x(1, 1);
+        h_generic(t, i);
+        return;
+    }
+    for (u64 p = 0; p < pages4 / 4; p++)
+        vec[p] = ((v[4 * p] | v[4 * p + 1] | v[4 * p + 2] | v[4 * p + 3]) & 1) ? 1 /* MINCORE_INCORE */ : 0;
+    t.set_x(0, 0);
 }
 // RAM 12 census only (X86CODE_A64_MADVLOG): (mach_)vm_behavior_set(task, addr, size, behavior)
 static void h_behavior_set(GuestThread &t, u32 i) {
@@ -810,7 +838,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
         {"_vm_remap", h_cachelock<h_vm_remap>}, {"_mach_vm_remap_new", h_cachelock<h_vm_remap>},
         {"_vm_remap_new", h_cachelock<h_vm_remap>}, {"_mach_vm_allocate", h_cachelock<h_vm_allocate>},
         {"_vm_allocate", h_cachelock<h_vm_allocate>}, {"_mmap", h_cachelock<h_mmap>}, {"_munmap", h_munmap}, {"___munmap", h_munmap},
-        {"_madvise", h_madvise}, {"___madvise", h_madvise},
+        {"_madvise", h_madvise}, {"___madvise", h_madvise}, {"_mincore", h_mincore},
         {"_mach_vm_behavior_set", h_behavior_set}, {"_vm_behavior_set", h_behavior_set},
         {"_mach_vm_deallocate", h_vm_deallocate}, {"_vm_deallocate", h_vm_deallocate}, {"___mmap", h_cachelock<h_mmap>},
         {"_mprotect", h_cachelock<h_generic>}, {"___mprotect", h_cachelock<h_generic>},
