@@ -2,6 +2,7 @@
 name = "x86code-core"
 edition.workspace = true
 version.workspace = true
+license.workspace = true
 description = "x86Code launcher core: chunked AOT image (static discovery, incremental build), feature toggles, sim control"
 
 [lib]

@@ -152,13 +152,13 @@ Fedora 39+, Arch/derivatives; not Ubuntu 22.04 / Debian 12. Mac-side bits are Ma
 Darling: GPL-3.0 with APSL-2.0 / BSD parts (Apple's open-source releases) — source is our public fork; the release
 notes should point at the exact submodule commits (GPL offer). dynarmic 0BSD, metal2vulkan GPL-2.0+/LGPL-3.0+ (dual),
 astc-encoder Apache-2.0, lzfse BSD-3, ipsw MIT, 7-Zip LGPL-2.1 + unRAR restriction (redistribution fine), dnspython ISC.
-Our own code: the repo has no LICENSE file yet (see §8).
+Our own code: GPL-3.0-or-later (LICENSE); bundled components and their licenses in NOTICE.
 
 ## 8. Decisions (2026-11-08)
 
 1. **Repo visibility: private for now.** Pre-releases are visible to org members only, so AppImageUpdate/zsync does
    not work for anyone else yet. Revisit (public repo or a public releases-only repo) before the first public release.
-2. **LICENSE / NOTICE**: still to add before anything goes public.
+2. **License: GPL-3.0-or-later** for our own code (LICENSE), components listed in NOTICE; both ship in the AppImage.
 3. **Root mode: userns (no root) by default, `pkexec` system install as the fallback**, as implemented.
 4. **Distro floor: Ubuntu 24.04+** (glibc 2.39): also Debian 13, Fedora 39+, Arch.
 5. **Pre-translate: on by default.** The setup page starts it on its own once iOS and Darling are ready

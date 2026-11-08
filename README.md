@@ -281,3 +281,9 @@ shader still needs a Mac. `debugserver` and the 26.5 dyld cache are Mac-only.
 - **metal2vulkan** (`external/metal2vulkan`) is dual-licensed **GPL-2.0-or-later OR LGPL-3.0-or-later**. Its license
   files are kept. `linux/mtlvk` links it and uses the same terms.
 - The rest of this repository is x86code's own work. No license has been chosen yet: the repository is private.
+
+## License
+
+x86Code is free software under the GNU General Public License v3.0 or later (see [LICENSE](LICENSE)). Bundled
+components keep their own licenses; see [NOTICE](NOTICE). Apple's iOS runtimes and SDKs are never included: x86Code
+downloads the runtime from Apple on your machine.

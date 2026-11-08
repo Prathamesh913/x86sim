@@ -82,6 +82,9 @@ cp "$X/external/darling/LICENSE" "$S/licenses/darling-LICENSE" 2>/dev/null || tr
 cp "$X/external/dynarmic/LICENSE.txt" "$S/licenses/dynarmic-LICENSE" 2>/dev/null || true
 for f in "$X"/external/metal2vulkan/LICENSE*; do [ -f "$f" ] && cp "$f" "$S/licenses/metal2vulkan-$(basename "$f")"; done
 cp "$X/linux/arm64jit/third_party/astcenc/LICENSE.txt" "$S/licenses/astcenc-LICENSE" 2>/dev/null || true
+cp "$X/linux/arm64jit/third_party/lzfse/LICENSE" "$S/licenses/lzfse-LICENSE" 2>/dev/null || true
+cp "$X/LICENSE" "$S/licenses/x86code-LICENSE"
+cp "$X/NOTICE" "$S/NOTICE"
 
 echo "== Apple content check"
 # no Apple runtime / SDK / host data: none of their marker paths, no dyld shared cache

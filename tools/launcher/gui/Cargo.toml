@@ -2,6 +2,7 @@
 name = "x86code-launcher"
 edition.workspace = true
 version.workspace = true
+license.workspace = true
 
 [dependencies]
 x86code-core = { path = "../core" }
