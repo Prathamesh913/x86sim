@@ -154,7 +154,7 @@ impl Aot {
         }
     }
 
-    fn start_build(&mut self, full: bool) {
+    pub fn start_build(&mut self, full: bool) {
         let _ = self.paths.save_config(&self.effective_cfg());
         let exe = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("x86code-aot"))).unwrap_or_else(|| "x86code-aot".into());
         let mut cmd = Command::new(exe);

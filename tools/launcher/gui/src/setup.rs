@@ -1,5 +1,5 @@
 //! The setup page (first run from the AppImage, and Settings > Setup later): host checks, installing Darling (the one
-//! password prompt), getting iOS (download from Apple, or link one already on disk), pre-translating (optional) and
+//! password prompt), getting iOS (download from Apple, or link one already on disk), pre-translating (on by default) and
 //! the first phone. Each step only shows what it needs; the logic is x86code_core::setup.
 use crate::global::{fetch_progress, list_row, note};
 use crate::theme::*;
@@ -16,6 +16,8 @@ pub struct Setup {
     pub install_line: Arc<Mutex<String>>,
     pub installing: bool,
     pub runtime_path: String,
+    /// pre-translate was started automatically once iOS was there (it is on by default; the user can still stop it)
+    pub aot_auto: bool,
 }
 
 impl Setup {
@@ -208,11 +210,15 @@ impl App {
             }
         }
 
-        // 4. pre-translate (optional)
+        // 4. pre-translate: on by default, started once iOS is there (Darling ready, not built, not running)
         let built = !self.aot.building() && self.aot.paths.manifest().exists();
-        step_header(ui, 4, "Pre-translate (optional)", built);
+        if have_rt && ready && !built && !self.aot.building() && !self.setup.aot_auto && self.aot.runtime_root.is_some() {
+            self.setup.aot_auto = true;
+            self.aot.start_build(false);
+        }
+        step_header(ui, 4, "Pre-translate", built);
         list_card(ui, |ui| {
-            list_row(ui, icon::LIGHTNING, "Faster starts", "Translates iOS's code for this computer ahead of time (once per iOS version and x86Code update; it stays on this computer). Phones work without it, just slower the first time.", |ui| {
+            list_row(ui, icon::LIGHTNING, "Faster starts", "Translates iOS's code for this computer ahead of time (once per iOS version and x86Code update; it stays on this computer). Starts on its own once iOS is here; phones work meanwhile, just slower.", |ui| {
                 if ui.add_enabled(have_rt, Btn::secondary("Open Pre-translate")).clicked() {
                     self.view = View::Aot;
                 }

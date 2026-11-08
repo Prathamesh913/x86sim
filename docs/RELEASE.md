@@ -154,17 +154,14 @@ notes should point at the exact submodule commits (GPL offer). dynarmic 0BSD, me
 astc-encoder Apache-2.0, lzfse BSD-3, ipsw MIT, 7-Zip LGPL-2.1 + unRAR restriction (redistribution fine), dnspython ISC.
 Our own code: the repo has no LICENSE file yet (see §8).
 
-## 8. Open points / decisions for you
+## 8. Decisions (2026-11-08)
 
-1. **Repo visibility.** x86code/x86code is private: release downloads and AppImageUpdate need a public repo (or a
-   public mirror repo for releases). Private repos also get 2-vCPU runners and paid minutes.
-2. **A LICENSE for our code** (and a NOTICE listing the bundled components) before any public release.
-3. **Default root mode**: userns (no root, works on Arch/Fedora/Debian; not stock Ubuntu 24.04) with system as the
-   fallback, as implemented; or always system for consistency. On Ubuntu a third option is shipping an AppArmor profile
-   (root once) to allow the user namespace.
-4. **Distro floor**: 24.04-based build (glibc 2.39) vs building on 22.04 for wider reach (needs newer clang/cmake from
-   apt.llvm.org/kitware and testing).
-5. **Pre-translate by default** in the wizard (minutes of CPU, much faster app opens) or keep it optional.
-6. **Version scheme / first tag** (e.g. `v0.1.0-pre1`); the workflow publishes only `v*-pre*` tags.
-7. **Pushing**: the workflows need a token with `workflow` scope (or SSH push); the darlingserver change must be
-   pushed innermost first (darlingserver, then darling, then this repo).
+1. **Repo visibility: private for now.** Pre-releases are visible to org members only, so AppImageUpdate/zsync does
+   not work for anyone else yet. Revisit (public repo or a public releases-only repo) before the first public release.
+2. **LICENSE / NOTICE**: still to add before anything goes public.
+3. **Root mode: userns (no root) by default, `pkexec` system install as the fallback**, as implemented.
+4. **Distro floor: Ubuntu 24.04+** (glibc 2.39): also Debian 13, Fedora 39+, Arch.
+5. **Pre-translate: on by default.** The setup page starts it on its own once iOS and Darling are ready
+   (`Setup::aot_auto`); phones work while it runs.
+6. **First tag**: `v0.1.0-pre1` (the workflow publishes only `v*-pre*` tags).
+7. **Pushing**: the gh token has `workflow` scope; push innermost first (darlingserver, darling, then this repo).
