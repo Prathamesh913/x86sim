@@ -3575,3 +3575,49 @@ totals are given with mtlvk and without it):
 Boot to home 18 s (launcher path); gate response times as before (Settings cold/warm t+4 s, Maps t+8-9, Safari t+8).
 No RAM effect expected or seen: these are correctness fixes (memory safety: mincore, fixed mappings; wrong answers:
 taskinfo units, rusage, memlimit), not reclaim.
+
+## Input 2: iPad touch (2026-11-07, test iPad Pro 13 M5 next to the main phone)
+
+RAM 15 left "iPad: touch does nothing". **The touch path is not the problem**: on a fresh iPad Pro 13 (M5) made with
+`sim_add_device` and booted with `sim_start`, simhid's events work unchanged (no simhid/launcher change): tap at the
+framebuffer position opens Settings (its split layout), a horizontal swipe pages the home screen and back, a tap in
+Settings' search field + `simtouch.py text wifi` types "wifi" (first key held by the attach settle, the rest ~10 s later
+on a cold keyboard). Checked on 7 boots (with and without PosterBoard's wallpaper run, after 20 min idle, after an app
+pass, 30 swipe probes over 30 min, 40 openurl+home+SIGKILL transitions). Same `displayUUID` / DisplayIntegrated
+properties as the iPhone; the panel's nativeRotation 270 needs nothing (the framebuffer is upright portrait).
+
+What RAM 15 hit is a **SpringBoard wedge**, not touch: from one moment on nothing reaches SpringBoard although simhid
+dispatches and backboardd takes every event (its HID threads tick, SpringBoard's UIKit event-fetch thread gets nothing),
+home does nothing, app launches never start ("Maps not running after 90 s" in the app pass, exactly RAM 15's NOPROC
+Maps), SBS calls never return (com.x86code.openurl hangs in SBSCopyFrontmostApplicationDisplayIdentifier, so its next
+open request and jetsam's frontmost queries stall), while SpringBoard's main thread still runs (the status bar clock
+redraws every minute: one frame a minute). Restarting SpringBoard alone clears it (the pending open then runs);
+restarting runningboardd does not.
+- Reproduced 3 times on the iPad: once in RAM 15's sequence (15 min idle, app pass), once more in that sequence (cycle 3
+  of 3), and with the new **tests/arm64/gate/wedge.sh** (openurl an app, 6 s, home, SIGKILL it, next app): wedged at
+  transition 19 of 25 one run, 2 of 15 (with KILLSPOT) another, none in 40 / 15 / 15 other runs. It follows an app
+  SIGKILL around a transition (apps.sh's cold-open kills, wedge.sh's, jetsam's extension / app kills).
+- **iPhone Duo (24B91016s): no wedge in 2 x 40 transitions**; the main iPhone 17 has never shown it in the gates. So it
+  is the iPad's SpringBoard (its windowing / switcher path: "Unbalanced calls to begin/end appearance transitions for
+  SBSwitcherViewController" at every iPad app launch) meeting a process death it does not get told about, most likely.
+- Ruled out: Spotlight's relaunch. An iPad's SpringBoard relaunches Spotlight at every app transition when it is not
+  running and jetsam reclaims it 60 s later, which looked like the trigger (a Spotlight launch preceded the first two
+  wedges, input paused during one), but with Spotlight kept alive (X86SIM_JETSAM_UISVC/MAX huge for that boot) the
+  wedge still came (wedge.sh transition 19, Spotlight up since boot). Not kept.
+- Not found: what SpringBoard waits for. The guest stacks of a live process can't be read here (no ptrace, no live
+  guest backtrace in libarm64jit); the next step is a guest backtrace of SpringBoard's threads on demand (SIGUSR2 in
+  arm64jit) taken in a wedge (wedge.sh reproduces one in minutes to an hour), and then whether a Darling dead-name /
+  process-exit notification is missing for the killed app.
+- Separate: the very first boot of the new iPad stopped before its frame ring existed (all its processes asleep, 0 CPU,
+  20 min); a stop and start booted it in 2 min.
+
+iPad speed (was blocked by this): openm N=2 on a healthy boot after an app pass (icons: Settings 704,650, Maps
+1024,260; the iPad label is ~96 px below the icon centre, not 134, and OCR missed Maps once and tapped Settings):
+
+| iPad Pro 13 M5 | Settings | Maps | warm | scroll |
+|---|---|---|---|---|
+| cold content s | 5.71 / 5.67 | 8.10 / 6.51 | Settings 1.14-1.16, Maps 1.61-1.65 | 51.9 fps (51.4 another boot) |
+
+First response 0.61-0.82 s after the touch (iPhone 17: 0.38-0.40). Safari: not measured (its dock icon moves with the
+recent apps the iPad dock adds). Main phone (iPhone 17) and the Duo (cover screen): tap opens Settings, unchanged.
+The test iPad was deleted (its prefix's root-owned overlay workdir stays, as for RAM 15's).
