@@ -24,6 +24,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <sys/prctl.h>
 #include <asm/prctl.h>
 #include <sys/syscall.h>
@@ -260,10 +262,165 @@ void gsample_start(GuestThread *t) {
     pthread_sigmask(SIG_SETMASK, &old, nullptr);
 }
 
+// Input 3 (debug): X86CODE_A64_GBT=1: every guest thread of the process is registered, and a host thread dumps all of
+// them on request: when <scratch>/gbt/req is newer than the last dump (tools/debug/gbt.sh touches it) or when gdb calls
+// a64_gbt_dump(). Per thread: Linux tid, the thunk it is in (host call in progress: its native wait), the kernel's
+// wchan and /proc syscall line, guest pc/lr/sp/fp, x0-x7, the mach message header at x0 for mach_msg thunks, and the
+// guest frame-pointer chain (40 frames). Output: <scratch>/gbt/<exe>.<pid>.txt (appended), addresses raw plus where()
+// for non-cache ones; tools/debug/gbt.sh symbolizes cache addresses with dscsym.py. Off: no registry, no thread.
+// read once at load (after the a64-penv constructor, priority 101): a plain load in CallSVC
+static const bool g_gbt_on = [] { const char *e = getenv("X86CODE_A64_GBT"); return e && atoi(e) == 1; }();
+static bool gbt_on() { return g_gbt_on; }
+struct GbtEnt { GuestThread *t; int tid; std::string proc; };  // proc: /proc/<pid>/task/<tid> as /proc sees it
+static std::mutex g_gbt_mu;
+static std::vector<GbtEnt> g_gbt_threads;
+static void gbt_start();
+static void gbt_register(GuestThread *t) {
+    if (!gbt_on()) return;
+    // Darling's container has its own pid namespace but sees the host's /proc: the thread's own entry, by readlink
+    char ts[128] = "";
+    const ssize_t n = readlink("/proc/thread-self", ts, sizeof ts - 1);
+    ts[n > 0 ? n : 0] = 0;
+    { std::lock_guard l(g_gbt_mu); g_gbt_threads.push_back({t, (int)syscall(SYS_gettid), n > 0 ? std::string("/proc/") + ts : ""}); }
+    gbt_start();
+}
+static void gbt_forget(GuestThread *t) {
+    if (!gbt_on()) return;
+    std::lock_guard l(g_gbt_mu);
+    g_gbt_threads.erase(std::remove_if(g_gbt_threads.begin(), g_gbt_threads.end(), [t](const GbtEnt &e) { return e.t == t; }), g_gbt_threads.end());
+}
+// guest memory that may be unmapped: pread of /proc/self/mem (process_vm_readv with the namespace pid failed here)
+static bool gbt_rd(u64 a, void *buf, size_t n) {
+    static int fd = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+    return fd >= 0 && pread(fd, buf, n, (off_t)(a & GuestThread::kTbi)) == (ssize_t)n;
+}
+static std::string gbt_procline(const std::string &proc, const char *what) {
+    std::string r;
+    if (proc.empty()) return r;
+    if (FILE *f = fopen((proc + "/" + what).c_str(), "r")) { char b[256]; if (fgets(b, sizeof b, f)) r = b; fclose(f); }
+    while (!r.empty() && (r.back() == '\n' || r.back() == ' ')) r.pop_back();
+    return r;
+}
+static std::string gbt_dir() { return scratch_dir() + "/gbt"; }
+extern "C" __attribute__((visibility("default"), used)) int a64_gbt_dump() {
+    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *b = exe ? strrchr(exe, '/') : nullptr;
+    b = b ? b + 1 : exe ? exe : "?";
+    mkdir(gbt_dir().c_str(), 0755);
+    const std::string fn = gbt_dir() + "/" + b + "." + std::to_string(getpid()) + ".txt";
+    FILE *o = fopen(fn.c_str(), "a");
+    if (!o) return -1;
+    timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    std::lock_guard l(g_gbt_mu);
+    fprintf(o, "=== gbt %s pid %d time %ld.%03ld threads %zu\n", b, (int)getpid(), (long)ts.tv_sec, ts.tv_nsec / 1000000, g_gbt_threads.size());
+    const u32 nth = thunk_count();
+    for (const GbtEnt &e : g_gbt_threads) {
+        GuestThread *t = e.t;
+        if (!t->jit) { fprintf(o, "--- tid %d: no jit\n", e.tid); continue; }
+        const int32_t th = t->in_thunk;
+        const char *thn = th >= 0 && (u32)th < nth ? g_thunks[th].name.c_str() : "";
+        // depth 0: not inside a guest call at all (an idle workqueue thread parked in Darling); the registers are stale
+        fprintf(o, "--- tid %d (%s) depth %d %s%s | wchan %s | syscall %s\n", e.tid, e.proc.c_str() + (e.proc.empty() ? 0 : 6), t->depth,
+                t->depth == 0 ? "idle (no guest call)" : th >= 0 ? "in thunk " : "running guest", t->depth && th >= 0 ? thn : "",
+                gbt_procline(e.proc, "wchan").c_str(), gbt_procline(e.proc, "syscall").c_str());
+        if (t->depth == 0) continue;
+        const u64 pc = t->jit->GetPC(), lr = t->x(30), sp = t->sp(), fp = t->x(29);
+        // tsd[3]: the thread's Mach port name (an os_unfair_lock's owner field), tsd[0]: its pthread_t
+        fprintf(o, "  pc %#lx lr %#lx sp %#lx fp %#lx port %#lx pthread %#lx\n  x0-7", (unsigned long)pc, (unsigned long)lr, (unsigned long)sp,
+                (unsigned long)fp, t->tsd ? (unsigned long)t->tsd[3] : 0ul, t->tsd ? (unsigned long)t->tsd[0] : 0ul);
+        for (int i = 0; i < 8; i++) fprintf(o, " %#lx", (unsigned long)t->x(i));
+        fputc('\n', o);
+        if (th >= 0 && strstr(thn, "mach_msg")) {
+            u32 h[6];  // bits, size, remote, local, voucher, id
+            if (gbt_rd(t->x(0), h, sizeof h))
+                fprintf(o, "  msg bits %#x size %u remote %#x local %#x voucher %#x id %u (%#x)\n", h[0], h[1], h[2], h[3], h[4], h[5], h[5]);
+        }
+        auto fr = [&](int k, u64 a) {
+            std::string w = a >= 0x1c0000000ull && a < 0x300000000ull ? "" : where(a);
+            fprintf(o, "  #%-2d %#lx %s\n", k, (unsigned long)a, w.c_str());
+        };
+        fr(-1, pc); fr(0, lr);
+        u64 f = fp;
+        for (int k = 1; k < 40 && f > 0x10000 && !(f & 7); k++) {
+            u64 two[2];
+            if (!gbt_rd(f, two, sizeof two)) break;
+            fr(k, two[1] & 0x0000ffffffffffffull);
+            if (two[0] <= f) break;
+            f = two[0];
+        }
+    }
+    fclose(o);
+    return 0;
+}
+// The process's Mach port space, written by the next guest thread to make a native call after a dump request (the
+// dumper thread is not a Darling thread and cannot make Mach calls): every name with its type and, for receive rights,
+// the queued message count, queue limit, send rights, send-once rights and port set. A message that stays queued on
+// a port while the process waits is a lost wakeup.
+static std::atomic<int> g_gbt_ports_req{0};
+static void gbt_ports_dump() {
+    using kr_t = int;
+    static auto *task_self = (unsigned *)dsym("mach_task_self_");
+    static auto *names = (kr_t (*)(unsigned, unsigned **, unsigned *, unsigned **, unsigned *))dsym("mach_port_names");
+    static auto *attrs = (kr_t (*)(unsigned, unsigned, int, int *, unsigned *))dsym("mach_port_get_attributes");
+    static auto *vmdealloc = (kr_t (*)(unsigned, uint64_t, uint64_t))dsym("vm_deallocate");
+    if (!task_self || !names || !attrs) return;
+    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *b = exe ? strrchr(exe, '/') : nullptr;
+    b = b ? b + 1 : exe ? exe : "?";
+    FILE *o = fopen((gbt_dir() + "/" + b + "." + std::to_string(getpid()) + ".ports.txt").c_str(), "a");
+    if (!o) return;
+    unsigned *nm = nullptr, *ty = nullptr, nn = 0, nt = 0;
+    timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    const kr_t kr = names(*task_self, &nm, &nn, &ty, &nt);
+    fprintf(o, "=== ports %s pid %d time %ld.%03ld kr %d names %u\n", b, (int)getpid(), (long)ts.tv_sec, ts.tv_nsec / 1000000, kr, nn);
+    unsigned dead = 0;
+    for (unsigned k = 0; kr == 0 && k < nn; k++) {
+        const unsigned t = ty[k];
+        if (t & 0x100000) { dead++; continue; }  // MACH_PORT_TYPE_DEAD_NAME: counted
+        if (!(t & 0x20000)) continue;            // MACH_PORT_TYPE_RECEIVE only
+        int st[10] = {}; unsigned cnt = 10;      // mach_port_status_t (MACH_PORT_RECEIVE_STATUS = 2)
+        attrs(*task_self, nm[k], 2, st, &cnt);
+        // pset, seqno, mscount, qlimit, msgcount, sorights, srights, pdrequest, nsrequest, flags
+        fprintf(o, "%#x type %#x pset %#x qlimit %d msgs %d sorights %d srights %d flags %#x%s\n", nm[k], t, st[0], st[3], st[4],
+                st[5], st[6] ? 1 : 0, st[9], st[4] ? "  <== queued" : "");
+    }
+    fprintf(o, "dead names %u\n", dead);
+    fclose(o);
+    if (vmdealloc && nm) { vmdealloc(*task_self, (uint64_t)nm, nn * 4ull); vmdealloc(*task_self, (uint64_t)ty, nt * 4ull); }
+}
+static void gbt_svc_hook() {
+    if (g_gbt_ports_req.load(std::memory_order_relaxed) && g_gbt_ports_req.exchange(0)) gbt_ports_dump();
+}
+static void gbt_start() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        sigset_t all, old;
+        sigfillset(&all);
+        pthread_sigmask(SIG_SETMASK, &all, &old);
+        std::thread([] {
+            g_non_darling_thread = true;
+            const std::string req = gbt_dir() + "/req";
+            struct stat st;
+            timespec last{};
+            if (stat(req.c_str(), &st) == 0) last = st.st_mtim;  // only requests made after the start
+            for (;;) {
+                sleep(1);
+                if (stat(req.c_str(), &st) != 0) continue;
+                if (st.st_mtim.tv_sec == last.tv_sec && st.st_mtim.tv_nsec == last.tv_nsec) continue;
+                last = st.st_mtim;
+                a64_gbt_dump();
+                g_gbt_ports_req = 1;
+            }
+        }).detach();
+        pthread_sigmask(SIG_SETMASK, &old, nullptr);
+    });
+}
+
 GuestThread &GuestThread::self() {
     if (!t_self) {
         t_owner.t = new GuestThread(); t_self = t_owner.t;
         gsample_register(t_self);
+        gbt_register(t_self);
         static unsigned long key = [] {
             unsigned long k = 0;
             auto *create = (int (*)(unsigned long *, void (*)(void *)))dsym("pthread_key_create");
@@ -638,7 +795,7 @@ void GuestThread::reset_after_unwind() {
     (void)jit.release();
     jit = make_jit(cfg);
 }
-GuestThread::~GuestThread() { susp_thread_fini(*this); gsample_forget(this); g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
+GuestThread::~GuestThread() { gbt_forget(this); susp_thread_fini(*this); gsample_forget(this); g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
 
 NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int nfps) {
     struct Saved {
@@ -906,6 +1063,7 @@ void GuestThread::CallSVC(uint32_t swi) {
             }
         }
         susp_safe_point();  // registers are in the Jit at an svc
+        if (gbt_on()) gbt_svc_hook();
         int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
         native = true;
         tsd_to_native();

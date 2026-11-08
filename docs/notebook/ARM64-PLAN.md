@@ -3621,3 +3621,85 @@ iPad speed (was blocked by this): openm N=2 on a healthy boot after an app pass 
 First response 0.61-0.82 s after the touch (iPhone 17: 0.38-0.40). Safari: not measured (its dock icon moves with the
 recent apps the iPad dock adds). Main phone (iPhone 17) and the Duo (cover screen): tap opens Settings, unchanged.
 The test iPad was deleted (its prefix's root-owned overlay workdir stays, as for RAM 15's).
+
+## Input 3: SpringBoard freeze (2026-11-08, test iPad Pro 13 M5 alone)
+
+Input 2's "SpringBoard wedge" after an app SIGKILL is two Darling bugs, both found by looking at the live processes.
+
+**Debugging method** (new): with `kernel.yama.ptrace_scope=0` gdb attaches to any Darling process from the host.
+- Host side: `gdb -iex 'set sysroot /' <ELF> -p <pid>` (`-iex`, not `-ex`: gdb otherwise reads the libraries as
+  `target:` paths inside the container's mount namespace and fails). darlingserver (`darling-prefix/bin/darlingserver`)
+  has full debug info: its registries, kqchans and duct-tape queues can be printed or walked with gdb Python. Guest
+  processes show only the host waits (recvmsg = a darlingserver RPC / Mach call, futex, epoll); `/proc/<pid>/task/*/
+  {wchan,syscall}` gives the same without stopping anything.
+- Guest side: **libarm64jit `X86CODE_A64_GBT=1`** (off by default; when off no registry, no thread, one constant test
+  per thunk call). Every guest thread is registered; a host thread per process dumps all of them when
+  `<scratch>/gbt/req` gets newer (or gdb calls `a64_gbt_dump()`) to `<scratch>/gbt/<exe>.<pid>.txt`: Linux tid (host
+  `/proc` path, wchan, syscall line), the thunk it is in (= its native wait), guest pc/lr/sp/fp, Mach thread port
+  (tsd[3], an os_unfair_lock's owner) and pthread_t, x0-x7, the Mach header at x0 for mach_msg, 40 frame-pointer
+  frames. The next native call of any guest thread after a request also writes `<exe>.<pid>.ports.txt`: every receive
+  right with its queued message count / qlimit / send rights (a queue that stays full while the process waits is a
+  lost wakeup). Enable per program with the a64-penv file (`SpringBoard X86CODE_A64_GBT=1`, no reboot of the other
+  processes needed beyond the program's own start). **tools/debug/gbt.py** touches the request, waits, and prints the
+  newest dump of each process with cache frames symbolized by dscsym.py (image + nearest export) and non-cache images
+  (placed dylibs, app executables, SpringBoard, SplashBoard) by their Mach-O symbol tables via the process's maps
+  (`-n`: no new request). An internal cache function shows as "<export below>+offset"; its first instructions
+  (dscsym.py <cache> <addr> <n>) and the ivar layout read from /proc/<pid>/mem identify it (that is how
+  `-[MTLSimCommandBuffer waitUntilCompleted]` was found).
+- The repro stays tests/arm64/gate/wedge.sh (PHONE=<suffix>, KILLSPOT=1 alternating); a capture script ran gbt.py,
+  the ports dump and /proc thread states on the wedge.
+
+**Bug 1: the kevent workqueue manager delivered one batch at a time and waited for it** (Darling libsystem_kernel,
+kevent_qos.c). Captured 3 times (wedge.sh transitions 20, 2, 42): SpringBoard's main thread idle in its run loop, but
+- a workloop thread rendering the killed app's switcher snapshot (`SBAppSwitcherSnapshotImageCache` ->
+  `XBApplicationSnapshotImageGenerator _generate` -> `SBSceneSnapshotDataProvider IOSurfaceForFormat:` ->
+  `SBCreateScaledIOSurface` -> CA -> `-[MTLSimCommandBuffer waitUntilCompleted]`, a pthread_cond_wait) held the
+  XBApplicationSnapshot lock (its Mach port = the os_unfair_lock owner field of a second thread waiting for it);
+- metalhostd had completed every command buffer committed to it (X86CODE_VKMTL_LOG=1: 260 commits, 260 done) and mtlvk
+  was idle: the "completed" message was in SpringBoard's port, never received;
+- the ports dump: 14 SpringBoard receive rights with queued messages (XPC connection ports full at 5/6 of qlimit 6),
+  and darlingserver's kqchans for exactly those ports had their notification sent and not acknowledged (gdb walk of
+  `processRegistry()` -> `_kqchannels`, `_canSendNotification == false`);
+- the process's kevent manager thread (a Darling pthread, no guest code) sat in `sem_down` in `wq_deliver`, waiting
+  for a kevent thread whose handler (QuartzCore) was in a `dispatch_sync` (`kevent_id` NOTE_WL_SYNC_WAIT) onto the
+  workloop the snapshot thread was draining.
+A cycle through the one manager: no event of the process (touches through backboardd, launches, SBS replies, Metal
+completions) could be delivered until that kevent thread returned. XNU requests a thread per batch and never waits;
+Darling's comment said so ("Batches are delivered one at a time; XNU can run several in parallel"). The iPad hits it
+because its SpringBoard generates the scaled switcher snapshot of the killed app on the transition, a blocking Metal
+wait inside a dispatch_sync chain; the iPhone's does not. Fix: `wq_deliver` takes one of 48 batch slots, starts the
+thread and returns; the returning thread applies its changes (`wq_batch_returned`, like the workloop batches'
+`returned` hook). Knotes stay quiet while their batch runs as before (EV_DISPATCH / ONESHOT / CLEAR), and event
+manager batches still run one at a time (wq_mgr_claim). With every slot busy the manager waits for one.
+
+**Bug 2: duct-tape condvar / mutex waiters re-queued their own link** (darlingserver duct-tape condvar.c, locks.c).
+With bug 1 fixed, the next wedge (transition 12, "open not taken") was a frozen system: darlingserver at 100% CPU in
+`dtape_condvar_signal(SIZE_MAX)` from `dtape_thread_wait_while_user_suspended`, resuming one thread for ever. The
+condvar's queue held one link whose `tqe_next` and `tqe_prev` pointed at itself: the suspender (an ExtensionKit
+extension suspending its own thread, `thread_wait` in a loop) was resumed by something other than the signal, still
+queued, and its next wait inserted the queued link again. `dtape_mutex_lock` had the same shape. Fix: a dequeued link
+gets `tqe_prev = NULL`; a waiter that wakes with its link still queued takes it out itself (condvar wait before it
+relocks the mutex, mutex lock at the top of its loop).
+
+**wedge.sh**: a home press that moves nothing is no longer a wedge by itself. In run g40 (both fixes) one was dropped
+while Calendar was still launching; once the app was killed the iPad sat on the home screen, where the second press
+draws nothing either, so it reported a wedge although the iPad answered normally a minute later (gbt: nothing blocked,
+no queued ports). Liveness is now the next open: its request taken in 60 s (a real wedge never takes it: openurl
+hangs in an SBS call) and frames drawn within 26 s.
+
+**Verified** (iPad Pro 13 M5 test device alone, KILLSPOT alternating):
+- before: wedges at transitions 20, 2, 42 (bug 1, three captures) in ~4 runs of 60;
+- bug 1 fixed only: 2 runs x 60 clean, then the bug 2 freeze at transition 12;
+- both fixed: **4 runs x 60 transitions, no wedge** (no dropped-home notes either), plus g40's false wedge above.
+- Main phone (iPhone 17): gate i3e **0 failed** (home t+3s, Settings cold t+4s, Maps cold t+8s; PSS after apps 1764 MB,
+  idle after the pass 1226; g1 before: 1922 / 1172). Fresh home +4 min 885 MB (41 procs). 35 boots in a row (launcher
+  and gate.sh's boot-a64.sh) drew their first frames in 12-16 s.
+- Gates i3 / i3b / i3d each had one failure that is not this: i3's home check read the clock "1:15" as "115" (the
+  FRESH test needs the current minute; home was up), i3b / i3d's google-results: on Google's "Trending searches"
+  variant of google.com the tap on the box focused nothing (6 standalone and gate-order reruns on the other variant
+  passed; i3e passed).
+- Open: one gate boot (i3c) hung before SpringBoard's first frame: its main thread in an os_unfair_lock wait
+  (`__ulock_wait`) for a lock owned by Mach port 0x1a03, the kevent manager idle in ep_poll (not bug 1), darlingserver
+  idle (not bug 2); not reproduced in the 35 boots after it, with or without X86CODE_A64_GBT. The same class as the new
+  iPad's first boot in Input 2 / this session (stopped before its ring existed, a stop and start booted it). Next time:
+  boot with `SpringBoard X86CODE_A64_GBT=1` in the a64-penv file, so the owner's backtrace is there.
