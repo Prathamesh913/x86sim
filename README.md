@@ -115,6 +115,9 @@ external/   git submodules: darling, dynarmic and metal2vulkan (x86code branches
 
 ## Setup
 
+Pre-built: the AppImage from the GitHub pre-releases sets itself up (host checks, Darling, iOS download, first
+phone) from the launcher's Setup page; see [docs/RELEASE.md](docs/RELEASE.md). From source:
+
 1. **Clone with submodules.**
    ```sh
    git clone --recursive https://github.com/x86code/x86code.git && cd x86code

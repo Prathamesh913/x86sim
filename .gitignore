@@ -124,3 +124,5 @@ core.[0-9]*
 !/host/simhid/SimulatorHID.framework/
 !/host/simhid/arm64/SimulatorHID.framework/
 /build/metal-research/toolchain/
+# release build outputs (build/release/build.sh, appimage.sh)
+/build/release/out/

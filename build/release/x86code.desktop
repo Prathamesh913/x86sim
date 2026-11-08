@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=x86Code
+Comment=Run Apple's iOS simulator on Linux
+Exec=x86code
+Icon=x86code
+Categories=Development;Emulator;
+Terminal=false
+StartupWMClass=x86code

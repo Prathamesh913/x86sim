@@ -1,0 +1,13 @@
+# x86Code CI: build the AppImage on every push to main and every pull request (artifact only, no release).
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml

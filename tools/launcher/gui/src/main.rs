@@ -5,6 +5,7 @@
 mod global;
 mod home;
 mod phone;
+mod setup;
 mod theme;
 mod viewer;
 
@@ -39,6 +40,7 @@ pub enum View {
     Ios,
     Aot,
     Settings,
+    Setup,
 }
 
 pub struct AddDialog {
@@ -93,6 +95,8 @@ pub struct App {
     pub measuring: bool,
     pub disk: host::Disk,
     pub last_slow: Instant,
+    pub setup: setup::Setup,
+    pub setup_checking: bool,
     pub ctx: egui::Context,
 }
 
@@ -162,7 +166,9 @@ impl App {
             "ios" => View::Ios,
             "aot" => View::Aot,
             "settings" => View::Settings,
+            "setup" => View::Setup,
             v if v.starts_with("phone:") => View::Phone(v[6..].to_string()),
+            _ if x86code_core::setup::needed() => View::Setup,
             _ => View::Home,
         };
         let mut open = HashSet::new();
@@ -206,6 +212,8 @@ impl App {
             measuring: false,
             disk: host::disk(&x86code_core::aot::scratch()),
             last_slow: Instant::now() - Duration::from_secs(60),
+            setup: setup::Setup::default(),
+            setup_checking: false,
             ctx: cc.egui_ctx.clone(),
         };
         if add_on_start {
@@ -352,6 +360,7 @@ impl App {
             View::Ios => "ios",
             View::Aot => "aot",
             View::Settings => "settings",
+            View::Setup => "setup",
         }
     }
 
@@ -448,6 +457,12 @@ impl eframe::App for App {
                     self.view = View::Settings;
                     self.last_slow = Instant::now() - Duration::from_secs(60);
                 }
+                if nav_item(ui, icon::WRENCH, "Setup", self.view == View::Setup, "", "") {
+                    self.view = View::Setup;
+                    self.setup.refresh(ui.ctx());
+                    self.setup_checking = true;
+                    self.refresh_instances();
+                }
                 // footer: host status, pinned to the bottom
                 let footer_h = 40.0 + if self.aot.building() { 30.0 } else { 0.0 };
                 ui.add_space((ui.available_height() - footer_h).max(S4));
@@ -474,7 +489,7 @@ impl eframe::App for App {
             View::Phone(id) => self.phone_view(ctx, &id),
             _ => {
                 egui::CentralPanel::default().frame(egui::Frame::new().fill(CANVAS)).show(ctx, |ui| {
-                    egui::ScrollArea::vertical().id_salt(match &view { View::Home => "home", View::Ios => "ios", View::Aot => "aot", _ => "settings" }).auto_shrink([false, false]).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt(match &view { View::Home => "home", View::Ios => "ios", View::Aot => "aot", View::Setup => "setup", _ => "settings" }).auto_shrink([false, false]).show(ui, |ui| {
                         // the page owns its margins so the scrollbar sits in the gutter, not on the content
                         egui::Frame::new().inner_margin(egui::Margin { left: S6 as i8, right: S6 as i8, top: S5 as i8, bottom: S6 as i8 }).show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -483,6 +498,7 @@ impl eframe::App for App {
                                 View::Ios => self.ios_page(ui),
                                 View::Aot => self.aot_page(ui),
                                 View::Settings => self.settings_page(ui),
+                                View::Setup => self.setup_page(ui),
                                 View::Phone(_) => {}
                             }
                         });

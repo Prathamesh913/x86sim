@@ -1,0 +1,28 @@
+#!/bin/sh
+# x86Code release build: packages for building Darling + our Linux pieces on Ubuntu 24.04 (the CI runner and the local
+# docker check in build/release/README in docs/RELEASE.md). Run as root (CI: sudo). LLVM_VERSION picks clang from
+# apt.llvm.org (our Darling fork is developed with clang 23; -fno-objc-constant-literals needs a recent clang).
+set -e
+LLVM_VERSION=${LLVM_VERSION:-23}
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q
+# Darling's own list (external/darling/debian/control), minus i386 (TARGET_i386=OFF), plus what our pieces and the
+# AppImage need (boost for dynarmic, squashfs/zsync for packing, file/desktop-file-utils for appimagetool's checks)
+apt-get install -y -q --no-install-recommends \
+	ca-certificates curl wget gnupg lsb-release software-properties-common git cmake ninja-build bison flex pkg-config python3 \
+	libfuse-dev libudev-dev libcairo2-dev libgl1-mesa-dev libglu1-mesa-dev libtiff5-dev libfreetype-dev libelf-dev \
+	libxml2-dev libegl1-mesa-dev libfontconfig1-dev libbsd-dev libxrandr-dev libxcursor-dev libgif-dev libavutil-dev \
+	libpulse-dev libavformat-dev libavcodec-dev libswresample-dev libdbus-1-dev libxkbfile-dev libssl-dev libcap-dev \
+	libcap2-bin libvulkan-dev libboost-dev xz-utils file desktop-file-utils squashfs-tools zsync patchelf build-essential ccache
+if ! command -v clang-$LLVM_VERSION >/dev/null; then
+	curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+	bash /tmp/llvm.sh "$LLVM_VERSION"
+	apt-get install -y -q --no-install-recommends lld-$LLVM_VERSION llvm-$LLVM_VERSION-dev libclang-$LLVM_VERSION-dev
+fi
+for t in clang clang++ ld.lld ld64.lld llvm-ar llvm-nm llvm-ranlib llvm-strip llvm-objcopy llvm-config lld; do
+	[ -x /usr/bin/$t-$LLVM_VERSION ] && ln -sfn /usr/bin/$t-$LLVM_VERSION /usr/local/bin/$t
+done
+clang --version | head -1
+# Darling's fseventsd (fanotify) includes <linux/types.h> with Darling's include path, which misses Debian's multiarch
+# asm/ dir (Arch and Fedora have /usr/include/asm)
+[ -e /usr/include/asm ] || ln -s x86_64-linux-gnu/asm /usr/include/asm

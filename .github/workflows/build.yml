@@ -1,0 +1,103 @@
+# x86Code: build the AppImage (reusable; called by ci.yml and release.yml). Everything is built from source on the
+# runner; nothing from Apple is present or downloaded (the iOS runtime is fetched by each user's own setup wizard).
+name: build
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: version string baked into the AppImage (default git describe)
+        type: string
+        default: ""
+    outputs:
+      name:
+        description: the AppImage file name
+        value: ${{ jobs.appimage.outputs.name }}
+
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      name: ${{ steps.pack.outputs.name }}
+    env:
+      OUT: ${{ github.workspace }}/build/release/out
+      CCACHE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 3G
+      CCACHE_COMPRESS: "1"
+    steps:
+      - name: Free disk space (the runner has ~14 GB free; Darling's checkout + build need ~12 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/graalvm /usr/local/share/powershell /usr/share/swift
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Submodules (shallow; the forks are public, SSH URLs rewritten to HTTPS)
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" --add
+          git submodule sync --recursive
+          git submodule update --init --depth 1 --jobs 8 external/metal2vulkan external/dynarmic
+          git submodule update --init --recursive --depth 1 --jobs 8 external/darling
+          du -sh external/*
+
+      - name: Packages
+        run: sudo build/release/deps-ubuntu.sh
+
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/release/out/cargo-mtlvk
+            build/release/out/cargo-launcher
+          key: cargo-${{ runner.os }}-${{ hashFiles('linux/mtlvk/Cargo.lock', 'tools/launcher/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build (Darling, arm64jit, arm64host, mtlvk, launcher)
+        run: |
+          JOBS=$(nproc) build/release/build.sh
+          ccache -s || true
+          du -sh build/release/out/* | sort -h | tail
+          df -h /
+
+      - name: Logs on failure
+        if: failure()
+        run: tail -n 80 build/release/out/*.log || true
+
+      - name: AppImage
+        id: pack
+        run: |
+          # the Darling build tree is not needed any more: room for the AppDir and squashfs
+          rm -rf build/release/out/dbuild/src
+          V="${{ inputs.version }}"
+          [ -n "$V" ] || V=$(git describe --tags --always)
+          VERSION=$V build/release/appimage.sh
+          echo "name=x86code-${V#v}-x86_64.AppImage" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86code-appimage
+          path: |
+            build/release/out/x86code-*.AppImage
+            build/release/out/x86code-*.AppImage.zsync
+            build/release/out/SHA256SUMS
+          retention-days: 14
+          compression-level: 0

@@ -29,7 +29,11 @@ import sys
 import threading
 import time
 
-import dns.exception
+# x86Code release: the AppImage carries dnspython (ISC) for hosts without python3-dnspython; run with -I, so the path
+# comes from X86CODE_PYLIB (set by the AppImage's entry), appended after the system's own packages
+if os.environ.get("X86CODE_PYLIB"):
+    sys.path.append(os.environ["X86CODE_PYLIB"])
+import dns.exception  # noqa: E402
 import dns.flags
 import dns.rdatatype
 import dns.resolver

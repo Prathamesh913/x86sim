@@ -7,6 +7,7 @@
 //!   x86code-aot [--jc DIR] config [KEY VALUE]            scope (hot|loaded|all), budget_mb, follow_features, training
 //!   x86code-aot features list|get ID|set ID on|off|preset full|lean|minimal [--device DIR]
 //!   x86code-aot sim status|start|stop|restart|show [--device DIR|NAME]   status: every phone
+//!   x86code-aot setup check|install-darling|link-runtime DIR|done [--json]   the launcher's setup steps (docs/RELEASE.md)
 use anyhow::{bail, Result};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -198,6 +199,34 @@ fn run() -> Result<()> {
                     println!("preset {name} (restart the sim to apply)");
                 }
                 _ => bail!("features list|get|set|preset"),
+            }
+        }
+        "setup" => {
+            use x86code_core::setup;
+            let sub = if args.is_empty() { "check".to_string() } else { args.remove(0) };
+            match sub.as_str() {
+                "check" => {
+                    let c = setup::checks();
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&c)?);
+                    } else {
+                        println!("x86Code {} · data {}", setup::version(), aot::repo_root().display());
+                        for k in &c {
+                            println!("{:5} {:20} {}{}", format!("{:?}", k.level).to_lowercase(), k.name, k.detail, if k.fix.is_empty() { String::new() } else { format!("\n{:27}{}", "", k.fix) });
+                        }
+                        println!("setup needed: {}", setup::needed());
+                    }
+                }
+                "install-darling" => {
+                    setup::install_darling(&|s| eprintln!("{s}"))?;
+                    println!("Darling installed in {}", setup::OPT_DARLING);
+                }
+                "link-runtime" => {
+                    let d = args.first().ok_or_else(|| anyhow::anyhow!("setup link-runtime DIR"))?;
+                    println!("runtimes/{}", setup::link_runtime(std::path::Path::new(d))?);
+                }
+                "done" => setup::mark_done()?,
+                _ => bail!("setup check|install-darling|link-runtime DIR|done"),
             }
         }
         "sim" => {

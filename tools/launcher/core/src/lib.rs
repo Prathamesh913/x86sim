@@ -14,4 +14,5 @@ pub mod key;
 pub mod logs;
 pub mod macho;
 pub mod ring;
+pub mod setup;
 pub mod sim;

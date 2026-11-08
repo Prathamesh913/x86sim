@@ -837,7 +837,7 @@ impl App {
 }
 
 /// A list row: icon tile, title + detail, trailing controls (right to left).
-fn list_row(ui: &mut egui::Ui, ic: &str, title_text: &str, detail: &str, trailing: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn list_row(ui: &mut egui::Ui, ic: &str, title_text: &str, detail: &str, trailing: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
@@ -856,7 +856,7 @@ fn list_row(ui: &mut egui::Ui, ic: &str, title_text: &str, detail: &str, trailin
 }
 
 /// A muted note under a list row, aligned with its title.
-fn note(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn note(ui: &mut egui::Ui, text: &str) {
     egui::Frame::new().inner_margin(egui::Margin { left: 60, right: 16, top: 0, bottom: 12 }).show(ui, |ui| {
         ui.add(egui::Label::new(muted(text)).wrap());
     });
@@ -869,7 +869,7 @@ fn ver_key(v: &str) -> (u32, u32, u32) {
 }
 
 /// A download's progress under its row: bar, amount, speed, time left, Cancel. Returns true when Cancel is clicked.
-fn fetch_progress(ui: &mut egui::Ui, f: &host::Fetch) -> bool {
+pub(crate) fn fetch_progress(ui: &mut egui::Ui, f: &host::Fetch) -> bool {
     let mut cancel = false;
     egui::Frame::new().inner_margin(egui::Margin { left: 60, right: 16, top: 0, bottom: 12 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
