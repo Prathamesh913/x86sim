@@ -123,6 +123,10 @@ START = time.time()
 # system apps and UI services (angels: the keyboard, Siri's UI) RunningBoard may background: never reclaimed here, and
 # never "the app in the foreground"
 NEVER = ("SpringBoard.app/", "PosterBoard.app/", "InputUI.app/", "Campo.app/")
+# The wallpaper's poster extension: SpringBoard asks it for the lock screen at every wake and unlock. Reclaimed as a
+# suspended extension, it was killed and relaunched in a loop ("came back 0 s after its kill") and an unlock that hit
+# the gap never undimmed, then froze. A device keeps the active poster's extension alive too.
+NEVER_EXT = ("MercuryPosterExtension.appex/",)
 # RAM 4: UI services reclaimed like a background app once RunningBoard says they show nothing (no visible scene, not
 # visible / NON_UI), after X86SIM_JETSAM_UISVC s, and never counted as "the app in the foreground". Spotlight: SpringBoard
 # starts it at boot in the background (role NON_UI, ~170 MB) and draws the home screen's Search pill itself; a pull-down
@@ -457,6 +461,8 @@ def sweep(verbose=False, status=False):
             # process-scoped services when the app is killed), not 10 s after RunningBoard suspends them: Safari kept
             # running in the background, its page's process killed, then sometimes relaunched (~200 MB at launch).
             if WEBKIT_WITH_APP and "com.apple.WebKit." in exe and host_apps:
+                continue
+            if any(k in exe for k in NEVER_EXT):
                 continue
             if sm and now - sm[0] > grace(exe, EXT):
                 killed.append((lpid, dpid, exe, "extension suspended %.0f s" % (now - sm[0])))
