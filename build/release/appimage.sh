@@ -42,7 +42,7 @@ echo "== payload (version $VERSION)"
 # our files, as committed (no gitignored Apple data can come along)
 git -C "$X" ls-files -z -- cli host linux tools/debug tools/runtime tests docs/RELEASE.md README.md LICENSE* \
 	| (cd "$X" && xargs -0 cp --parents -t "$P" 2>/dev/null) || true
-rm -rf "$P/linux/mtlvk/src" "$P/linux/arm64run" "$P/tests/metal/shaders"
+rm -rf "$P/linux/mtlvk/src" "$P/tests/metal/shaders"
 # build outputs at the paths the scripts and the launcher expect (repo-relative)
 mkdir -p "$P/linux/mtlvk/target/release" "$P/tools/launcher/target/release"
 cp "$OUT/cargo-mtlvk/release/mtlvk" "$P/linux/mtlvk/target/release/"

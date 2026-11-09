@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Live window showing the simulator's screen, with input.
-Frames come from host/simfb's shared-memory ring (cli/libexec/fbring.py; /dev/shm/x86code-simfb.ring); without a ring,
+Frames come from host/simfb's shared-memory ring (cli/libexec/fbring.py; /dev/shm/x86code-a64-simfb.ring); without a ring,
 from the framebuffer.bgra dump. x86Code: GTK 4: each new frame becomes a Gdk.MemoryTexture that the GPU scales to the
 window, checked on every tick of the display's frame clock (so up to the display's rate, ~60 fps). The Tk version
 spent ~200 ms redrawing each 590x1278 photo image (about 5 fps).
@@ -94,7 +94,7 @@ ring.path = device_ring()
 
 
 def initial_size():
-    """Device pixels from the live ring, else SIMULATOR_MAINSCREEN_*, else classic x86 1179x2556."""
+    """Device pixels from the live ring, else SIMULATOR_MAINSCREEN_*, else the iPhone 17's 1206x2622."""
     try:
         if ring._open() and ring.mm and ring.mm[:4] == b"SFBR":
             w, h = struct.unpack_from("<II", ring.mm, 16)
@@ -109,7 +109,7 @@ def initial_size():
             return w, h
     except ValueError:
         pass
-    return 1179, 2556
+    return 1206, 2622
 
 
 state = {"mtime": None, "size": initial_size(), "sock": None, "seq": None, "key": None, "fps": [], "mode": "one", "start": (0, 0)}

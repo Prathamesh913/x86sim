@@ -30,22 +30,18 @@ EAGER = {"com.apple.SpringBoard", "com.apple.backboardd", "com.apple.runningboar
          "com.apple.sleepd"}
 PREFIX = x86config.get("X86SIM_PREFIX")
 MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
-# x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by rundev.sh)
+# x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by cli/libexec/arm64/boot-a64.sh)
 AUDIO_SOCKET = os.environ.get("X86CODE_AUDIO_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "simaudio.sock")
 AUDIO = os.environ.get("X86CODE_AUDIO", "0") != "0"  # opt-in until playback works (FINDINGS 3.18)
 DARLING_VIEW = "/Volumes/SystemRoot"  # Linux / as seen inside Darling
-# x86Code: X86SIM_ARCH=arm64: a device for the arm64 runtime (iOS 27.0, run under libarm64jit; ARM64-PLAN stage 2):
-# arm64 device type (iPhone 17, iPhone18,3), arm64 builds of our in-simulator binaries (host/<name>/arm64/...; jobs
-# and shims without one are left out), no libkqueue_sim (the arm64 process's libsystem_kernel is Darling's own, behind
-# the svc thunks) and no x86_64 dyld cache. Unset: the x86_64 iOS 26.5 device, unchanged.
-ARM64 = os.environ.get("X86SIM_ARCH") == "arm64"
+# x86Code: a device for the arm64 runtime (iOS 27, run under libarm64jit): arm64 device types, arm64 builds of our
+# in-simulator binaries (host/<name>/arm64/...; jobs and shims without one are left out), no libkqueue_sim (the arm64
+# process's libsystem_kernel is Darling's own, behind the svc thunks).
 # RAM 3: launchd plist XPC activities no code registers any more (see the job loop): label -> activity identifiers
 STALE_ACTIVITIES = {"com.apple.searchd": ("com.apple.searchd.loadtrial", "com.apple.searchd.defrag",
                                           "com.apple.searchd.sendmlfeedback")}
 DEVTYPE ={"model": "iPhone18,3", "class": "V57", "w": "1206", "h": "2622", "json": "devicetype-iphone18,3.json",
-           "version": "27.0", "build": "24A434", "arch": "arm64"} if ARM64 else \
-          {"model": "iPhone17,3", "class": "D47", "w": "1179", "h": "2556", "json": "devicetype-iphone17,3.json",
-           "version": "26.5", "build": "23F73", "arch": "x86_64"}
+           "version": "27.0", "build": "24A434", "arch": "arm64"}
 
 
 # Speed 22: arm64 devices of other models. <device>/model names an entry of cli/lib/devicetypes-a64.json (Xcode 27.2's
@@ -55,8 +51,6 @@ DEVTYPES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def device_type(device):
-    if not ARM64:
-        return dict(DEVTYPE, scale="3.000000", pitch="460.000000", suffix="iphone")
     try:
         name = open(os.path.join(device, "model")).read().strip()
     except OSError:
@@ -78,10 +72,8 @@ def device_type(device):
 
 
 def host_path(rel):
-    """Linux path of one of our in-simulator binaries (rel: host/<name>/...); for arm64 host/<name>/arm64/..., or
-    None if that build doesn't exist."""
-    if not ARM64:
-        return PROJECT + "/" + rel
+    """Linux path of the arm64 build of one of our in-simulator binaries (rel: host/<name>/... -> host/<name>/arm64/...),
+    or None if that build doesn't exist."""
     a, b, rest = rel.split("/", 2)
     p = "/".join([PROJECT, a, b, "arm64", rest])
     return p if os.path.exists(p) else None
@@ -181,14 +173,13 @@ def main():
     # launchd_sim does not see them as angels, RunningBoard says osservice<com.apple.campo> is no angel, FrontBoard gives
     # Campo a plain FBProcess and SpringBoard's Siri scene transaction asserts ("process was nil").
     angels = device + "/LaunchAngels"
-    if ARM64:
-        # launchd_sim takes a plist's path from the open file (F_GETPATH: canonical) and makes the job an angel only
-        # if it starts with <SimulatorRuntimeRoot>/System/Library/LaunchAngels/. So the device's angels go into its
-        # own hidden subdirectory of the runtime's (real) LaunchAngels directory, and SimulatorRuntimeRoot (below)
-        # is the canonical runtime path, as the cryptex mount is on a Mac.
-        shutil.rmtree(angels, ignore_errors=True)
-        angels = os.path.join(os.path.realpath(os.path.join(RUNTIME, "System/Library/LaunchAngels")),
-                              ".x86code-" + os.path.basename(os.path.abspath(device)))
+    # launchd_sim takes a plist's path from the open file (F_GETPATH: canonical) and makes the job an angel only
+    # if it starts with <SimulatorRuntimeRoot>/System/Library/LaunchAngels/. So the device's angels go into its
+    # own hidden subdirectory of the runtime's (real) LaunchAngels directory, and SimulatorRuntimeRoot (below)
+    # is the canonical runtime path, as the cryptex mount is on a Mac.
+    shutil.rmtree(angels, ignore_errors=True)
+    angels = os.path.join(os.path.realpath(os.path.join(RUNTIME, "System/Library/LaunchAngels")),
+                          ".x86code-" + os.path.basename(os.path.abspath(device)))
     shutil.rmtree(angels, ignore_errors=True)
     os.makedirs(angels)
     for job in jobs:
@@ -243,7 +234,7 @@ def main():
         # late BKSHIDEventDeliveryManager init sees a nil connection and brk#0. Keep RunAtLoad for now
         # (home needs SB); sleepd EAGER above is the cold-boot BKS stabilizer. Optional delay: set
         # X86CODE_DELAY_SB=1 to drop SpringBoard RunAtLoad (caller must kickstart after backboardd).
-        if ARM64 and job == "com.apple.SpringBoard" and os.environ.get("X86CODE_DELAY_SB") == "1":
+        if job == "com.apple.SpringBoard" and os.environ.get("X86CODE_DELAY_SB") == "1":
             plist.pop("RunAtLoad", None)
         if os.environ.get("X86CODE_JOBLOG") == "1":
             # X86CODE_JOBLOG=1: job output and os_log (OS_ACTIVITY_DT_MODE) to data/var/log/<label>.log
@@ -263,7 +254,7 @@ def main():
         # lookup posted "availability changed": the keyboard dock re-checked, the app's main thread spun (~75% CPU),
         # hardware keys never reached the text field, and Siri had no assistant. X86SIM_ASSISTANTD=dictation: the old
         # slim plist (experiments only; it turns features off).
-        if ARM64 and job == "com.apple.assistantd" and os.environ.get("X86SIM_ASSISTANTD") == "dictation":
+        if job == "com.apple.assistantd" and os.environ.get("X86SIM_ASSISTANTD") == "dictation":
             plist.pop("LaunchEvents", None)
             keep = os.environ.get("X86SIM_ASSISTANTD_MACH", "com.apple.assistant.dictation").split(",")
             plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
@@ -288,7 +279,7 @@ def main():
     # with the symlinked root _dyld_shared_cache_contains_path("<root>/System/Library/Frameworks/WebKit.framework/WebKit")
     # was false: CFBundle found no executable for cache-only frameworks and WebKit's WebContent/Networking/GPU services
     # exited at once ("Unable to find entry point in WebKit.framework"): Safari never loaded a page.
-    rt, home = darling(os.path.realpath(RUNTIME) if ARM64 else RUNTIME), darling(data)
+    rt, home = darling(os.path.realpath(RUNTIME)), darling(data)
     # x86Code: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
     capabilities = device + "/capabilities.plist"
     dt = device_type(device)
@@ -329,7 +320,7 @@ def main():
                            "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
 
     # x86Code: the Metal stand-in (host/metalhostd): metalhostd serves the simulator's Metal transport on mtlvk
-    # (Vulkan, a Linux process; cli/libexec/rundev.sh starts it and sets X86CODE_METAL=all unless told otherwise).
+    # (Vulkan, a Linux process; cli/libexec/arm64/boot-a64.sh starts it and sets X86CODE_METAL=all unless told otherwise).
     # Here (mksimdevice alone) it is opt-in: X86CODE_METAL=1 registers
     # it for the test client (process "mtlprobe"), X86CODE_METAL=name,name for those processes,
     # X86CODE_METAL=all also under the generic com.apple.metal.simulator, which hands a device to every process
@@ -390,12 +381,11 @@ def main():
                            "ProgramArguments": ["/bin/launchctl", "bootstrap", "system", darling(daemons)],
                            "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
     # Darling's libkqueue for processes on the runtime's libSystem (see docs/notebook/FINDINGS.md)
-    kqueue_sim = darling(PREFIX + "/libexec/darling/usr/lib/darling/libkqueue_sim.dylib")
     child_defaults = {
         # X86CODE_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
         # simshim: stand-ins for host services (host/simshim/compat/simshim.c)
         # simaudio: the audio devices (host/simaudio, opt-in: X86CODE_AUDIO=1)
-        "DYLD_INSERT_LIBRARIES": ":".join(([] if ARM64 else [kqueue_sim]) +
+        "DYLD_INSERT_LIBRARIES": ":".join(
                                           [darling(p) for p in [host_path("host/simshim/compat/libsimshim.dylib")] if p] +
                                           [darling(p) for p in [host_path("host/simaudio/libsimaudio.dylib")] if p and AUDIO] + [darling(os.path.abspath(p))
                                           for p in os.environ.get("X86CODE_INSERT", "").split(":") if p]),
@@ -405,11 +395,6 @@ def main():
         "DYLD_FALLBACK_FRAMEWORK_PATH": rt + "/System/Library/Frameworks",
         "DYLD_FALLBACK_LIBRARY_PATH": rt + "/usr/lib",
     }
-    # the x86_64 dyld shared cache (build/mac-build-dyldcache.sh; FINDINGS, dyld shared cache): dyld_sim maps it at 0x7FF800000000,
-    # which Darling's mldr reserves for processes that have this variable. X86SIM_DYLD_CACHE=0: no cache
-    cache = os.path.join(PROJECT, "runtimes", "dyld-cache-23F73-x86_64")
-    if not ARM64 and os.environ.get("X86SIM_DYLD_CACHE", "1") != "0" and os.path.isfile(cache + "/dyld_sim_shared_cache_x86_64"):
-        child_defaults["DYLD_SHARED_CACHE_DIR"] = darling(cache) + "/"
     env = dict(child_defaults)
     env.update({
         "DYLD_ROOT_PATH": rt,
@@ -420,25 +405,24 @@ def main():
         "PATH": ":".join(rt + p for p in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
         "SIMULATOR_ARCHS": DEVTYPE["arch"],
         # x86Code: libarm64jit's log (guest crashes, unimplemented thunks) per process, inside the container
-        **({"X86CODE_A64_LOG": "/private/var/tmp/x86code-a64"} if ARM64 else {}),
+        **({"X86CODE_A64_LOG": "/private/var/tmp/x86code-a64"}),
         # x86Code: glibc malloc of libarm64jit/dynarmic (the ELF side): one arena per thread kept tens of MB of freed
         # JIT metadata resident per thread; two arenas for the process
         # RAM 1: A64_GLIBC_TUNABLES_EXTRA appends tunables (e.g. glibc.mem.decorate_maps=1 names arenas/stacks in smaps)
         **({"GLIBC_TUNABLES": ":".join(filter(None, ["glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576",
-                                                     os.environ.get("A64_GLIBC_TUNABLES_EXTRA", "")]))} if ARM64 else {}),
-        # x86Code: its own frame ring, so an x86_64 device's viewers are not disturbed
+                                                     os.environ.get("A64_GLIBC_TUNABLES_EXTRA", "")]))}),
         # Speed 8: in /run/user/<uid> (the arm64 container's /dev/shm is private, X86CODE_PRIVATE_SHM); boot-a64.sh links
         # /dev/shm/x86code-a64-simfb.ring to it for the host's viewers
         # one ring per phone, named like the launcher's ring_for (instance.rs): device-a64 -> x86code-a64-simfb.ring,
         # device-a64-<name> -> x86code-a64-<name>-simfb.ring. A shared default let a second phone's boot recreate the
         # main phone's ring, freezing its screen while its apps ran on.
         **({"SIMFB_RING": os.environ.get("SIMFB_RING") or "/Volumes/SystemRoot/run/user/%d/x86code-%s-simfb.ring" % (
-            os.getuid(), os.path.basename(device.rstrip("/")).removeprefix("device-"))} if ARM64 else {}),
+            os.getuid(), os.path.basename(device.rstrip("/")).removeprefix("device-"))}),
         # Speed 3: launchd jobs only see Bootstrap.Child, so the JIT flags must be copied here to reach backboardd and
         # SpringBoard. Speed 6: every X86CODE_A64_* flag (was a list that missed new ones, e.g. PERFMAP).
         **({k: v for k, v in os.environ.items()
             if (k.startswith("X86CODE_A64_") and k not in ("X86CODE_A64_EXE", "X86CODE_A64_LOG")) or k == "SIMFB_HZ"}
-           if ARM64 else {}),
+          ),
         "SIMULATOR_UDID": udid,
         "SIMULATOR_DEVICE_NAME": dt.get("name", "x86code"),
         "SIMULATOR_RUNTIME_VERSION": dt["version"],

@@ -16,7 +16,7 @@
     cli/libexec/simtouch.py dismiss [rounds]               answer permission prompts on screen (location: "Allow While Using
                                                       App", notifications/others: "Allow"), found by OCR (tesseract)
     cli/libexec/simtouch.py openurl <url>                  open a URL (as `simctl openurl`); needs the boot's openurl job:
-                                                      com.x86code.openurl (cli/libexec/rundev.sh starts it; log:
+                                                      com.x86code.openurl (the phone's boot starts it; log:
                                                       var/device/data/var/log/x86code-openurl.log)"""
 import os, socket, struct, sys, time
 
@@ -28,7 +28,7 @@ SOCK = os.environ.get("SIMHID_SOCKET", os.path.join(x86config.data(), "simhid.so
 
 
 def device_size():
-    """Prefer the live frame ring, then SIMULATOR_MAINSCREEN_*, then the classic x86 1179x2556."""
+    """Prefer the live frame ring, then SIMULATOR_MAINSCREEN_*, then the iPhone 17's 1206x2622."""
     try:
         r = fbring.Ring()
         if r._open() and r.mm and r.mm[:4] == b"SFBR":
@@ -44,7 +44,7 @@ def device_size():
             return w, h
     except ValueError:
         pass
-    return 1179, 2556
+    return 1206, 2622
 
 
 W, H = device_size()

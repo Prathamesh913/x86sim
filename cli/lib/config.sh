@@ -13,8 +13,9 @@ _cfg=${X86SIM_CONFIG:-$X86SIM_ROOT/x86sim.env}
 if [ -f "$_cfg" ]; then . "$_cfg"; fi
 for _k in $_x86sim_saved; do eval "$_k=\$_x86sim_env_$_k"; done
 : "${X86SIM_PREFIX:=$X86SIM_ROOT/darling-prefix}"
-: "${X86SIM_RUNTIME:=$X86SIM_ROOT/runtimes/ios-26.5-23F73-universal/extracted/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot}"
-: "${X86SIM_DEVICE:=$X86SIM_ROOT/var/device}"
+: "${X86SIM_ARCH:=arm64}"
+: "${X86SIM_RUNTIME:=$X86SIM_ROOT/runtimes/ios-27.2-24B8117-arm64/RuntimeRoot}"
+: "${X86SIM_DEVICE:=$X86SIM_ROOT/var/device-a64}"
 : "${X86SIM_STATE:=$X86SIM_ROOT/var/run}"
 : "${X86SIM_SCRATCH:=$HOME/scratch/x86code}"
 : "${X86SIM_MTLVK:=$X86SIM_ROOT/linux/mtlvk/target/release/mtlvk}"
@@ -26,11 +27,11 @@ for _k in $_x86sim_saved; do eval "$_k=\$_x86sim_env_$_k"; done
 # Darling build directory (cmake -B)
 : "${X86SIM_DARLING_BUILD:=$X86SIM_ROOT/external/darling/build}"
 : "${X86SIM_DPREFIX:=${DPREFIX:-$HOME/.darling}}"   # the Darling container prefix (DPREFIX)
-export X86SIM_ROOT X86SIM_PREFIX X86SIM_RUNTIME X86SIM_DEVICE X86SIM_STATE X86SIM_SCRATCH X86SIM_MTLVK X86SIM_MAC \
+export X86SIM_ARCH X86SIM_ROOT X86SIM_PREFIX X86SIM_RUNTIME X86SIM_DEVICE X86SIM_STATE X86SIM_SCRATCH X86SIM_MTLVK X86SIM_MAC \
 	X86SIM_SITE X86SIM_SITE_PORT X86SIM_SCREENS X86SIM_BOOT_SECS X86SIM_DPREFIX X86SIM_DARLING_BUILD
 for _k in X86CODE_METAL MTLVK_DEVICE VK_ICD_FILENAMES MESA_VK_DEVICE_SELECT; do eval "if [ -n \"\${$_k+x}\" ]; then export $_k; fi"; done
-# arm64 effort: its frame ring unless the caller chose one (X86SIM_ARCH unset changes nothing)
-if [ "${X86SIM_ARCH:-}" = arm64 ] && [ -z "${SIMFB_RING_LINUX+x}" ]; then export SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring; fi
+# the phone's frame ring unless the caller chose one
+if [ -z "${SIMFB_RING_LINUX+x}" ]; then export SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring; fi
 # derived
 X86SIM_DARLING="$X86SIM_PREFIX/bin/darling"
 X86SIM_DVIEW=/Volumes/SystemRoot   # Linux / as seen inside Darling

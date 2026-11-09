@@ -20,14 +20,11 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | Host mDNSResponder | linux/mdnsd | Unicast DNS (GetAddrInfo, QueryRecord). Register/Browse/Resolve are accepted but return nothing (no multicast DNS, no Bonjour). |
 | Host configd (network state for configd_sim's SimulatorSupport) | linux/hostnet + host/netconfig + com.x86code.host-configd | A snapshot of the default-route interface at boot; not updated when Linux networking changes. |
 | Host fileproviderd (com.apple.FileProvider.sim2host) | host/fpsim2host | All 16 methods. Dataless files are SF_DATALESS + a sparse file of the logical size: nothing faults on read (materialization handlers are kept but never called); purgeable and sync-root marks are only recorded (xattrs). |
-| Host fseventsd (com.apple.FSEvents) | host/fseventsd + Darling syscall 598 (inotify) | Live events for registered paths (trees watched with inotify), volume UUID, persistent event ids, stream latency (and NoDefer, flush), event history across boots for the trees of streams that ask for history (a journal of their events; changes made while no daemon ran are found at startup by comparing the trees with a manifest of the last run and journaled as created/removed/modified, without rename pairing or inode/xattr changes). Paths outside those trees get MustScanSubDirs, as before; streams on `/` watch and journal only the device's data directory. |
 | `simctl openurl` / `simctl launch` / terminate / get_app_container / listapps / push / location / addmedia / io | host/openurl (com.x86code.openurl) + cli/libexec/simctl.py | Opens through FrontBoard's open-application service with the Bridge's debug options (arguments, environment, `--console` through stdout/stderr files the CLI follows, `--wait-for-debugger`), carrying the Bridge's entitlements. `--console` follows stdout/stderr files; `--console-pty` gives the app a Linux pty (opened by path through `/Volumes/SystemRoot/dev/pts/N`). `location` (set/clear/list/run/start) goes through CLSimulationManager to locationd as on a Mac. |
-| LLDB debugging (Xcode's debugserver) | host/debugserver (llvm-project debugserver, macOS x86_64) + Linux lldb (`x86sim debug`) | Breakpoints, stepping, backtraces with symbols, expression evaluation in C/Objective-C (`po`, calls into the app, JIT'ed expressions). Swift expressions need a Swift-enabled LLDB (Linux distributions' lldb has no Swift plugin); LLDB warns that it could not read Objective-C class data from the shared cache (there is none: every class is read through the dynamic path). |
 | `simctl install` / `uninstall` (CoreSimulatorBridge in the device) | host/openurl + cli/libexec/appinstall.sh | Same call as CoreSimulatorBridge (IXAppInstallCoordinator with developer MIInstallOptions), from a launchd job instead of the Bridge; the bundle is first copied into the device's tmp directory (staging), installd then copies it as on a Mac. No `installationInfo` result, no app data containers (`simctl install_app_data`). |
-| Device type (CoreSimulator's `.simdevicetype`: capabilities.plist via `SIMULATOR_CAPABILITIES`) | cli/lib/devicetype-iphone17,3.json, mksimdevice.py | iPhone 16 only (the screen size the device is made with). The profile's other parts (chrome, framebuffer mask PDF, sensor-bar image) are not used. |
-| `simctl privacy grant` / provisioned test device | cli/libexec/seedperms.py | Writes TCC, location and notification answers into the device for the apps tested. |
-| Host /System/Library/Frameworks lookups by absolute path | run-launchd-sim.sh (CoreSpotlight link into the Darling prefix) | Only CoreSpotlight; others the simulator might open on the host path are absent. |
-| Host time zone (/etc/localtime) | run-launchd-sim.sh | Links the container's /private/etc/localtime to Linux's zone. |
+| Device type (CoreSimulator's `.simdevicetype`: capabilities.plist via `SIMULATOR_CAPABILITIES`) | cli/lib/devicetypes-a64.json, cli/lib/devicetype-*.json, mksimdevice.py | The models in devicetypes-a64.json (`<device>/model`). The profile's other parts (chrome, framebuffer mask PDF, sensor-bar image) are not used. |
+| Host /System/Library lookups by absolute path | cli/libexec/arm64/boot-a64.sh (links into the Darling prefix) | CoreSpotlight.framework (the runtime's copy) and host data fetched from a Mac by fetch-macos-host.sh (GeoServicesData); others the simulator might open on the host path are absent. |
+| Host time zone (/etc/localtime) | cli/libexec/arm64/boot-inner.sh | Links the container's /private/etc/localtime to Linux's zone. |
 | Host macOS version seen by simulator processes | Darling sysctl_kern.c: kern.osproductversion = 26.4 for iOS-simulator processes | A fixed value; the real host is Linux. |
 
 ## Workarounds in the simulator processes (W)
@@ -42,12 +39,12 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | **System power** registration that never fires | simshim.c | Darling's iokitd has no IOPMrootDomain; the device never sleeps. |
 | **csops entitlement blobs** go to Darling's syscall instead of libsystem_sim_kernel's | simshim.c | The runtime's version fails a short buffer with ENOENT instead of ERANGE. Faithful fix would be in the runtime (not ours) or a matching kernel answer. |
 | **Siri session language** pre-set (`com.apple.assistant.backedup` "Session Language" = en-US) | mksimdevice.py | assistantd would set it on a Mac's device; without it AFPreferences recomputes in a loop on the main thread. |
-| **Permission prompts answered by OCR** (`x86sim dismiss`: tesseract finds "Allow" buttons and taps them) | simtouch.py | For prompts seedperms.py does not pre-answer. Test convenience only. |
-| **Daemons left out of the standard boot**: logd, diagnosticd (see above) | rundev.sh | Each is an open bug, not a design choice. (revisiond and suggestd were left out too and are started now: FINDINGS 3.14, 3.16.) |
+| **Permission prompts answered by OCR** (`x86sim dismiss`: tesseract finds "Allow" buttons and taps them) | simtouch.py | Test convenience only. |
+| **Daemons left out of the standard boot**: logd (see above) | cli/libexec/arm64/boot-a64.sh | An open bug, not a design choice. |
 | **Package lookup by extension** (fpsim2host pkgLookup: a directory whose extension is a registered package UTType is a package) | host/fpsim2host | Linux file systems carry no bundle bit; a Mac's host does the same LaunchServices check. |
 | **os_log for one app through libsimshim** (`x86sim launch --oslog`, `log stream --app`): messages formatted into a file | host/simshim (oslogdiag.m built in) | Formats like the shim, not like logd (privacy annotations ignored, no subsystem/category columns). Faithful: logd + diagnosticd. |
-| **The standard boot lists its jobs** (about 70 labels in rundev.sh) instead of loading every LaunchDaemon of the runtime | rundev.sh | Jobs are added as apps need them, each with the reason in a comment. A Mac's device loads the whole set. |
-| **Fresh container per boot**: killsim.sh kills every Darling process, then `darling shutdown` | run-launchd-sim.sh | Leftover processes and two launchd_sims on one device break new boots; killing processes inside a running container leaves darlingserver in a state where new jobs hang. |
+| **The standard boot lists its jobs** (`A64_JOBS` sets in boot-a64.sh, trimmed by the device's feature toggles) instead of loading every LaunchDaemon of the runtime | cli/libexec/arm64/boot-a64.sh | Jobs are added as apps need them, each with the reason in a comment. A Mac's device loads the whole set. |
+| **Fresh container per boot**: the phone's previous container is stopped (its own processes, found by exact checks, then `darling shutdown` and a sweep of what it misses) | cli/libexec/arm64/boot-a64.sh | Leftover processes and two launchd_sims on one device break new boots; killing processes inside a running container leaves darlingserver in a state where new jobs hang. |
 | **statfs reports `apfs`** for local Linux file systems | Darling (libsystem_kernel statfs conversion) | FileProvider only accepts APFS volumes (the iOS simulator only runs on APFS). |
 | **chflags flags stored in an xattr** (`user.x86code.bsdflags`, hidden from listxattr) | Darling (helper/misc/bsdflags.h) | Linux has no BSD file flags; this keeps them per file across processes. |
 | **fsctl answers APFS requests as for a plain directory tree**; unknown ones ENOTTY | Darling (misc/fsctl.c) | Enough for FileProvider's sync-root and dir-stat queries. |
@@ -56,14 +53,13 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | **Document ids are the inode's low 32 bits**; fsgetpath/openbyid_np resolve ids (and object id 2, the volume root) only from paths some process got from getattrlist | Darling (getattrlist_generic.c, misc/fsgetpath.c) | Linux can't open by inode number. A file nobody has stat'ed through getattrlist since its id was handed out cannot be found by id. |
 | **setattrlist ACL / owner UUIDs accepted and ignored**; getattrlist answers the newer volume attributes (FSTYPENAME = statfs's "apfs", MOUNTEXTFLAGS/FSSUBTYPE/OWNER 0, SPACEUSED) | Darling (helper/xattr/setattrlist_generic.c, getattrlist_generic.c) | Linux files here have no ACLs; installd's staging removes ACLs and reads the volume type. |
 | **VRAM render targets**: a render-target texture over an IOSurface of >= 1M pixels is a device-local texture in mtlvk, copied to the surface's pages at the end of each command buffer that wrote it | linux/mtlvk (conn.rs; `MTLVK_VRAM_TARGETS=0` off, `MTLVK_VRAM_MIN_PIXELS`) | Drawing into imported host pages made each blended layer cross PCIe (8-12 ms GPU per frame). CPU writes to such a surface after the texture was made are not seen by the GPU (small surfaces stay in host pages for that reason: iconservicesagent's icons). Faithful: IOSurfaces allocated in GPU memory with explicit CPU access (lock/unlock) synchronization, as on a Mac. |
-| **Debugger helpers**: darlingserver's `mach_vm_page_range_query`/`mach_vm_page_query` report every page resident; our debugserver build falls back to x86_64 when it finds no main binary (an app stopped at its first instruction has no dyld image list yet) | Darling (darlingserver memory.c); build/mac-build-debugserver.sh (DNBArch.cpp patch) | Linux has no cheap per-page residency of another process. Faithful: the dyld image list (all_image_infos) available at the first instruction, as on XNU. |
 | `NOTE_WL_SYNC_IPC` knotes accepted as no-ops; `memorystatus_control`, `kqueue_workloop_ctl` succeed | Darling (darling-xnu, libkqueue) | No memory pressure / jetsam, no sync-IPC priority inheritance. |
 | `SIOCGCONNINFO` left ENOTTY | Darling (sockets) | Answering it made Network.framework abort on a recursive lock. |
-| Runtime symlinks that 7-Zip skips or writes empty | tools/runtime/extract-runtime.py | Made again from the image's own listing after extraction (README setup step 2). |
+| Runtime symlinks that 7-Zip skips or writes empty | tools/runtime/extract-runtime.py | Made again from the image's own listing after extraction (DEVELOPMENT.md setup step 2). |
 
 ## Diagnostics that change behaviour only when enabled (opt-in)
 
-`host/simshim/diag/*` (via `X86CODE_INSERT`), `X86CODE_SHIMLOG`, `X86CODE_JOBLOG` (default on in rundev),
+`host/simshim/diag/*` (via `X86CODE_INSERT`), `X86CODE_SHIMLOG`, `X86CODE_JOBLOG` (default on in boot-a64.sh),
 `X86CODE_KEEPALIVE`, `MTLVK_LOG`, `MTLVK_DUMP_PASSES`/`MTLVK_DUMP_REPLACE`, `X86CODE_VKMTL_LOG`/`X86CODE_VKMTL_DUMP`,
 `X86CODE_IOSURFACE_LOG`, `X86CODE_MDNS_LOG`. They are not workarounds but are listed so they are not mistaken for
 required parts.
@@ -84,10 +80,6 @@ required parts.
 - Home indicator gestures: a swipe up from the bottom edge doesn't go home or open the app switcher. Check that
   simview/simhid send edge-swipe touches the way SpringBoard's system gesture recognizers expect (edge/region flags,
   digitizer surface events).
-- iOS 27.x (foldable iPhone etc.): BLOCKED on architecture. Checked 2026-10-28 on the Mac (Xcode 27.1): the iOS 27.0
-  runtime (24A434) supports arm64 only, and so does 26.5 23F77; 23F73 is the last universal (x86_64) runtime. Running
-  27.x would need either arm64 code running on x86_64 Linux (binary translation of the whole runtime: a large project
-  with a heavy perf cost) or porting the stack to arm64 Linux hardware (Darling is x86_64 only today). Needs a decision.
 - Apple's simulator MCP server: research what Apple ships (which tool, the transport, and which simctl/CoreSimulator calls
   it makes) and make it work against x86sim. If it needs macOS, provide a compatible MCP server on Linux backed by x86sim
   (boot, install, launch, screenshot, tap/type, logs).
@@ -98,4 +90,4 @@ required parts.
   `X86CODE_AUDIO=1`; AVAudioEngine fails at the output unit's initialize (FINDINGS 3.18). A faithful version would
   answer coreaudiod's MIG protocol on `com.apple.audio.audiohald`.
 - Clipboard sync (`x86sim pbcopy/pbpaste`, Linux clipboard <-> pasted), rotation (`x86sim rotate`), software
-  keyboard toggle, Swift expressions in LLDB (swift.org toolchain's lldb): not started.
+  keyboard toggle: not started.

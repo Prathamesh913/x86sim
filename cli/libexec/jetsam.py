@@ -139,7 +139,7 @@ _seen = {}        # (dpid, start) -> {"bg": since, "clean": since, "cpu": [(t, c
 
 def container_ns():
     """The pid namespace of X86SIM_DPREFIX's container (its darlingserver's children), or None. Several containers can
-    run at once (the arm64 device next to the x86_64 one, or a second arm64 instance): their Darling pids overlap."""
+    run at once (two phones): their Darling pids overlap."""
     prefix = os.path.realpath(PREFIX)
     servers = set()
     kids = {}

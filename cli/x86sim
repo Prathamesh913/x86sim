@@ -1,5 +1,6 @@
 #!/bin/bash
-# x86sim: front end for the iOS simulator on Linux (Darling + the iOS 26.5 x86_64 simulator runtime).
+# x86sim: command-line tools for x86Code's phones (the iOS 27 arm64 simulator runtime on Darling + the arm64 JIT).
+# Phones are started by the launcher (tools/launcher) or cli/libexec/arm64/boot-a64.sh.
 # Configuration: x86sim.env in the repo root (see x86sim.env.example); environment variables override it.
 # Run `x86sim help` for the commands. The scripts it wraps live in cli/libexec (and tools/debug, tests/).
 set -u
@@ -12,24 +13,13 @@ usage() {
 	cat <<'U'
 usage: x86sim <command> [args]
 
-Simulator
-  boot [--fg] [--secs N] [--no-wait] [job ...]
-                       boot the standard device (cli/libexec/rundev.sh) in the background and wait for the
-                       home screen (up to 300 s). --fg: run in the foreground and print the job summary at the
-                       end. --secs: lifetime of the boot (default X86SIM_BOOT_SECS=86400). Extra jobs are
-                       launchd labels or label=program (see mksimdevice.py). Env: X86CODE_METAL=all|0|list,
-                       X86CODE_NODT, X86CODE_INSERT (diag shims), X86CODE_SEEDPERMS=0, X86CODE_MDNS=0, ...
-  shutdown             stop the boot, the Darling container, mtlvk and the mDNS responder (needs SUDO_PASS or
-                       a cached sudo for the setuid launcher)
-  status               what is running (boot, container, mtlvk, viewer, stream, site)
+Phones
   wait [home|app] [s]  wait for the home screen (or an app page) on the framebuffer
   device models|list   arm64 phone models / devices (var/device-a64*)
   device create --model "iPhone 17 Pro" [name]
                        new arm64 device of that model (var/device-a64-<name>); boot it with A64_DEVICE=<dir>
   runtime list|url B|fetch B
                        iOS 27.x simulator runtimes from Apple (no Mac / Apple ID): fetch downloads build B into runtimes/
-  mkdevice [job ...]   only (re)write the device's launchd configuration (mksimdevice.py)
-  run <binary> [args]  run one iOS-simulator binary under Darling with dyld_sim (run-sim.sh)
   logs [label]         list the device's job logs, or tail one (<device>/data/var/log/<label>.log)
 
 Display and input
@@ -43,11 +33,11 @@ Display and input
                        newest frame as PNG (fb2png.py; default ./x86sim-<time>.png, full size)
   tap X Y | swipe X1 Y1 X2 Y2 [ms] | pinch CX CY R1 R2 [ms] | pan2 X1 Y1 X2 Y2 [ms]
   type TEXT | key USAGE | home | lock | openurl URL | app BUNDLEID | dismiss [rounds] | raw LINE...
-                       input through the SimulatorHID stand-in (simtouch.py; device pixels, 1179x2556)
+                       input through the SimulatorHID stand-in (simtouch.py; device pixels)
   fps [secs]           delivered frames per second (fpsmeter.py)
 
 Apps (as xcrun simctl install/uninstall/launch)
-  install PATH.app     install an iOS-simulator app (x86_64) through installd; it gets a container and an icon
+  install PATH.app     install an iOS-simulator app (arm64) through installd; it gets a container and an icon
   uninstall BUNDLEID   remove an installed app
   launch [--console|--console-pty] [-w|--wait-for-debugger] [--terminate-running-process] [--oslog] [--env K=V] BUNDLEID [args...]
                        open an app through FrontBoard with arguments and environment (SIMCTL_CHILD_NAME=value in
@@ -67,21 +57,8 @@ Apps (as xcrun simctl install/uninstall/launch)
   log stream [--app BUNDLEID] [--process NAME] [--match TEXT]
                        os_log of an app (relaunched; libsimshim formats os_log into a file) or of a process
   pidof BUNDLEID       pid of the running app (inside Darling)
-  debug [--launch] [--server-only] [--port N] BUNDLEID|PID [-- lldb args]
-                       LLDB attached to the app through debugserver in the container (simdebug.sh)
   io screenshot [out.png] | io recordVideo [--codec h264|hevc] [--secs N] OUT.mp4
                        as simctl io: newest frame / MP4 from the frame ring until Ctrl-C
-
-Tests
-  smoke                boot (unless running) -> home screen check -> Settings and Safari -> screenshot checks
-  cache build [dir]    build the x86_64 dyld shared cache from the runtime (own Darling container, disk capped)
-  cache check|localize|compare ...   inspect it / give it this host's inodes / compare two caches
-  apps [outdir]        install the sample apps (tests/apps), launch them, check they draw (tests/apps.sh)
-  apptest <outdir> [bundle id ...]
-                       open each app, answer prompts, screenshot, collect crashes (apptest.sh)
-  probe metal|iosurface
-                       boot a minimal device with the Metal / IOSurface probe (stops a running boot)
-  seedperms            pre-answer permission prompts in the device (seedperms.py)
 
 Build
   build [target]       make [target] in the repo root (mtlvk, darling, ...; see `make help`)
@@ -98,111 +75,6 @@ U
 }
 
 alive_pidfile() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
-
-boot_running() { alive_pidfile "$ST/boot.pid"; }
-
-# x86Code: a boot that reads more than X86SIM_IO_BUDGET (default 6G; 0 = off) from disk before the home screen is
-# stuck re-reading (a normal cold boot reads ~1-2 GB): stop it rather than grind the disk for minutes
-io_watchdog() {
-	local budget; budget=$(numfmt --from=iec "${X86SIM_IO_BUDGET:-6G}") || return
-	[ "$budget" = 0 ] && return
-	local cg n=0
-	while kill -0 "$1" 2>/dev/null; do
-		cg=/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$1/cgroup" 2>/dev/null)
-		# until systemd-run has moved the boot into its scope, the cgroup is the caller's (not the stack's IO)
-		case $cg in */x86sim-*.scope) ;; *) sleep 1; continue ;; esac
-		n=$(awk '$1 !~ /^25[12]:/ {for(i=2;i<=NF;i++) if($i ~ /^rbytes=/){sub("rbytes=","",$i); if($i>m) m=$i}} END{print m+0}' "$cg/io.stat" 2>/dev/null)
-		if [ "${n:-0}" -gt "$budget" ]; then
-			echo "x86sim: boot read $(numfmt --to=iec "$n") from disk without reaching the home screen (X86SIM_IO_BUDGET ${X86SIM_IO_BUDGET:-6G}); stopping it" >&2
-			boot_snapshot; cmd_shutdown >/dev/null 2>&1; return
-		fi
-		sleep 2
-	done
-}
-
-cmd_boot() {
-	local fg=0 wait=1 secs=$X86SIM_BOOT_SECS
-	while [ $# -gt 0 ]; do
-		case $1 in
-			--fg) fg=1 ;;
-			--no-wait) wait=0 ;;
-			--secs) secs=$2; shift ;;
-			--) shift; break ;;
-			-*) echo "x86sim boot: unknown option $1" >&2; return 2 ;;
-			*) break ;;
-		esac
-		shift
-	done
-	if boot_running; then echo "x86sim: a boot is running (pid $(cat "$ST/boot.pid")); x86sim shutdown first" >&2; return 1; fi
-	# x86Code: stale rundev/timeout processes of an earlier boot kill the new container when their SECS expires
-	cmd_shutdown >/dev/null 2>&1
-	# the last boot's frames would pass for this one's (simfb makes a new ring)
-	rm -f /dev/shm/x86code-simfb.ring "$X86SIM_DEVICE/data/framebuffer.bgra"
-	if [ $fg = 1 ]; then
-		X86CODE_NODT=${X86CODE_NODT-all} SECS=$secs exec "$L/limited.sh" "$L/rundev.sh" com.apple.backboardd com.apple.SpringBoard "$@"
-	fi
-	X86CODE_NODT=${X86CODE_NODT-all} SECS=$secs setsid "$L/limited.sh" "$L/rundev.sh" com.apple.backboardd com.apple.SpringBoard "$@" > "$ST/boot.log" 2>&1 < /dev/null &
-	echo $! > "$ST/boot.pid"
-	echo "x86sim: booting (pid $!, log $ST/boot.log, launchd summary at the end of the boot's lifetime)"
-	[ $wait = 1 ] || return 0
-	io_watchdog $! &
-	local wd=$!
-	if python3 "$L/framecheck.py" wait home "${X86SIM_BOOT_WAIT:-300}" > "$ST/boot-wait.json"; then
-		kill $wd 2>/dev/null
-		echo "x86sim: home screen up ($(cat "$ST/boot-wait.json"))"
-	else
-		kill $wd 2>/dev/null
-		echo "x86sim: no home screen after ${X86SIM_BOOT_WAIT:-300} s ($(cat "$ST/boot-wait.json")); see $ST/boot.log" >&2
-		boot_snapshot
-		return 1
-	fi
-}
-
-# x86Code: a boot that doesn't reach the home screen: keep what the next boot overwrites (boot, mtlvk, launchd and
-# spawn logs, the jobs' logs of this boot, the process list) in $X86SIM_SCRATCH/failed-boot-<time>
-boot_snapshot() {
-	local d; d="$X86SIM_SCRATCH/failed-boot-$(date +%Y%m%d-%H%M%S)"
-	mkdir -p "$d" || return
-	cp "$ST"/boot.log "$ST"/boot-wait.json "$ST"/mtlvk.log "$ST"/lsim.out "$ST"/rundev-*.log "$d"/ 2>/dev/null
-	local udid; udid=$(sed -n 's/^SIMULATOR_UDID=//p' "$X86SIM_DEVICE/sim.env" 2>/dev/null)
-	cp "$X86SIM_DPREFIX/private/var/tmp/com.apple.CoreSimulator.SimDevice.$udid/launchd.log" "$d"/ 2>/dev/null
-	find "$X86SIM_DEVICE/data/var/log" -maxdepth 1 -name '*.log' -newer "$ST/boot.pid" -exec cp {} "$d"/ \; 2>/dev/null
-	ps -eo pid,stat,etime,pcpu,args | grep -E '[m]ldr|[d]arlingserver|[R]untimeRoot' | cut -c1-250 > "$d/ps.txt"
-	echo "x86sim: logs of this boot kept in $d" >&2
-}
-
-cmd_shutdown() {
-	if [ -f "$ST/boot.pid" ]; then
-		local p; p=$(cat "$ST/boot.pid")
-		# rundev runs in its own session (setsid): stop the whole session (tail/timeout helpers included)
-		kill -- -"$p" 2>/dev/null || kill "$p" 2>/dev/null
-		rm -f "$ST/boot.pid"
-	fi
-	# leftovers of boots not started by x86sim: rundev.sh / its `timeout` helpers (matched on argv, not on our own shell)
-	ps -eo pid=,args= | awk -v r="$L/rundev.sh" '($2 == "/bin/bash" || $2 == "bash") && ($3 == r || $3 == "cli/libexec/rundev.sh") {print $1} $2 == "timeout" && /SimDevice|launchd_sim|simhost/ {print $1}' | xargs -r kill 2>/dev/null
-	"$X/tools/debug/killsim.sh"
-	timeout 30 "$X86SIM_DARLING" shutdown > /dev/null 2>&1
-	pkill -x mtlvk 2>/dev/null
-	if alive_pidfile "$ST/mdns.pid"; then kill "$(cat "$ST/mdns.pid")"; fi
-	rm -f "$ST/mdns.pid"
-	if alive_pidfile "$ST/simaudio.pid"; then kill "$(cat "$ST/simaudio.pid")"; fi
-	rm -f "$ST/simaudio.pid"
-	if alive_pidfile "$ST/jetsam.pid"; then kill "$(cat "$ST/jetsam.pid")"; fi
-	rm -f "$ST/jetsam.pid"
-	echo "x86sim: stopped"
-}
-
-cmd_status() {
-	boot_running && echo "boot: running (pid $(cat "$ST/boot.pid"))" || echo "boot: not running (x86sim)"
-	local n; n=$(ps -eo args= | grep -c '[l]aunchd_sim')
-	echo "launchd_sim processes: $n"
-	pgrep -x mtlvk > /dev/null && echo "mtlvk: running" || echo "mtlvk: stopped"
-	alive_pidfile "$ST/mdns.pid" && echo "mdnsresponder: running" || echo "mdnsresponder: stopped"
-	alive_pidfile "$ST/simaudio.pid" && echo "audio: running ($ST/simaudio.log)" || echo "audio: stopped"
-	alive_pidfile "$ST/view.pid" && echo "viewer: running (pid $(cat "$ST/view.pid"))" || echo "viewer: not started by x86sim"
-	"$L/progress_tunnel.sh" status
-	python3 "$L/framecheck.py" home 2>/dev/null | sed 's/^/frame: /'
-}
 
 cmd_view() {
 	export DISPLAY=${DISPLAY:-:0}
@@ -238,26 +110,13 @@ cmd_logs() {
 	if [ $# = 0 ]; then ls -t "$d"; else exec tail -n "${LINES:-50}" -F "$d/$1.log"; fi
 }
 
-cmd_probe() {
-	case ${1:-} in
-		metal) shift; exec "$X/tests/metal/run-probe.sh" "$@" ;;
-		iosurface) shift; exec "$X/tests/iosurface/run-probe.sh" "$@" ;;
-		*) echo "x86sim probe: metal|iosurface" >&2; return 2 ;;
-	esac
-}
-
 [ $# -ge 1 ] || { usage; exit 2; }
 c=$1; shift
 case $c in
 	help|-h|--help) usage ;;
-	boot) cmd_boot "$@" ;;
-	shutdown|stop) cmd_shutdown ;;
-	status) cmd_status ;;
 	wait) exec python3 "$L/framecheck.py" wait "${1:-home}" "${2:-300}" ;;
-	mkdevice) exec python3 "$L/mksimdevice.py" "$X86SIM_DEVICE" "$@" ;;
 	device) exec python3 "$L/arm64/device-a64.py" "$@" ;;
 	runtime) exec python3 "$L/arm64/runtime-fetch.py" "$@" ;;
-	run) exec "$L/run-sim.sh" "$@" ;;
 	logs) cmd_logs "$@" ;;
 	view) cmd_view "$@" ;;
 	stream) cmd_stream "$@" ;;
@@ -266,23 +125,12 @@ case $c in
 	tap|swipe|pinch|pan2|key|home|lock|openurl|app|dismiss|raw) exec python3 "$L/simtouch.py" "$c" "$@" ;;
 	type|text) exec python3 "$L/simtouch.py" text "$*" ;;
 	fps) exec python3 "$L/fpsmeter.py" "${1:-10}" ;;
-	smoke) exec "$X/tests/smoke.sh" "$@" ;;
-	apps) exec "$X/tests/apps.sh" "$@" ;;
-	apptest) exec "$L/apptest.sh" "$@" ;;
 	install|uninstall) exec "$L/appinstall.sh" "$c" "$@" ;;
-	debug) exec "$L/simdebug.sh" "$@" ;;
 	launch|terminate|get_app_container|listapps|push|location|addmedia|log|io|pidof)
 		# simctl-style leading <device> (x86sim launch apps com.foo): a phone's name/folder/dir
 		. "$X/cli/lib/pickdevice.sh"
 		if [ $# -ge 1 ] && { [ $# -ge 2 ] || [ "$c" = listapps ]; } && pick_device "$1"; then shift; export X86SIM_DEVICE; fi
 		exec python3 "$L/simctl.py" "$c" "$@" ;;
-	probe) cmd_probe "$@" ;;
-	seedperms) exec python3 "$L/seedperms.py" "$X86SIM_DEVICE" "$@" ;;
-	cache) case $1 in
-		build) shift; exec "$L/dyldcache-build.sh" "$@" ;;
-		check|localize|compare) exec python3 "$L/dyldcache.py" "$@" ;;
-		*) usage ;;
-		esac ;;
 	build) exec make -C "$X" "$@" ;;
 	repos) exec "$L/repos.sh" "$@" ;;
 	upstream-sync) exec "$L/repos.sh" upstream-sync "$@" ;;

@@ -1,7 +1,7 @@
 # IOSurface "Remote" protocol (iOS 26.5 simulator, x86_64)
 
 Implemented by `iosurfaced.m` here (x86Code stage 5; on by default, `X86CODE_IOSURFACE=0` for emulation). Test:
-`run-probe.sh` (two processes, 14 checks). Answers to the open questions below: a sim-side listener decodes the
+the probe (the x86_64 one, since removed) (two processes, 14 checks). Answers to the open questions below: a sim-side listener decodes the
 client's messages once simshim skips `xpc_connection_enable_sim2host_4sim` for this name, and `xpc_shmem_map` of the
 server's `MAP_SHARED|MAP_ANON` memory gives every process the same pages (darlingserver memfd).
 

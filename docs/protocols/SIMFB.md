@@ -38,7 +38,7 @@ header's `seq` (offset 32; a shared futex, the page is a `/dev/shm` file; Darlin
 directly). Readers wait with `FUTEX_WAIT` on that word (`fbring.Ring.wait(seq, timeout)`, which falls back to 4 ms
 polling for a version-1 ring), so nothing wakes while the screen is still.
 
-The ring is recreated by each boot's simfb; `x86sim boot` deletes the old file first so a stale frame is never taken
+The ring is recreated by each boot's simfb; the boot deletes the old file first so a stale frame is never taken
 for the new boot's.
 
 ## framebuffer.bgra (legacy)

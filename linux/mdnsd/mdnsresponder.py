@@ -20,7 +20,7 @@ GetProperty (DaemonVersion), GetPID. Accepted without results (they must not fai
 the name), RegisterRecord/AddRecord/UpdateRecord/RemoveRecord, Browse, Resolve (no multicast DNS here),
 EnumerateDomains ("local."), Reconfirm, SetDomain, NAT port mapping (reports unsupported), delegate connections.
 
-Usage: mdnsresponder.py <socket path>   (cli/libexec/rundev.sh starts it; X86CODE_MDNS_LOG=1 logs every request)
+Usage: mdnsresponder.py <socket path>   (cli/libexec/arm64/boot-a64.sh starts it; X86CODE_MDNS_LOG=1 logs every request)
 """
 import os
 import socket

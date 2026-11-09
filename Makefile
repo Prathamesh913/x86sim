@@ -1,12 +1,12 @@
 # x86Code: build everything that can be built on Linux. Paths come from cli/lib/config.sh (x86sim.env).
-# The simulator-side binaries in host/ and tests/ are Mach-O and are built on a Mac (make mac, see README.md).
+# The simulator-side binaries in host/ are Mach-O and are built on a Mac (make mac, see docs/DEVELOPMENT.md).
 
 ROOT := $(CURDIR)
 cfg = $(shell X86SIM_ROOT='$(ROOT)' sh -c '. cli/lib/config.sh; echo "$$$(1)"')
 PREFIX := $(call cfg,X86SIM_PREFIX)
 DBUILD := $(call cfg,X86SIM_DARLING_BUILD)
 
-.PHONY: all help submodules mtlvk darling darling-configure darling-install mac mac-diag mac-debugserver test probes smoke clean
+.PHONY: all help submodules mtlvk darling darling-configure darling-install mac mac-diag clean
 
 all: mtlvk darling
 
@@ -16,11 +16,8 @@ help:
 	@echo "make darling            configure (once) and build Darling in $(DBUILD)"
 	@echo "make darling-install    build + install Darling into $(PREFIX) (sudo: bin/darling is setuid root;"
 	@echo "                        SUDO_PASS from the environment or a sudo prompt)"
-	@echo "make mac                build host/ and tests/ Mach-O binaries on \$$X86SIM_MAC (Xcode, ssh)"
-	@echo "make mac-diag           build the optional diagnostic shims (host/simshim/diag)"
-	@echo "make mac-debugserver    build debugserver (macOS x86_64) for x86sim debug"
-	@echo "make probes             Metal and IOSurface probes (boot their own minimal device)"
-	@echo "make smoke              smoke test on the running boot (or boots one)"
+	@echo "make mac                build the simulator-side Mach-O binaries (host/*/arm64, simhost) on \$$X86SIM_MAC (Xcode, ssh)"
+	@echo "make mac-diag           build the optional arm64 diagnostic shims (host/simshim/diag/arm64)"
 
 submodules:
 	git submodule sync --recursive
@@ -45,30 +42,10 @@ darling-install: darling-configure
 
 mac:
 	build/mac-build-simhost.sh
-	build/mac-build-simfb.sh
-	build/mac-build-simhid.sh
-	build/mac-build-simshim.sh
-	build/mac-build-iosurface.sh
-	build/mac-build-metal.sh
-	build/mac-build-fpsim2host.sh
-	build/mac-build-fseventsd.sh
-	build/mac-build-jobs.sh
+	build/mac-build-arm64-shims.sh simshim simaudio simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig
 
 mac-diag:
-	build/mac-build-diag.sh
-
-# x86Code: LLVM's debugserver for macOS x86_64 (x86sim debug), from llvm-project sources on the Mac
-mac-debugserver:
-	build/mac-build-debugserver.sh
-
-probes:
-	tests/metal/run-probe.sh
-	tests/iosurface/run-probe.sh
-
-test: probes smoke
-
-smoke:
-	tests/smoke.sh
+	DIAG_ARCH=arm64 build/mac-build-diag.sh
 
 clean:
 	cd linux/mtlvk && cargo clean

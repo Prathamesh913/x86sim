@@ -1,4 +1,4 @@
-# Metal stand-in for the iOS 26.5 simulator (Linux, Vulkan)
+# Metal stand-in for the iOS simulator (Linux, Vulkan)
 
 Status: PLAN.md stages 1-5 work (handshake/device, buffers + textures over shared memory, blit and clear
 passes, command buffers with handlers, shared events; compute: metallibs and runtime-compiled source,
@@ -7,8 +7,9 @@ function constants, compute pipelines, compute encoders, samplers, threadgroup m
 render encoders with all bindings, fixed-function state and draws, textures over IOSurfaces shared across
 processes, imported without copies). mtlprobe: 46/46.
 
-**Metal is on by default** (`cli/libexec/rundev.sh` sets `X86CODE_METAL=all` unless it is set; `X86CODE_METAL=0` gives
-the software renderer). CoreAnimation's own Metal renderer composites the screen on the host GPU into
+**Metal is on by default** in the launcher (its boot setting passes `X86CODE_METAL=all` to
+`cli/libexec/arm64/boot-a64.sh`; `X86CODE_METAL=0`, boot-a64.sh's own default when run by hand, gives the software
+renderer). CoreAnimation's own Metal renderer composites the screen on the host GPU into
 SimFramebuffer's swapchain IOSurfaces, and it draws the iOS 26 glass dock platter that the software renderer leaves
 out. MercuryPosterExtension draws the default wallpaper, which matches a Mac's since the `uint4` alignment fix
 (docs/screens/36-metal-wallpaper-astc-fixed.png, 37). Apps get
@@ -27,7 +28,7 @@ Cross-process IOSurfaces (`com.apple.IOSurface.Remote`, host/iosurfaced/iosurfac
   -> xpc_shmem (darlingserver memfd)  ====  same pages  ====  syscall 599 -> fd  ==SCM_RIGHTS==> mmap + VK_EXT_external_memory_host
 ```
 
-- **metalhostd** (`metalhostd.m` + `vkmtl.m`, one x86_64 iossimulator binary): dlopens the runtime's
+- **metalhostd** (`metalhostd.m` + `vkmtl.m`, one iossimulator binary; arm64 build in `host/metalhostd/arm64`): dlopens the runtime's
   `MTLSimImplementation`, rebinds its (and MetalSerializer's) GOT entries for `MTLCreateSystemDefaultDevice` /
   `MTLCopyAllDevices` to ours, and calls `init_with_xpc_connection(listener, registryID, 0)` for every service name in
   `X86CODE_METAL_NAMES` (a launchd job with those `MachServices`). Everything Apple's server does (handshake, buffers
@@ -68,9 +69,9 @@ Cross-process IOSurfaces (`com.apple.IOSurface.Remote`, host/iosurfaced/iosurfac
 
 ## Gating
 
-`cli/libexec/mksimdevice.py` adds the `com.x86code.metalhostd` job only when `X86CODE_METAL` is set. `cli/libexec/rundev.sh`
-sets it to `all` unless it is already set. Before that, rundev starts mtlvk on var/run/mtlvk.sock (log
-var/run/mtlvk.log) and waits up to 5 s for the socket. If mtlvk does not come up, rundev boots with
+`cli/libexec/mksimdevice.py` adds the `com.x86code.metalhostd` job only when `X86CODE_METAL` is set and not `0`.
+`cli/libexec/arm64/boot-a64.sh` starts this boot's mtlvk on `mtlvk.sock` in its state dir (log `mtlvk.log`), or shares a
+running one (`A64_MTLVK_SOCKET`), and waits up to 5 s for the socket. If mtlvk does not come up, it boots with
 `X86CODE_METAL=0`:
 - `X86CODE_METAL=1`: `com.apple.metal.simulator.mtlprobe` only (the test client).
 - `X86CODE_METAL=proc1,proc2`: `com.apple.metal.simulator.<proc>` for those processes (MTLSimDriver looks up
@@ -78,7 +79,7 @@ var/run/mtlvk.log) and waits up to 5 s for the socket. If mtlvk does not come up
 - `X86CODE_METAL=backboardd`: CoreAnimation's render server (backboardd) composites with Metal. Every other process
   keeps the software path.
 - `X86CODE_METAL=all`: also the generic `com.apple.metal.simulator`, so every process gets a device (SpringBoard,
-  the wallpaper poster, RenderBox, apps). **This is rundev's default.**
+  the wallpaper poster, RenderBox, apps). **This is the launcher's default.**
 - `X86CODE_METAL=backboardd,PosterBoard,MercuryPosterExtension`: CA plus the wallpaper only (apps stay software).
 - `X86CODE_IOSURFACE` (default 1): the iosurfaced job, and no `IOSURFACE_REMOTE_EMULATED`. `X86CODE_IOSURFACE=0`
   goes back to per-process emulation (IOSurfaces cannot be shared; Metal IOSurface textures then fail).
@@ -102,20 +103,16 @@ cd linux/mtlvk && CARGO_TARGET_DIR=../../../external/metal2vulkan/target cargo b
 ../../../external/metal2vulkan/target/release/mtlvk selftest-compute   # stage 4 handlers: shaders/probe.metallib kernels
 # translator survey: which functions of metallibs compile (function constants get zero values)
 ../../../external/metal2vulkan/target/release/survey <profile.json> <lib.metallib>...
-# shaders (on the Mac mini, iOS 26.5 simulator target): shaders/build.sh -> probe.air, probe.metallib, probe.ll;
+# shaders (on a Mac, target air64-apple-ios26.5-simulator): shaders/build.sh -> probe.air, probe.metallib, probe.ll;
 # (also writes probe_metallib.h / probe_source.h, which mtlprobe embeds)
-# Darling side + probe (on the Mac mini, x86_64 iossimulator)
-build/mac-build-metal.sh                                             # -> host/metalhostd/metalhostd, mtlprobe
+# Darling side + probe (arm64 builds; on Linux with sdks/, or on a Mac)
+build/mac-build-arm64-shims.sh metalhostd iosurfaced mtlprobe         # -> host/*/arm64/..., tests/metal/arm64/mtlprobe
 # Darling changes (no sudo needed: only darlingserver and libsystem_kernel change; replace by rename, they may be busy)
 cd darling/build && ninja src/external/darlingserver/darlingserver src/external/xnu/darling/src/libsystem_kernel/libsystem_kernel.dylib
-# simshim (sim2host skip)
-build/mac-build-simshim.sh
-# IOSurface service + its two-process probe (14 checks)
-build/mac-build-iosurface.sh && tests/iosurface/run-probe.sh
-# test: starts mtlvk, boots a minimal device (metalhostd + mtlprobe + iosurfaced), prints the logs, stops everything
-tests/metal/run-probe.sh
-# the normal boot: Metal for every process (rundev starts mtlvk; X86CODE_METAL=0 for software rendering)
-X86CODE_NODT=all SECS=200 cli/libexec/rundev.sh com.apple.backboardd com.apple.SpringBoard
+# test: starts mtlvk, boots a minimal arm64 device (metalhostd + mtlprobe + iosurfaced) in its own prefix
+SECS=60 tests/metal/run-probe-a64.sh
+# the normal boot: Metal for every process (boot-a64.sh starts mtlvk; X86CODE_METAL=0 for software rendering)
+X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh
 ```
 
 Probe output (2026-10-27, RTX 5090, driver 615.78.08), stage 5 (46/46). Every result is checked on the CPU:
@@ -189,17 +186,17 @@ The device name, families and limits the app sees are the client's own (MTLSimDr
 
 ## Files
 
-- `metalhostd.m`, `vkmtl.m`, `vkmtl_proto.h`, `mtlprobe.m`; binaries `metalhostd`, `mtlprobe` (from build/mac-build-metal.sh)
+- `metalhostd.m`, `vkmtl.m`, `vkmtl_proto.h`, `mtlprobe.m`; binaries `host/metalhostd/arm64/metalhostd`,
+  `tests/metal/arm64/mtlprobe` (from build/mac-build-arm64-shims.sh)
 - `../simfb/simfb.c` (GPU-synced presents), `../simhid/simhid.m` (touch input; cli/libexec/simview.py, cli/libexec/simtouch.py)
 - `mtlvk/` (Cargo crate; `src/main.rs`, `src/conn.rs`, `src/proto.rs`; `src/bin/survey.rs`, the translator survey)
-- `shaders/`: `probe.metal` (the probe's kernels), `build.sh` (Mac: compile for the iOS 26.5 simulator), `probe.air`,
-  `probe.metallib`, `probe.ll` (its AIR, `air64_v28-apple-ios26.5.0-simulator`), `probe_metallib.h`/`probe_source.h`
+- `shaders/`: `probe.metal` (the probe's kernels), `build.sh` (Mac: compiles with `-target air64-apple-ios26.5-simulator`),
+  `probe_metallib.h`/`probe_source.h`
   (embedded in mtlprobe), `captured/*.wire.metallib` (what MTLSimImplementation actually hands the device: one
   metallib per specialized function, see "Shader path")
 - `the metal2vulkan x86code branch`: our fixes in external/metal2vulkan (`git apply` there)
-- `../iosurface/`: `iosurfaced.m` (com.apple.IOSurface.Remote), `iosprobe.m` + `run-probe.sh` (two-process test),
-  `PROTOCOL.md`; built by build/mac-build-iosurface.sh
-- `run-probe.sh`; `run/` holds the socket and mtlvk.log
+- `../iosurface/iosprobe.m` (two-process IOSurface test); `host/iosurfaced/iosurfaced.m` (com.apple.IOSurface.Remote)
+- `run-probe-a64.sh` (the arm64 probe boot)
 - `PLAN.md`, `PROTOCOL.md`: design and the transport's wire format
 
 ## Shader path (stage 4)
@@ -286,7 +283,7 @@ unimplemented.
 
 ## Robustness (mtlvk missing or dying)
 
-- At boot: rundev boots in software if mtlvk doesn't start. If metalhostd starts without mtlvk, it stays in
+- At boot: boot-a64.sh boots in software if mtlvk doesn't start. If metalhostd starts without mtlvk, it stays in
   *refusing* mode: it holds the service names but cancels every client connection, so MTLSimDriver reports no
   device and processes render in software. It probes for mtlvk every 10 s and exits when it is back, so that
   launchd's next instance serves again.
