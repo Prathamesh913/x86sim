@@ -266,6 +266,12 @@ pub struct Plan {
     pub hot: Hot,
 }
 
+/// The release's training file for this cache dir's iOS build (cli/libexec/arm64/training-<build>.x86t).
+pub fn shipped_training(p: &Paths) -> Option<PathBuf> {
+    let build = p.jc.file_name()?.to_str()?.strip_prefix("jc-")?;
+    Some(repo_root().join(format!("cli/libexec/arm64/training-{build}.x86t")))
+}
+
 /// Discover the chunk sources, the hot set and the scope (no translation).
 pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     // the placement table is part of the image's key: a phone's first boot copies the committed one into the cache dir
@@ -286,7 +292,8 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     if !training.contains(&p.jc) {
         training.push(p.jc.clone());
     }
-    let hot = hot::load(&training, &uuid, &p.aot.join("hot.bin"), cfg.train_until)?;
+    let shipped = shipped_training(p);
+    let hot = hot::load(&training, &uuid, &p.aot.join("hot.bin"), cfg.train_until, shipped.as_deref().filter(|s| s.exists()))?;
     // "hot" and "loaded" pick what phones have run; with no training yet (a fresh install) they would pick nothing, so
     // the first build translates everything
     let mut cfg = cfg.clone();
@@ -1011,6 +1018,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                 },
             }
         };
+        let statics = near_hot_first(statics, &c.hot);
         let ep = work.join(format!("{}.ent", key::name_id(&c.src.name)));
         write_entries(&ep, c, &statics)?;
         ent_paths.insert(c.src.name.clone(), ep);
@@ -1469,4 +1477,26 @@ fn evict_rec(man: &mut Manifest, name: &str) {
         r.file = None;
         r.state = "evicted".into();
     }
+}
+
+
+/// Static entries closest to code that ran first. Calls through objc_msgSend / Swift witness tables / vtables are not
+/// followed from the hot blocks (indirect), but the linker keeps a class's (a source file's) functions together, so
+/// the functions next to ones a program ran are the likeliest to run next. Before, a slot filled after the hot blocks
+/// took static entries in address order: whatever came first in the library. Settings with its own profile held out
+/// of this machine's: 72.1% -> 73.2% of the blocks it ran in the image (no change once the shipped training has it).
+fn near_hot_first(mut statics: Vec<u64>, hot: &[(u64, u32)]) -> Vec<u64> {
+    if hot.is_empty() || statics.is_empty() {
+        return statics;
+    }
+    let mut pcs: Vec<u64> = hot.iter().map(|h| h.0 & ((1 << 56) - 1)).collect();
+    pcs.sort_unstable();
+    let dist = |e: u64| {
+        let i = pcs.partition_point(|&p| p < e);
+        let a = if i < pcs.len() { pcs[i] - e } else { u64::MAX };
+        let b = if i > 0 { e - pcs[i - 1] } else { u64::MAX };
+        a.min(b)
+    };
+    statics.sort_by_cached_key(|&e| (dist(e), e));
+    statics
 }

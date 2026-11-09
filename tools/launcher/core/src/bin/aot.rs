@@ -8,7 +8,7 @@
 //!   x86code-aot features list|get ID|set ID on|off|preset full|lean|minimal [--device DIR]
 //!   x86code-aot sim status|start|stop|restart|show [--device DIR|NAME]   status: every phone
 //!   x86code-aot setup check|install-darling|link-runtime DIR|done [--json]   the launcher's setup steps (docs/RELEASE.md)
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -140,6 +140,16 @@ fn run() -> Result<()> {
             if r.state != "done" {
                 bail!("{}: {}", r.state, r.message);
             }
+        }
+        // export-training [--out FILE] [DIR...]: the shipped training file from this cache dir's profiles (and DIRs)
+        "export-training" => {
+            let out = take(&mut args, "--out").map(PathBuf::from).or_else(|| aot::shipped_training(&p)).context("no output path")?;
+            let mut dirs: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
+            dirs.push(p.jc.clone());
+            let uuid = x86code_core::dyldcache::Cache::open(&cfg.runtime_root)?.uuid_hex();
+            let n = x86code_core::hot::write_shipped(&dirs, &uuid, &out)?;
+            println!("{n} blocks -> {} ({:.1} MB)", out.display(), std::fs::metadata(&out)?.len() as f64 / 1e6);
+            return Ok(());
         }
         "config" => {
             if args.len() >= 2 {

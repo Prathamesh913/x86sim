@@ -139,7 +139,120 @@ fn exe_of(name: &str) -> Option<&str> {
     (j > i).then(|| &name[i + 1..j])
 }
 
-pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>) -> Result<Hot> {
+/// Descriptor -> number of executables that ran it, over .bin / .live files (each executable counted once).
+fn merge_counts(files: &[PathBuf]) -> HashMap<u64, u32> {
+    let mut per_exe: HashMap<String, Vec<u64>> = HashMap::new();
+    for f in files {
+        let n = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let exe = exe_of(&n).unwrap_or("?").to_string();
+        if let Some(v) = read_descs(f) {
+            per_exe.entry(exe).or_default().extend(v);
+        }
+    }
+    let mut m: HashMap<u64, u32> = HashMap::new();
+    for (_, mut v) in per_exe {
+        v.sort_unstable();
+        v.dedup();
+        for d in v {
+            *m.entry(d).or_default() += 1;
+        }
+    }
+    m
+}
+
+// Shipped training (cli/libexec/arm64/training-<build>.x86t): the blocks programs ran on the machines that made the
+// release, so a new install's first image already holds what apps run instead of learning it one launch at a time
+// (Settings, with its own profile held out of this machine's 68: 72% of what it ran was in the image; with the
+// shipped profiles, 97%). "X86TRN01", the dyld cache UUID (32 hex chars), u64 count, then per block: varint descriptor
+// delta, varint number of programs that ran it. Addresses only: no code or content.
+const TRN_MAGIC: &[u8; 8] = b"X86TRN01";
+
+fn varint(out: &mut Vec<u8>, mut x: u64) {
+    loop {
+        let b = (x & 0x7f) as u8;
+        x >>= 7;
+        if x == 0 {
+            out.push(b);
+            return;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// Writes the shipped training file from the profiles (.bin, .live) in `dirs`; returns the number of blocks.
+/// Only .live files: each is what one program ran in its last sessions. Old .bin files include whole-slab dumps (every
+/// image block a process had registered), which made the set 6.7M blocks: past the budget, whole libraries went lazy
+/// (Settings 94% covered against 97% from .live alone).
+pub fn write_shipped(dirs: &[PathBuf], uuid: &str, out: &Path) -> Result<usize> {
+    let mut files: Vec<PathBuf> = vec![];
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with(uuid) && n.ends_with(".live") {
+                files.push(e.path());
+            }
+        }
+    }
+    // each program's newest .live only: a cache dir keeps one per translator build it ran under, and the old ones
+    // describe sessions long gone (all 22 builds of the dev cache: 6.3M blocks, against 3.6M for the current ones)
+    let mtime = |f: &PathBuf| std::fs::metadata(f).and_then(|m| m.modified()).ok();
+    let mut newest: HashMap<String, PathBuf> = HashMap::new();
+    for f in files {
+        let n = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let exe = exe_of(&n).unwrap_or("?").to_string();
+        if newest.get(&exe).is_none_or(|g| mtime(&f) > mtime(g)) {
+            newest.insert(exe, f);
+        }
+    }
+    let files: Vec<PathBuf> = newest.into_values().collect();
+    let mut v: Vec<(u64, u32)> = merge_counts(&files).into_iter().collect();
+    v.sort_unstable();
+    let mut b = Vec::with_capacity(48 + v.len() * 3);
+    b.extend_from_slice(TRN_MAGIC);
+    b.extend_from_slice(uuid.as_bytes());
+    b.extend_from_slice(&(v.len() as u64).to_le_bytes());
+    let mut prev = 0u64;
+    for &(d, c) in &v {
+        varint(&mut b, d - prev);
+        varint(&mut b, c as u64);
+        prev = d;
+    }
+    std::fs::write(out, b)?;
+    Ok(v.len())
+}
+
+/// The shipped training file's blocks (empty when missing or for another dyld cache).
+pub fn read_shipped(p: &Path, uuid: &str) -> Vec<(u64, u32)> {
+    let Ok(b) = std::fs::read(p) else { return vec![] };
+    if b.len() < 48 || &b[..8] != TRN_MAGIC || &b[8..40] != uuid.as_bytes() {
+        return vec![];
+    }
+    let n = u64::from_le_bytes(b[40..48].try_into().unwrap()) as usize;
+    let mut v = Vec::with_capacity(n);
+    let (mut i, mut prev) = (48usize, 0u64);
+    let rd = |i: &mut usize| -> Option<u64> {
+        let mut x = 0u64;
+        for sh in (0..64).step_by(7) {
+            let c = *b.get(*i)?;
+            *i += 1;
+            x |= ((c & 0x7f) as u64) << sh;
+            if c & 0x80 == 0 {
+                return Some(x);
+            }
+        }
+        None
+    };
+    while v.len() < n {
+        let (Some(dd), Some(c)) = (rd(&mut i), rd(&mut i)) else { break };
+        prev += dd;
+        v.push((prev, c as u32));
+    }
+    v
+}
+
+/// `shipped`: the release's training file (see read_shipped), counted like the local profiles.
+pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>, shipped: Option<&Path>) -> Result<Hot> {
     let bins = training_files(dirs, uuid, until);
     let mut lives: Vec<PathBuf> = Vec::new();
     for d in dirs {
@@ -155,7 +268,9 @@ pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>)
     let mut all = bins.clone();
     all.extend(lives.iter().cloned());
     // "R2J1": the rank format (a hot.bin of the old per-file counts is never reused)
-    let sig = signature(&all) ^ 0x5232_4a31_0000_0000;
+    let mut sig_files = all.clone();
+    sig_files.extend(shipped.map(Path::to_path_buf));
+    let sig = signature(&sig_files) ^ 0x5232_4a31_0000_0001;
     let cached = std::fs::read(cache_file).ok().and_then(|b| {
         if b.len() < 16 || u64::from_le_bytes(b[..8].try_into().unwrap()) != sig {
             return None;
@@ -176,20 +291,10 @@ pub fn load(dirs: &[PathBuf], uuid: &str, cache_file: &Path, until: Option<u64>)
         Some(b) => b,
         None => {
             // descriptors per executable (its .bin files and its .live), then one count per executable
-            let mut per_exe: HashMap<String, Vec<u64>> = HashMap::new();
-            for f in &all {
-                let n = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                let exe = exe_of(&n).unwrap_or("?").to_string();
-                if let Some(v) = read_descs(f) {
-                    per_exe.entry(exe).or_default().extend(v);
-                }
-            }
-            let mut m: HashMap<u64, u32> = HashMap::new();
-            for (_, mut v) in per_exe {
-                v.sort_unstable();
-                v.dedup();
-                for d in v {
-                    *m.entry(d).or_default() += 1;
+            let mut m = merge_counts(&all);
+            if let Some(sp) = shipped {
+                for (d, c) in read_shipped(sp, uuid) {
+                    *m.entry(d).or_default() += c;
                 }
             }
             let mut blocks: Vec<(u64, u32)> = m.into_iter().collect();

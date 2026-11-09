@@ -194,3 +194,12 @@ shader still needs a Mac. `debugserver` and the 26.5 dyld cache are Mac-only.
   touch-to-frame latency p50 ~24 ms). Occasional hitches remain where the simulator's processes are busy in Mach IPC.
 - Tests: `tests/devtools.sh` (22 checks), `tests/fsevhist.sh` (FSEvents history across boots, 5 checks), `x86sim apps` (16 checks), `x86sim probe metal` (46/46), `x86sim probe iosurface` (14/14), `x86sim smoke`.
 
+
+### Shipped pre-translate training
+
+`cli/libexec/arm64/training-<build>.x86t` holds the code blocks each program ran (addresses and how many programs ran
+them; no code or content) on the machine that made the release. The planner counts it with the install's own profiles,
+so a new install's first image already holds what apps run. Refresh it after using the system apps on a dev build:
+
+    tools/launcher/target/release/x86code-aot --jc ~/scratch/x86code/jc-24B8117 export-training \
+        --out cli/libexec/arm64/training-24B8117.x86t
