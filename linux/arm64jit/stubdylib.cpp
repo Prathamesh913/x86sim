@@ -141,6 +141,32 @@ const std::map<std::string, const void *> &guest_data() {
 
 std::vector<StubLib> g_libs;
 
+// A real file with the stub's bytes, for F_GETPATH. dyld_sim records an image's path from F_GETPATH on the fd it
+// opened; Darling answers that from /proc/self/fd, which for the memfd is "memfd:libsystem_kernel.dylib (deleted)", and
+// every process's XPC service bootstrap then failed on that path in launchd (~120 "Failed to bootstrap path" errors a
+// boot). The answer must not be the install name: that is also the dyld cache placeholder's path, and dyld then took the
+// stub for the cache image ("Library not loaded: /usr/lib/libSystem.B.dylib" in every process).
+std::string stub_real_copy(const std::string &install, const std::vector<uint8_t> &f) {
+    // in the JIT cache dir (every phone and builder has one; Linux paths are seen by Darling under /Volumes/SystemRoot):
+    // /run/user is not the host's inside a phone's container. One file per library, written once: the bytes differ by
+    // process (data exports point at this process's Darling variables), but only the path is used (open() of the
+    // install name still returns this process's memfd), so naming it by content made one copy per process.
+    const char *jc = getenv("X86CODE_A64_JITCACHE_DIR");
+    if (!jc || jc[0] != '/') return "";
+    const std::string dir = std::string(jc) + "/stubs", file = dir + "/" + install.substr(install.rfind('/') + 1);
+    struct stat st;
+    if (stat(file.c_str(), &st) != 0) {
+        mkdir(dir.c_str(), 0755);
+        const std::string tmp = file + ".tmp." + std::to_string(getpid());
+        int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        if (fd < 0) return "";
+        const bool ok = write(fd, f.data(), f.size()) == (ssize_t)f.size();
+        close(fd);
+        if (!ok || rename(tmp.c_str(), file.c_str()) != 0) { unlink(tmp.c_str()); if (stat(file.c_str(), &st) != 0) return ""; }
+    }
+    return "/Volumes/SystemRoot" + file;
+}
+
 }  // namespace
 
 std::vector<std::string> cache_exports(const std::string &cache_path, const std::string &image, std::vector<u64> *addrs,
@@ -308,10 +334,19 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     StubLib lib; lib.install_name = install; lib.size = f.size();
     lib.fd = memfd_create(install.c_str() + install.rfind('/') + 1, MFD_CLOEXEC);
     if (lib.fd < 0 || pwrite(lib.fd, f.data(), f.size(), 0) != (ssize_t)f.size()) die("cannot write the stub dylib for %s", install.c_str());
+    lib.path = stub_real_copy(install, f);
     if (g_trace || getenv("X86CODE_A64_STATS"))
         logf("%s: %d functions (%d not in Darling), %d data", install.c_str(), nfunc, nmissing, ndata);
     g_libs.push_back(lib);
     return lib;
+}
+
+const char *stub_path_for_fd(int fd) {
+    struct stat a, b;
+    if (g_libs.empty() || fstat(fd, &a) != 0) return nullptr;
+    for (auto &l : g_libs)
+        if (!l.path.empty() && fstat(l.fd, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) return l.path.c_str();
+    return nullptr;
 }
 
 int stub_fd_for_path(const char *path) {

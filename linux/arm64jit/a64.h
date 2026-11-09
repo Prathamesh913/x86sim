@@ -220,7 +220,9 @@ bool is_guest_code_export(const std::string &name);  // setjmp family: emitted a
 size_t emit_guest_code(const std::string &name, uint32_t *out, u32 slow_thunk);  // arm64 code for those, returns instruction count
 
 // ---- stub dylibs ------------------------------------------------------------------------------------------------
-struct StubLib { std::string install_name; int fd = -1; size_t size = 0; };
+// path: a real copy of the file as Darling sees it (/Volumes/SystemRoot<jitcache dir>/stubs/<name>),
+// the answer to F_GETPATH on fd; empty if it could not be written
+struct StubLib { std::string install_name; int fd = -1; size_t size = 0; std::string path; };
 // Builds the arm64 stub dylib for one host library (exports from the cache placeholder's export trie).
 StubLib build_stub_dylib(const std::string &install_name, const std::vector<std::string> &exports);
 // addrs (optional): each export's unslid address (the cache is mapped at its fixed address), ~0 for re-exports.
@@ -269,6 +271,7 @@ void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *));
 void *gh_malloc(size_t); void *gh_calloc(size_t, size_t); void *gh_realloc(void *, size_t); void gh_free(void *);
 void *gh_memalign(size_t align, size_t size); size_t gh_size(const void *); size_t gh_good_size(size_t);                               // from ___libkernel_init: patches the mapped cache text
 int stub_fd_for_path(const char *path);  // open() redirect: a dup of the stub dylib's fd, or -1
+const char *stub_path_for_fd(int fd);    // F_GETPATH for a stub dylib open on fd (its real copy), or nullptr
 
 void set_guest_key_destructor(u64 key, u64 guest_dtor);  // pthread keys (handlers.cpp, jit.cpp)
 

@@ -238,6 +238,16 @@ static void h_helper_stat(GuestThread &t, u32) {
     else r = dstat((const char *)t.x(0), (void *)t.x(1));
     t.set_x(0, (u64)(int64_t)r);
 }
+// fcntl(fd, cmd, ...): F_GETPATH (50) on a stub dylib answers its real copy's path (stub_real_copy)
+static void h_helper_fcntl(GuestThread &t, u32 i) {
+    if ((int)t.x(1) == 50)
+        if (const char *p = stub_path_for_fd((int)t.x(0))) {
+            snprintf((char *)t.stack_slot(0), 1024, "%s", p);  // MAXPATHLEN
+            t.set_x(0, 0);
+            return;
+        }
+    h_variadic(t, i);
+}
 static void h_helper_vlog(GuestThread &t, u32) {
     std::string s = guest_format((const char *)t.x(0), (const u64 *)t.x(1));
     if (write(2, s.data(), s.size()) < 0) {}
@@ -261,7 +271,7 @@ static u64 build_syscall_helpers() {
     struct H { const char *native; Handler h; };
     static const H table[] = {
         {"open", h_helper_open}, {"close", nullptr}, {"pread", nullptr}, {"write", nullptr}, {"mmap", h_helper_mmap},
-        {"munmap", nullptr}, {"madvise", nullptr}, {"stat", h_helper_stat}, {"fcntl", h_variadic}, {"ioctl", h_variadic},
+        {"munmap", nullptr}, {"madvise", nullptr}, {"stat", h_helper_stat}, {"fcntl", h_helper_fcntl}, {"ioctl", h_variadic},
         {"issetugid", nullptr}, {"getcwd", nullptr}, {"realpath$DARWIN_EXTSN", nullptr}, {"vm_allocate", h_helper_vm_allocate},
         {"vm_deallocate", nullptr}, {"vm_protect", nullptr}, {"vlog", h_helper_vlog}, {"vwarn", h_helper_vlog},
         {"pthread_mutex_lock", nullptr}, {"pthread_mutex_unlock", nullptr}, {"mach_thread_self", nullptr},
@@ -291,7 +301,7 @@ static u64 build_syscall_helpers() {
         const void *native = dsym(table[i].native);
         Handler h = table[i].h;
         int nfixed = 0;
-        if (h == h_variadic) nfixed = 2;
+        if (h == h_variadic || h == h_helper_fcntl) nfixed = 2;  // fd, cmd; the rest on the stack
         if (!h) h = native ? h_generic : h_zero;
         vt[i + 1] = stub_code(add_thunk(std::string("dyld_sim helper ") + table[i].native, h, native, nfixed));
     }
