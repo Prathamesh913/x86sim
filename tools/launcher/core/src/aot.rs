@@ -719,8 +719,30 @@ fn write_entries(path: &Path, c: &PlanChunk, statics: &[u64]) -> Result<()> {
 }
 
 /// Build what is stale or missing (all with opts.full), then assemble the image. Progress goes to aot/progress.json
-/// (and to `on_progress`).
+/// (and to `on_progress`). An update whose kept chunks have filled the shared constant pool is redone as a full build
+/// (a fresh pool): every update adds constants, so a long-lived image eventually fills it, and the launcher's
+/// automatic update then failed for good ("the constant pool is nearly full: run a full rebuild").
 pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn FnMut(&Progress)) -> Result<Progress> {
+    match build_once(p, cfg, opts, on_progress) {
+        Err(e) if !opts.full && !opts.measure && e.to_string().contains(POOL_FULL) => {
+            eprintln!("x86code-aot: {POOL_FULL}: rebuilding everything");
+            let full = BuildOpts {
+                workers: opts.workers,
+                full: true,
+                measure: false,
+                cancel: opts.cancel.clone(),
+                only: None,
+                force: false,
+            };
+            build_once(p, cfg, &full, on_progress)
+        }
+        r => r,
+    }
+}
+
+const POOL_FULL: &str = "the constant pool is nearly full";
+
+fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn FnMut(&Progress)) -> Result<Progress> {
     let t0 = Instant::now();
     let mut prog = Progress { state: "planning".into(), pid: std::process::id(), workers: opts.workers, ..Default::default() };
     let publish = |prog: &mut Progress, on: &mut dyn FnMut(&Progress)| {
@@ -990,7 +1012,7 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     }
 
     // balance the chunks over the workers by slot size
-    let w = opts.workers.clamp(1, 16).min(todo.len().max(1));
+    let mut w = opts.workers.clamp(1, 16).min(todo.len().max(1));
     let mut jobs: Vec<Job> = (0..w).map(|_| Job { chunks: vec![] }).collect();
     let mut load = vec![0u64; w];
     let mut order: Vec<&&PlanChunk> = todo.iter().collect();
@@ -1041,8 +1063,15 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
     }
     .div_ceil(16)
         * 16;
-    if pool_base + POOL_REGION * w as u64 > POOL_TOTAL - (64 << 10) {
-        bail!("the constant pool is nearly full: run a full rebuild (x86code-aot build --full)");
+    // each worker gets its own pool region after the kept chunks' pools: when they no longer all fit, fewer workers
+    // (an update stays incremental), and only when not even one fits is the pool full (build() then redoes it all)
+    let room = (POOL_TOTAL - (64 << 10)).saturating_sub(pool_base) / POOL_REGION;
+    if (w as u64) > room {
+        if room == 0 {
+            bail!("{POOL_FULL}: run a full rebuild (x86code-aot build --full)");
+        }
+        eprintln!("x86code-aot: constant pool room for {room} of {w} workers");
+        w = room as usize;
     }
 
     let repo = repo_root();
