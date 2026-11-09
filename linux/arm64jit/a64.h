@@ -1,4 +1,4 @@
-// libarm64jit: runs arm64 iOS-simulator processes inside Darling (stage 1 of docs/notebook/ARM64-PLAN.md).
+// libarm64jit: runs arm64 iOS-simulator processes inside Darling.
 //
 // The process is an x86_64 macOS program (host/arm64host) that Darling's mldr starts instead of an arm64-only Mach-O.
 // It initializes normally with Darling's libSystem, then dlopens this ELF library through Darling's elfcalls and calls

@@ -1555,7 +1555,7 @@ static void vk_att(vkmtl_attachment* a, MTLRenderPassAttachmentDescriptor* d, VK
 	// x86Code: scheduled handlers run before the command buffer goes to mtlvk. Run after it, a fast completion (on the
 	// completion queue) could call the completed handlers first: MTLSimImplementation then sent the client "completed"
 	// (message 101, the client drops the command buffer's ref) before "scheduled" (100), and the client crashed looking
-	// the ref up (SpringBoard SIGSEGV in -[MTLSimDevice commandBufferForReference:], FINDINGS 3.12/3.14). Metal always
+	// the ref up (SpringBoard SIGSEGV in -[MTLSimDevice commandBufferForReference:]). Metal always
 	// reports scheduled before completed.
 	NSArray* sched;
 	@synchronized (self) {

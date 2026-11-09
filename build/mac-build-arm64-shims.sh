@@ -1,5 +1,5 @@
 #!/bin/bash
-# ARM64-PLAN stage 2 / Speed 1: arm64 iOS-simulator builds of the shims loaded into simulator processes (they call
+# arm64 iOS-simulator builds of the shims loaded into simulator processes (they call
 # the guest's frameworks, so they must be guest code): simshim, SimFramebuffer (simfb), SimulatorHID (simhid),
 # metalhostd (+vkmtl), iosurfaced, mtlprobe, openurl, netconfig. Output under host/<name>/arm64/ (mksimdevice.py picks
 # them up).

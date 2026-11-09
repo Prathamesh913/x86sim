@@ -367,7 +367,7 @@ _Static_assert(__builtin_offsetof(struct ring_hdr, st_submits) == 192, "ring lay
 static uint64_t file_last_ns;
 static dispatch_source_t file_timer;
 
-// x86Code: readers on Linux (simview, simstream, fbring.wait) sleep in FUTEX_WAIT on the low 32 bits of the header's
+// x86Code: readers on Linux (simview, fbring.wait) sleep in FUTEX_WAIT on the low 32 bits of the header's
 // seq instead of polling; every publish wakes them. Darling processes are Linux processes and its userland makes
 // Linux syscalls directly, so this is Linux's futex(2) (shared, not FUTEX_PRIVATE: the page is a /dev/shm file
 // mapped by other processes).

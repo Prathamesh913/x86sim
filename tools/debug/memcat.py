@@ -17,7 +17,7 @@ The sim = the darlingserver of A64_DPREFIX (default $X86SIM_SCRATCH/a64prefix) a
   glibc:*         with A64_GLIBC_TUNABLES_EXTRA=glibc.mem.decorate_maps=1 (diagnostics)
 Columns: PSS MB, SwapPss MB, pd = Private_Dirty MB (memory only this process has written).
 Note (RAM 1): file-backed PSS is the page cache that processes have mapped; every read fault maps a 64 KB
-fault-around window, so it is ~15x the pages actually touched (see docs/notebook/rounds/ram1.md).
+fault-around window, so it is ~15x the pages actually touched.
   memcat.py [--json out.json]     TOP=N (processes listed, default 25), DETAIL=1 (top mappings by name)
 """
 import collections

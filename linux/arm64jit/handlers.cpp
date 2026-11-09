@@ -64,7 +64,7 @@ static void h_key_delete(GuestThread &t, u32 i) {
 
 // Threads the guest creates start in thread_start(): pthread_exit on them unwinds back here (longjmp) and the thread
 // returns from its start routine instead. Darling's own pthread_exit killed the whole process (SIGABRT) when called
-// from a thread running guest code (backboardd, ARM64-PLAN stage 2).
+// from a thread running guest code (backboardd).
 struct StartArg { u64 fn, arg; };
 // __builtin_setjmp/longjmp: glibc's fortified longjmp (__longjmp_chk) aborted on Darling's thread stacks
 using ExitJmp = void *[5];
@@ -459,7 +459,7 @@ static void h_mach_msg(GuestThread &t, u32 i) {
 }
 
 // Generic >8-argument functions: the 9th+ arguments are packed by natural size/alignment on the Apple arm64 stack
-// (each 8-byte slot on SysV). Sizes are given for each stack argument (manyargs audit, ARM64-PLAN stage 2).
+// (each 8-byte slot on SysV). Sizes are given for each stack argument (manyargs audit).
 template <int... Sz> static void h_stack_args(GuestThread &t, u32 i) {
     u64 ints[16]; load_regs(t, ints);
     u64 off = 0, sp = t.sp(); int k = 8;

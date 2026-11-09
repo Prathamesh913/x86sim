@@ -2,8 +2,7 @@
 
 Every change in this project is either a **faithful fix** (Darling or a stand-in now behaves as XNU / CoreSimulator /
 the Mac host does) or a **workaround** (something is skipped, faked or approximated so the simulator gets further).
-This list is about the workarounds; the faithful fixes are the bulk of the Darling branches and are described in
-[notebook/FINDINGS.md](notebook/FINDINGS.md). Each entry says where it lives and what a faithful version would need.
+This list is about the workarounds; the faithful fixes are the bulk of the Darling branches. Each entry says where it lives and what a faithful version would need.
 
 Legend: **W** = workaround, **S** = stand-in for a Mac/CoreSimulator component (faithful in intent, partial in
 coverage), **F** = faithful fix listed for contrast because it replaced an earlier workaround.
@@ -69,8 +68,7 @@ required parts.
 - `xpc_init_services` was skipped in simshim (launchd_sim never answered the pid-domain uncork); removed once the
   underlying Darling bugs were fixed.
 - Settings' gray row icons were first blamed on Metal; they also happen with software rendering and remain open
-  (in-process IconServices store lookup misses; FINDINGS "Settings row icons are gray ... (not Metal)"). Not seen
-  in the boots of 3.14 (colored rows).
+  (in-process IconServices store lookup misses).
 - The workloop interposer (`host/simshim/diag/workloop_shim.c`) predates kernel workloops in Darling; it is kept for
   reference and not used.
 - simfb's fixed 40 ms delay before copying a frame was replaced by waiting for GPU completion.
@@ -87,7 +85,7 @@ required parts.
   scroll events or a synthesized two-finger pan), not be ignored.
 
 - Audio: host/simaudio (in-process HAL stand-in) + cli/libexec/simaudio.py (PipeWire), opt-in with
-  `X86CODE_AUDIO=1`; AVAudioEngine fails at the output unit's initialize (FINDINGS 3.18). A faithful version would
+  `X86CODE_AUDIO=1`; AVAudioEngine fails at the output unit's initialize. A faithful version would
   answer coreaudiod's MIG protocol on `com.apple.audio.audiohald`.
 - Clipboard sync (`x86sim pbcopy/pbpaste`, Linux clipboard <-> pasted), rotation (`x86sim rotate`), software
   keyboard toggle: not started.

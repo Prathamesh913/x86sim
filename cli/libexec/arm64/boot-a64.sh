@@ -144,7 +144,7 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # PosterBoard (Speed 17, on-demand angel): the wallpaper. On a device without a poster store, SpringBoard asks for it and
 # it builds the store and selects MercuryPoster for the lock/home screen, as a real sim's first boot does (checked
 # against the Mac's iOS 27 devices). Once a poster is chosen SpringBoard hosts that one MercuryPoster extension itself
-# (~167 MB PSS before Speed 17's AOT training, see ARM64-PLAN). FULLUI adds chronod (widgets).
+# (~167 MB PSS before Speed 17's AOT training). FULLUI adds chronod (widgets).
 # financed + passd (Speed 20, feature "wallet"): Wallet's FinanceKit opens its Core Data store over XPC from financed;
 # without it Wallet trapped ("Could not create CoreDataStore"). healthd/healthappd/finhealthd (feature "health"): on demand.
 # medialibraryd (Speed 22, on demand): the music library (com.apple.medialibraryd.xpc), which creates and migrates
@@ -373,8 +373,8 @@ ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86CODE_A
 # the x86_64 container's are never touched. Then darling shutdown, then a sweep of what it misses: darling shutdown
 # SIGKILLs darlingserver and the first entry of /proc/<darlingserver>/task/<main>/children only, and launchd is often
 # not a child of the main thread (or the entry is another process), so launchd -- pid 1 of the container's pid
-# namespace -- survived, reparented to the session's subreaper, with every daemon and app of the old boot under it
-# (ARM64-PLAN "Leftover containers"). All of these run as the user: plain kill works where sudo is not available.
+# namespace -- survived, reparented to the session's subreaper, with every daemon and app of the old boot under it.
+# All of these run as the user: plain kill works where sudo is not available.
 # A namespace init is this prefix's when its mount table has the prefix overlay mounted at exactly $DPREFIX.
 prefix_procs() {
 	local d p

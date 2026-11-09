@@ -10,8 +10,8 @@ download ("downloadMethod": "mobileAsset", no authentication). mobileassetd asks
 type com.apple.MobileAsset.iOSSimulatorRuntime with the Xcode simulator audience and the build it wants
 (RequestedBuild); the answer (a JWT) has an updates.cdn-apple.com URL to an encrypted Apple Archive (AEA) and its
 ArchiveDecryptionKey. gdmf's certificate chains to Apple's own root CA (fetched from apple.com/appleca).
-Unpacking: `ipsw fw aea -b KEY` decrypts the archive to the cryptex disk image, `7z x -snld` reads the APFS image
-(FINDINGS: Linux-side extraction). Runtimes are never committed (runtimes/ is gitignored).
+Unpacking: `ipsw fw aea -b KEY` decrypts the archive to the cryptex disk image, `7z x -snld` reads the APFS image.
+Runtimes are never committed (runtimes/ is gitignored).
 """
 import base64
 import hashlib

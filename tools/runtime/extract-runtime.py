@@ -5,8 +5,7 @@
     tools/runtime/extract-runtime.py --check <bundle dir or .dmg> <out dir> only compare symlinks, change nothing
     tools/runtime/extract-runtime.py --links <bundle dir or .dmg> <out dir> only fix symlinks (after an extraction)
 
-7-Zip reads the APFS image directly (`7z x -snld`). Two things need fixing afterwards (FINDINGS "Linux-side
-extraction"; the 80 links of runtimes/<rt>/restored-symlinks.tsv were restored from a Mac by hand before this script):
+7-Zip reads the APFS image directly (`7z x -snld`). Two things need fixing afterwards (the 80 links of runtimes/<rt>/restored-symlinks.tsv were restored from a Mac by hand before this script):
 - 7-Zip skips links whose target is another link ("Dangerous link via another link was ignored", exit code 2;
   e.g. usr/lib/libinfo.dylib -> libSystem.dylib -> libSystem.B.dylib) or writes them as empty files (older
   versions); each link of the image's listing (`7z l -slt`) is made again;

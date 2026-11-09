@@ -1,4 +1,4 @@
-# Metal Simulator transport ("com.apple.metal.simulator"), iOS 26.5 sim x86_64
+# Metal Simulator transport ("com.apple.metal.simulator")
 
 Sources (all x86_64 slices unless noted):
 - Client: RuntimeRoot `System/Library/PrivateFrameworks/MTLSimDriver.framework/MTLSimDriver`
@@ -123,7 +123,7 @@ makeAliasiableResource, computeInfo, argumentEncoderSetValues, deleteObjectWithS
 - **MTLBuffer**: the client allocates, then `xpc_shmem_create` → `sharedMem` in message 1. Server `xpc_shmem_map`s it and wraps
   it in `newBufferWithBytesNoCopy`. Shared/managed storage is therefore *the same pages* in both processes, and CPU writes
   need no transfer (`didModifyRange:` exists for managed). Under Darling, xpc_shmem = mach memory entry, memfd-backed
-  in darlingserver (docs/notebook/FINDINGS.md). A Linux process can map the same memfd.
+  in darlingserver. A Linux process can map the same memfd.
 - **Textures**: private storage is server-only. `replaceRegion:` carries bytes in the command data. `getBytes` copies into a
   client shmem. IOSurface-backed textures (CoreAnimation render targets, drawables) send the IOSurface as XPC object
   (`IOSurfaceCreateXPCObject` → server `IOSurfaceLookupFromXPCObject`) plus the serialized descriptor/plane.

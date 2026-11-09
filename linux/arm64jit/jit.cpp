@@ -1127,7 +1127,7 @@ void GuestThread::CallSVC(uint32_t swi) {
 
     // X86CODE_A64_SKIP_RET=1: when the handler did not redirect and the thunk is "svc; ret", return to X30 here
     // and skip the ret block. Outermost CallSVC only (a nested one runs inside call(), which restores the PC).
-    // Reads X30 after the handler. Off by default: see ARM64-PLAN.md Speed 4.
+    // Reads X30 after the handler. Off by default.
     static const bool skip_ret = getenv("X86CODE_A64_SKIP_RET") && atoi(getenv("X86CODE_A64_SKIP_RET")) == 1;
     if (skip_ret && in_thunk < 0 && jit->GetPC() == pc0 && rd<u32>(pc0) == 0xD65F03C0u) jit->SetPC(x(30));
 }

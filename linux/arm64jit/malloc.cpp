@@ -1,4 +1,4 @@
-// libarm64jit: native malloc for guest processes (ARM64-PLAN stage 2, prerequisite 1a).
+// libarm64jit: native malloc for guest processes.
 //
 // Every exported function of the cache's libsystem_malloc is overwritten with "svc #i; ret" when ___libkernel_init
 // runs (libSystem's initializer calls it before __malloc_init, so the guest's xzone malloc never allocates anything).

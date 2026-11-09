@@ -311,7 +311,7 @@ static void peek() {
 }
 static struct sigaction g_old_segv, g_old_bus;
 // The cache's CONST_DATA mappings (read-only after dyld's fixups): guest atomics on them fault in fastmem and are
-// completed by dynarmic's fallback (ARM64-PLAN stage 2, 1e); those faults are not reported.
+// completed by dynarmic's fallback; those faults are not reported.
 static u64 g_const_lo[8], g_const_hi[8];
 static int g_nconst;
 static void read_const_mappings(const std::string &cache) {

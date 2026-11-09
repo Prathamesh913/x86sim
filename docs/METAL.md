@@ -278,8 +278,8 @@ unimplemented.
   `SimDisplay+0x6490`). That only works because our textures alias the surfaces' pages: what the GPU wrote last time
   is still there.
 - Checked with interaction through host/simhid: app launches, scrolling, page swipes, home button, typing,
-  repeated launch/scroll/swipe cycles. See docs/notebook/FINDINGS.md "Spike 3.6".
-- Settings' row icons are gray placeholders with both renderers (not a Metal problem: docs/notebook/FINDINGS.md "Spike 3.7").
+  repeated launch/scroll/swipe cycles.
+- Settings' row icons are gray placeholders with both renderers (not a Metal problem).
 
 ## Robustness (mtlvk missing or dying)
 
@@ -300,7 +300,6 @@ unimplemented.
 - Texture views (`VKMTL_TEX_VIEW` = 22, all three `newTextureViewWithPixelFormat:` variants) were missing and left
   the planet black (31).
 - It crash-looped making its snapshot until Darling's commpage got its cache-line bits (vImage computed rowBytes 0).
-  See docs/notebook/FINDINGS.md.
 - Its speckle and magenta rim came from one ASTC texture: MTLSimDriver's `astc` kernel reads `uint4` blocks
   from a KTX mip bound at a 4-aligned offset, and the translator's `uvec4` view dropped the bind residual's low
   bits. 16-byte leaves now use four aligned words (patch, `memory/leaf.rs`). Now it matches a Mac (36, 37).

@@ -7,7 +7,7 @@
 // The app is asked to open the URL through FrontBoard (FBSOpenApplicationService, SpringBoard's open-application
 // service, with the URL as the payload), which is what lsd itself does once it has picked the app. Going through
 // lsd (LSApplicationWorkspace openURL:) made lsd abort: for a request from another process lsd passes the caller's
-// RBSProcessHandle as clientHandle, and it had none for a launchd job (FINDINGS 3.10/3.11). A line starting with
+// RBSProcessHandle as clientHandle, and it had none for a launchd job. A line starting with
 // "ls " still takes that route. "app <bundle id>" opens an app without a URL (apps the home screen doesn't show). The app for a URL is the first LaunchServices claims for its scheme (http/https:
 // Safari). SpringBoard checks com.apple.frontboard.launchapplications: the binary carries it in
 // __TEXT,__entitlements (openurl.entitlements), which the simulator reads instead of a code signature.
@@ -489,7 +489,7 @@ int main(void) {
 		// 0.3 s added to every `x86sim app`). The writers rename x86code-openurl.new over it: a Linux inotify watch on the
 		// directory (IN_MOVED_TO/IN_CLOSE_WRITE; Darling processes make Linux syscalls directly, as simfb's futex does)
 		// whose descriptor a dispatch read source waits on. (A DISPATCH_SOURCE_TYPE_VNODE on the directory never
-		// registered under Darling's libkqueue: FINDINGS 3.20.) The run loop still runs between requests (CoreLocation
+		// registered under Darling's libkqueue.) The run loop still runs between requests (CoreLocation
 		// delivers on the main queue); a 5 s poll stays as a fallback, 0.3 s if the watch can't be set up.
 
 		int dirfd = open([home stringByAppendingString:@"/tmp"].UTF8String, O_RDONLY);
@@ -503,7 +503,7 @@ int main(void) {
 		if (ifd >= 0) {
 			// x86Code: a thread of its own blocks in read() on the inotify descriptor. A dispatch read source on it (on
 			// the main queue, later on a serial queue) delivered the first event only: libdispatch never got the next
-			// one, so every request after the first waited for the 5 s fallback (FINDINGS 3.21). CFRunLoopStop is
+			// one, so every request after the first waited for the 5 s fallback. CFRunLoopStop is
 			// thread-safe and isn't lost when the loop isn't waiting yet (its next run returns at once).
 			long fd_ = ifd;
 			pthread_t th;

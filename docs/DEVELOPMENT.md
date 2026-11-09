@@ -1,7 +1,7 @@
 # Developing x86Code
 
 Building from source, the repository layout and day-to-day use from the command line. For the
-design, see [ARCHITECTURE.md](ARCHITECTURE.md) and [notebook/ARM64-PLAN.md](notebook/ARM64-PLAN.md).
+design, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Requirements
 
@@ -12,8 +12,8 @@ design, see [ARCHITECTURE.md](ARCHITECTURE.md) and [notebook/ARM64-PLAN.md](note
 - **Darling's build dependencies**: clang/LLVM, cmake, ninja, bison, flex, FUSE, libcap, Python 3, and the rest of
   Darling's [build list](https://docs.darlinghq.org/build-instructions.html); dynarmic also needs boost headers.
 - **Rust** (stable, via rustup) for `linux/mtlvk` and metal2vulkan.
-- **Python 3** with `PIL` (Pillow) and `dnspython`. The viewer needs PyGObject with GTK 4, the stream needs `ffmpeg`
-  (NVENC), `x86sim dismiss` needs `tesseract`, and `x86sim site` needs `cloudflared`.
+- **Python 3** with `PIL` (Pillow) and `dnspython`. The viewer needs PyGObject with GTK 4, `x86sim io recordVideo` needs
+  `ffmpeg`, and `x86sim dismiss` needs `tesseract`.
 - **Apple's iOS 27 simulator runtime**, not included: `runtime-fetch.py` downloads it straight from Apple's catalogue
   (no Mac, no Apple ID). It needs [`ipsw`](https://github.com/blacktop/ipsw) and 7-Zip.
 - **No Mac to run it.** The simulator-side binaries in `host/` and `tests/` are committed. Rebuilding them works on
@@ -35,7 +35,7 @@ tools/      launcher/: the launcher GUI, x86code-aot, x86code-mcp; debug/: core 
             Darling install (dinstall.sh); runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux
 build/      build scripts (mac-build-*.sh) for the host/ and tests/ binaries: on Linux by default (linux-env.sh), or a
             Mac; release/: the AppImage
-docs/       ARCHITECTURE, WORKAROUNDS, METAL, RELEASE, protocols/, REPOS, notebook/ (lab notebook), screens/
+docs/       ARCHITECTURE, WORKAROUNDS, METAL, RELEASE, protocols/, REPOS, screens/
 external/   git submodules: darling, dynarmic and metal2vulkan (x86code branches of the x86code forks)
 ```
 
@@ -98,7 +98,6 @@ x86sim addmedia photo.jpg clip.mov           # into the Photos library
 x86sim log stream --app com.example.myapp    # the app's os_log (relaunched; --match TEXT filters)
 x86sim io recordVideo --secs 10 out.mp4      # also: x86sim io screenshot out.png
 x86sim screenshot shot.png 3    # newest frame, scaled down 3x
-x86sim stream | site            # HLS stream / progress page + stream + http server + cloudflared tunnel
 x86sim logs [label] | fps 10
 x86sim device models|list|create --model "iPhone 17 Pro" [name]
 tests/perf.py all               # short performance run (idle CPU, launch times, frame times, touch latency)
@@ -108,7 +107,7 @@ Useful environment variables: `X86CODE_METAL=all|backboardd|0` (GPU for every pr
 rendering), `A64_JOBS=min|slim|std|full`, `A64_DROP="label ..."`, `X86CODE_NODT=all,-<label>` (os_log text for one job),
 `X86CODE_INSERT=host/simshim/diag/...` (diagnostic shims, built with `make mac-diag`), `X86CODE_MDNS=0`,
 `X86SIM_JETSAM=0`, `X86SIM_MEM_MAX`. Debugging: `tools/debug/` (`lastcrash.sh`, `stuck.sh <process>`, `allstacks.sh`,
-`sigctx.py`) and [docs/notebook/FINDINGS.md](notebook/FINDINGS.md).
+`sigctx.py`).
 
 ## Simulator-side binaries
 

@@ -1,4 +1,4 @@
-# IOSurface "Remote" protocol (iOS 26.5 simulator, x86_64)
+# IOSurface "Remote" protocol (iOS simulator)
 
 Implemented by `iosurfaced.m` here (x86Code stage 5; on by default, `X86CODE_IOSURFACE=0` for emulation). Test:
 the probe (the x86_64 one, since removed) (two processes, 14 checks). Answers to the open questions below: a sim-side listener decodes the

@@ -24,7 +24,7 @@ started by the launcher (`tools/launcher`) through `cli/libexec/arm64/boot-a64.s
  mtlvk (linux/mtlvk, Vulkan)   <== Unix socket + memfds ==  metalhostd (MTLSimImplementation on vkmtl)
  mdnsresponder.py (linux/mdnsd) <== dnssd_ipc socket ======  libsystem_dnssd in every process
  hostnet.py (linux/hostnet) --plist--> netconfig -> host-configd store -> configd_sim's SimulatorSupport
- simview.py / simstream.py / fb2png.py  <== frame ring ====  SimFramebuffer.framework (host/simfb) in backboardd
+ simview.py / fb2png.py  <== frame ring ===============    SimFramebuffer.framework (host/simfb) in backboardd
  simview.py / simtouch.py  == simhid.sock ==>                 SimulatorHID.framework (host/simhid) in backboardd
  simaudio.py (PipeWire)    <== simaudio.sock ==             libsimaudio (host/simaudio, opt-in) in each process
  darlingserver (Darling, Linux process): Mach IPC, threads, VM, memfd-backed shared memory for every container process
@@ -36,8 +36,7 @@ Darling provides the Mach-O loader (`mldr`), the XNU syscall and Mach trap emula
 `darling-xnu`), the Mach IPC/task/thread server (`darlingserver`), `dyld` for the host side and `iokitd`. The iOS
 simulator runtime is far more demanding than the macOS userland Darling targets: workloops, cooperative thread pools
 (Swift concurrency), ulock, Mach memory entries, guarded fds, getattrlist/fsctl/chflags, PF_ROUTE, csops and more.
-All changes are on the `x86code` branches of our private forks ([REPOS.md](REPOS.md)), each marked `x86Code:` in the
-source and explained in the lab notebook ([notebook/FINDINGS.md](notebook/FINDINGS.md)).
+All changes are on the `x86code` branches of our forks ([REPOS.md](REPOS.md)), each marked `x86Code:` in the source.
 
 Inside Darling the Linux root is `/Volumes/SystemRoot`; the scripts translate paths (`mksimdevice.py darling()`).
 Each phone has its own Darling prefix (`A64_DPREFIX`, default `$X86SIM_SCRATCH/a64prefix`); stopping a phone stops only
@@ -126,13 +125,12 @@ records Darling's `libsystem_kernel` keeps in the container. `X86SIM_JETSAM=0` t
 ## Display: simfb and the frame ring
 
 backboardd loads `SimFramebuffer.framework` from `SIMULATOR_FRAMEBUFFER_FRAMEWORK`. Ours (`host/simfb`) reports one
-built-in display named `LCD` ([protocols/CADISPLAY.md](protocols/CADISPLAY.md)), gives CoreAnimation IOSurface
+built-in display named `LCD` (QuartzCore treats a main display with any other name as absent), gives CoreAnimation IOSurface
 swapchains and copies each completed present into a shared-memory ring ([protocols/SIMFB.md](protocols/SIMFB.md)), written under
 `/run/user/<uid>` (`SIMFB_RING` in `sim.env`) and linked from `/dev/shm` (`SIMFB_RING_LINUX`, default
 `/dev/shm/x86code-a64-simfb.ring`). Every publish wakes Linux readers through a futex on the ring's seq word
 (ring version 2), so they sleep while the screen doesn't change. Linux readers: `simview.py` (GTK4 window),
-`simstream.py` (ffmpeg NVENC H.264, variable frame rate up to 60 fps, low-latency HLS into the site directory),
-`fb2png.py` (screenshots), `fpsmeter.py`, `framecheck.py`, `progress_site.py`.
+`fb2png.py` (screenshots), `fpsmeter.py`, `framecheck.py`.
 
 ## Input: simhid
 
@@ -204,7 +202,7 @@ entitlements: FrontBoard's debug options (`__DebugOptions`: arguments, environme
 `+[UNNotificationRequest requestWithIdentifier:pushPayload:bundleIdentifier:]` for `push`, `CLSimulationManager` for
 `location` (locationd's `com.apple.locationd.simulation` service: one point repeated every second, waypoints moved along
 at a speed with updates by interval or distance, or one of the runtime's scenarios in CoreLocation.framework/Support/
-SimulationScenarios; nanoregistryd must run, see FINDINGS 3.17), `PHPhotoLibrary` change requests for `addmedia`.
+SimulationScenarios; nanoregistryd must run), `PHPhotoLibrary` change requests for `addmedia`.
 `--console-pty` passes a Linux pty's path (`/Volumes/SystemRoot/dev/pts/N`) as the app's stdout/stderr. `log stream --app` relaunches the app with
 `X86CODE_OSLOG`, which turns on libsimshim's built-in os_log formatter (`host/simshim/diag/oslogdiag.m` compiled in):
 messages go to `data/var/log/oslog.<prog>.<pid>.log` without logd/diagnosticd. `io recordVideo` encodes the frame
@@ -221,7 +219,7 @@ prefixes, JIT/AOT caches) are in `$X86SIM_SCRATCH`.
 
 | Flow | From | Channel | To |
 |---|---|---|---|
-| frames | backboardd (simfb) | ring in `/run/user/<uid>`, linked as `$SIMFB_RING_LINUX` | simview, simstream, fb2png, framecheck |
+| frames | backboardd (simfb) | ring in `/run/user/<uid>`, linked as `$SIMFB_RING_LINUX` | simview, fb2png, framecheck |
 | input | simview, simtouch | `<device>/data/simhid.sock` (text lines) | backboardd (simhid) |
 | Metal | every Metal client | XPC `com.apple.metal.simulator[.<proc>]` | metalhostd |
 | Metal | metalhostd (vkmtl) | Unix socket `mtlvk.sock` (state dir, or a shared one) + memfds | mtlvk (Vulkan) |
@@ -233,4 +231,3 @@ prefixes, JIT/AOT caches) are in `$X86SIM_SCRATCH`.
 | install app | x86sim install (appinstall.sh copies the .app into `data/tmp/x86code-install`) | `<device>/data/tmp/x86code-openurl` | openurl job -> InstallCoordination -> installd |
 | open URL/app | x86sim openurl/app | `<device>/data/tmp/x86code-openurl` | openurl job -> FrontBoard |
 | simctl commands | x86sim launch/push/... (simctl.py) | `req <id> <json>` in `<device>/data/tmp/x86code-openurl`, `result` lines in its log | openurl job -> FrontBoard, UserNotifications, Photos, CoreLocation, LaunchServices |
-| stream | simstream.py | HLS in `$X86SIM_SITE/live` | http.server :8765 -> cloudflared |

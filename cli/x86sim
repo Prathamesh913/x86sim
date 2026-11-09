@@ -24,11 +24,6 @@ Phones
 
 Display and input
   view [--bg]          GTK viewer window with mouse/keyboard input (simview.py; DISPLAY defaults to :0)
-  stream [start|stop|fg]
-                       live HLS stream of the screen into the site directory (simstream.py)
-  site [start|stop [all]|status]
-                       progress page + stream + local http server + cloudflared quick tunnel
-                       (progress_tunnel.sh; a running tunnel is kept, so its public URL stays)
   screenshot [out.png] [divisor]
                        newest frame as PNG (fb2png.py; default ./x86sim-<time>.png, full size)
   tap X Y | swipe X1 Y1 X2 Y2 [ms] | pinch CX CY R1 R2 [ms] | pan2 X1 Y1 X2 Y2 [ms]
@@ -87,19 +82,6 @@ cmd_view() {
 	fi
 }
 
-cmd_stream() {
-	local S=$X86SIM_SCRATCH
-	case ${1:-start} in
-		fg) exec python3 "$L/simstream.py" ;;
-		stop) alive_pidfile "$S/stream.pid" && kill "$(cat "$S/stream.pid")"; rm -f "$S/stream.pid" ;;
-		start)
-			if alive_pidfile "$S/stream.pid"; then echo "x86sim: stream running"; return 0; fi
-			setsid python3 "$L/simstream.py" > "$S/stream.log" 2>&1 < /dev/null &
-			echo $! > "$S/stream.pid"; echo "x86sim: stream started ($X86SIM_SITE/live)" ;;
-		*) echo "x86sim stream: start|stop|fg" >&2; return 2 ;;
-	esac
-}
-
 cmd_screenshot() {
 	local out=${1:-./x86sim-$(date +%Y%m%d-%H%M%S).png}
 	python3 "$L/fb2png.py" ring "$out" "${2:-1}" > /dev/null && echo "$out"
@@ -119,8 +101,6 @@ case $c in
 	runtime) exec python3 "$L/arm64/runtime-fetch.py" "$@" ;;
 	logs) cmd_logs "$@" ;;
 	view) cmd_view "$@" ;;
-	stream) cmd_stream "$@" ;;
-	site) exec "$L/progress_tunnel.sh" "$@" ;;
 	screenshot|shot) cmd_screenshot "$@" ;;
 	tap|swipe|pinch|pan2|key|home|lock|openurl|app|dismiss|raw) exec python3 "$L/simtouch.py" "$c" "$@" ;;
 	type|text) exec python3 "$L/simtouch.py" text "$*" ;;

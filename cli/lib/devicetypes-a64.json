@@ -628,6 +628,6 @@
   "pitch": "460.000000",
   "suffix": "iphone",
   "json": "devicetype-iphone19,4.json",
-  "note": "iOS 27.2 lists it as unsupported (Xcode can't create it on this runtime); it has a build of its own (iPhone Duo: 27.2 24B91016s, runtime-fetch.py fetch 24B91016s; ARM64-PLAN Models 2)"
+  "note": "iOS 27.2 lists it as unsupported (Xcode can't create it on this runtime); it has a build of its own (iPhone Duo: 27.2 24B91016s, runtime-fetch.py fetch 24B91016s)"
  }
 }

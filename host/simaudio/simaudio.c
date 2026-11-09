@@ -5,7 +5,7 @@
 // device, IOProc and IO cycle is the Mac's (AudioHardwareStartServer is an empty stub in the simulator's
 // CoreAudio). Linux has no coreaudiod and its MIG protocol is private, so this library stands in for the host HAL
 // inside each process instead: it interposes CoreAudio's public HAL API (AudioObject*, AudioDevice*, the only
-// entry points AudioToolbox/AVFAudio use, see FINDINGS) and presents one output and one input device. Their IO
+// entry points AudioToolbox/AVFAudio use) and presents one output and one input device. Their IO
 // thread runs the clients' IOProcs on a clock and moves PCM over a Unix socket to cli/libexec/simaudio.py on Linux,
 // which plays it on PipeWire/PulseAudio (pw-cat) and records the microphone from there.
 //

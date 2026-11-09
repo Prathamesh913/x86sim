@@ -1,4 +1,4 @@
-// libarm64jit: guest signal handlers (ARM64-PLAN stage 2, prerequisite 1b).
+// libarm64jit: guest signal handlers.
 //
 // __sigaction installs one native handler for every signal the guest handles. When it runs (from Darling's
 // _sigtramp, on whatever the thread was doing) it only records the signal in the thread's GuestThread and halts the

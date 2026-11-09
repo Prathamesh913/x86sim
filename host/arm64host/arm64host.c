@@ -1,5 +1,4 @@
-// arm64host: the x86_64 macOS program Darling's mldr runs in place of an arm64-only Mach-O (stage 1 of
-// docs/notebook/ARM64-PLAN.md). It starts like any Darling process (native libSystem, TSD, darlingserver), then loads
+// arm64host: the x86_64 macOS program Darling's mldr runs in place of an arm64-only Mach-O. It starts like any Darling process (native libSystem, TSD, darlingserver), then loads
 // the ELF library libarm64jit.so through Darling's elfcalls and hands over: dynarmic runs the arm64 dyld_sim and the
 // program; libsystem_kernel/platform/pthread stay this process's native x86 libraries.
 // mldr sets X86CODE_A64_EXE (the arm64 program), X86CODE_A64_JIT (the Linux path of libarm64jit.so) and renames

@@ -3,8 +3,8 @@
 `host/simfb/simfb.c` builds `SimFramebuffer.framework`, a stand-in for CoreSimulator's framework of the same name.
 backboardd (CoreAnimation's render server) loads it from `SIMULATOR_FRAMEBUFFER_FRAMEWORK` (set by
 `cli/libexec/mksimdevice.py`). The API it implements is declared in `host/simfb/SimFramebuffer.h` (reconstructed from
-the runtime's QuartzCore/backboardd callers); [CADISPLAY.md](CADISPLAY.md) explains why the main display must be
-named `LCD`.
+the runtime's QuartzCore/backboardd callers). The main display must be named `LCD`: QuartzCore treats any other
+name as no main display.
 
 There is no host: simfb reports one built-in display (1179x2556 at scale 3, the device model is iPhone17,3), hands CoreAnimation IOSurface-backed
 swapchain buffers and, on every present (`SFBSwapchainSwapSubmit`), copies the frame out once the GPU work for it has
@@ -13,8 +13,8 @@ completed (with Metal, simfb waits for the MTLSimCommandBuffer completion; a 1 s
 ## Frame ring (`/dev/shm/x86code-simfb.ring`)
 
 Inside Darling the file is `/Volumes/SystemRoot/dev/shm/x86code-simfb.ring` (`$SIMFB_RING` overrides); Linux readers
-use `/dev/shm/x86code-simfb.ring` (`$SIMFB_RING_LINUX`). Readers: `cli/libexec/fbring.py` (library),
-`simview.py` (viewer), `simstream.py` (HLS stream), `fb2png.py`, `fpsmeter.py`, `framecheck.py`.
+use `/dev/shm/x86code-a64-simfb.ring` (`$SIMFB_RING_LINUX`). Readers: `cli/libexec/fbring.py` (library),
+`simview.py` (viewer), `fb2png.py`, `fpsmeter.py`, `framecheck.py`.
 
 ```
 x86Code: reader for host/simfb's shared-memory frame ring (/dev/shm/x86code-simfb.ring).

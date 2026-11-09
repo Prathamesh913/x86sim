@@ -1,4 +1,4 @@
-// libarm64jit: FEAT_FP16 Advanced SIMD instructions that dynarmic doesn't translate (ARM64-PLAN stage 2).
+// libarm64jit: FEAT_FP16 Advanced SIMD instructions that dynarmic doesn't translate.
 //
 // iOS 27's RenderBox, CoreImage, Vision, ... use half-precision vector arithmetic (about 70k instructions in the
 // shared cache: fmla/fmul by element, three-same arithmetic and compares, conversions). dynarmic hands each of them to

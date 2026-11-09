@@ -335,7 +335,7 @@ pub struct Status {
     pub mtlvk: bool,
     pub launchd_pid: Option<u32>,
     /// this phone has never reached its home screen (no <device>/.home-reached): a fresh device's first boot can stall
-    /// on LaunchServices (ARM64-PLAN, Speed 10/24); the second boot works
+    /// on LaunchServices; the second boot works
     pub fresh: bool,
 }
 

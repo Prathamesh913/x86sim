@@ -32,7 +32,7 @@ PREFIX = x86config.get("X86SIM_PREFIX")
 MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
 # x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by cli/libexec/arm64/boot-a64.sh)
 AUDIO_SOCKET = os.environ.get("X86CODE_AUDIO_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "simaudio.sock")
-AUDIO = os.environ.get("X86CODE_AUDIO", "0") != "0"  # opt-in until playback works (FINDINGS 3.18)
+AUDIO = os.environ.get("X86CODE_AUDIO", "0") != "0"  # opt-in until playback works
 DARLING_VIEW = "/Volumes/SystemRoot"  # Linux / as seen inside Darling
 # x86Code: a device for the arm64 runtime (iOS 27, run under libarm64jit): arm64 device types, arm64 builds of our
 # in-simulator binaries (host/<name>/arm64/...; jobs and shims without one are left out), no libkqueue_sim (the arm64
@@ -380,7 +380,7 @@ def main():
             plistlib.dump({"Label": "com.x86code.bootstrap-system",
                            "ProgramArguments": ["/bin/launchctl", "bootstrap", "system", darling(daemons)],
                            "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
-    # Darling's libkqueue for processes on the runtime's libSystem (see docs/notebook/FINDINGS.md)
+    # Darling's libkqueue for processes on the runtime's libSystem
     child_defaults = {
         # X86CODE_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
         # simshim: stand-ins for host services (host/simshim/compat/simshim.c)

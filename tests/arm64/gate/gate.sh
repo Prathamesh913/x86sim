@@ -79,7 +79,7 @@ google_search() {
 }
 f google_search
 # Speed 29: Maps route (search, Plan, origin, route). Speed 36: on by default (GATE_ROUTE=0 skips it): the AttributeGraph
-# abort was darlingserver's shared vm_remap losing the old table's aliasing on the second growth (speed36.md).
+# abort was darlingserver's shared vm_remap losing the old table's aliasing on the second growth.
 [ "${GATE_ROUTE:-1}" = 1 ] && O="$O/route" f tests/arm64/gate/mapsroute.sh maps-route
 # Speed 27: home by swipe-up from an app, then the app switcher (swipe up and hold) shows the recent apps
 # Speed 34: Settings may still be alive from the About check (an aged system: jetsam's grace doubles per kill) and

@@ -1,5 +1,5 @@
 // simhost: starts launchd_sim under Darling the way CoreSimulator and the host
-// launchd do on a Mac (see docs/notebook/FINDINGS.md, "launchd_sim host handshake").
+// launchd do on a Mac.
 //
 //   simhost <launchd_sim> <args...>
 //
