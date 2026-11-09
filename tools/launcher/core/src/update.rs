@@ -60,12 +60,24 @@ fn curl_json(url: &str) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&out.stdout)?)
 }
 
-/// The newest published release with an AppImage (drafts skipped).
-pub fn latest() -> Result<Option<Release>> {
+/// Release channels: "stable" (full releases only) or "pre" (pre-releases too). "" or "auto": the channel of the running
+/// version (a pre-release build follows pre-releases).
+pub fn effective_channel(ch: &str) -> &'static str {
+    match ch {
+        "stable" => "stable",
+        "pre" => "pre",
+        _ if version_key(&crate::setup::version()).is_some_and(|k| k.3 != u32::MAX) => "pre",
+        _ => "stable",
+    }
+}
+
+/// The newest published release with an AppImage on a channel (drafts skipped; "stable" skips pre-releases).
+pub fn latest(channel: &str) -> Result<Option<Release>> {
+    let stable_only = effective_channel(channel) == "stable";
     let v = curl_json(&format!("https://api.github.com/repos/{REPO}/releases?per_page=20"))?;
     let mut best: Option<(Release, (u32, u32, u32, u32))> = None;
     for r in v.as_array().into_iter().flatten() {
-        if r["draft"].as_bool().unwrap_or(false) {
+        if r["draft"].as_bool().unwrap_or(false) || (stable_only && r["prerelease"].as_bool().unwrap_or(false)) {
             continue;
         }
         let tag = r["tag_name"].as_str().unwrap_or("").to_string();
@@ -89,11 +101,12 @@ pub fn latest() -> Result<Option<Release>> {
     Ok(best.map(|b| b.0))
 }
 
-/// A release newer than the running version, if any.
-pub fn check() -> Result<Option<Release>> {
+/// A release on the channel newer than the running version, if any. (Moving from a pre-release to the stable channel
+/// waits for a full release newer than it: no downgrades.)
+pub fn check(channel: &str) -> Result<Option<Release>> {
     let cur = crate::setup::version();
     let Some(ck) = version_key(&cur) else { return Ok(None) };
-    Ok(latest()?.filter(|r| version_key(&r.tag).is_some_and(|k| k > ck)))
+    Ok(latest(channel)?.filter(|r| version_key(&r.tag).is_some_and(|k| k > ck)))
 }
 
 /// Downloads the release's AppImage next to `target`, checks its sha256 and renames it over `target`. `done` gets the

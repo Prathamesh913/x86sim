@@ -40,7 +40,7 @@ impl Updater {
     }
 
     /// Looks for a newer release in the background (now, or when the last check is older than 6 hours).
-    pub fn check(&mut self, ctx: &egui::Context, force: bool) {
+    pub fn check(&mut self, ctx: &egui::Context, force: bool, channel: &str) {
         if !Self::supported() || matches!(self.phase(), Phase::Checking | Phase::Downloading(_) | Phase::Ready(..)) {
             return;
         }
@@ -49,9 +49,9 @@ impl Updater {
         }
         self.last_check = Some(Instant::now());
         *self.phase.lock().unwrap() = Phase::Checking;
-        let (ph, ctx) = (self.phase.clone(), ctx.clone());
+        let (ph, ctx, channel) = (self.phase.clone(), ctx.clone(), channel.to_string());
         std::thread::spawn(move || {
-            let r = match update::check() {
+            let r = match update::check(&channel) {
                 Ok(Some(rel)) => Phase::Available(rel),
                 Ok(None) => Phase::UpToDate,
                 Err(e) => Phase::Failed(format!("Couldn't check for updates: {e:#}")),
@@ -139,6 +139,21 @@ impl App {
                 });
             });
             if supported {
+                let chans = [("stable", "Stable"), ("pre", "Pre-release")];
+                let cur = update::effective_channel(&self.hub.channel);
+                let sel = chans.iter().position(|c| c.0 == cur);
+                form_row(ui, "Channel", "Stable gets full releases only; Pre-release also gets test builds, which come out more often and may break things.", false, |ui| {
+                    if let Some(i) = segmented(ui, &chans.map(|c| c.1), sel, true) {
+                        if chans[i].0 != cur {
+                            self.hub.channel = chans[i].0.into();
+                            save = true;
+                            // what was offered came from the other channel
+                            if matches!(self.updater.phase(), Phase::Available(_) | Phase::UpToDate | Phase::Failed(_)) {
+                                self.updater.check(ui.ctx(), true, &self.hub.channel);
+                            }
+                        }
+                    }
+                });
                 let line = match self.updater.phase() {
                     Phase::Idle => String::new(),
                     Phase::Checking => "Checking…".into(),
@@ -151,7 +166,7 @@ impl App {
                 form_row(ui, "Version", &line, true, |ui| {
                     let busy = matches!(self.updater.phase(), Phase::Checking | Phase::Downloading(_));
                     if ui.add_enabled(!busy, Btn::secondary("Check now")).clicked() {
-                        self.updater.check(ui.ctx(), true);
+                        self.updater.check(ui.ctx(), true, &self.hub.channel);
                     }
                     if let Phase::Available(rel) = self.updater.phase() {
                         if ui.add(Btn::primary("Update")).clicked() {

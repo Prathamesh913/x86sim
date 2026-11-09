@@ -149,11 +149,13 @@ pub struct HubSettings {
     pub sort: String,
     /// look for a newer x86Code release (AppImage only) at start and every few hours
     pub check_updates: bool,
+    /// release channel: "" (the running version's: pre-release builds follow pre-releases) | "stable" | "pre"
+    pub channel: String,
 }
 
 impl Default for HubSettings {
     fn default() -> Self {
-        HubSettings { thumbnails: true, open_on_start: false, card_w: 250.0, sort: "name".into(), check_updates: true }
+        HubSettings { thumbnails: true, open_on_start: false, card_w: 250.0, sort: "name".into(), check_updates: true, channel: String::new() }
     }
 }
 

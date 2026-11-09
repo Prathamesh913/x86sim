@@ -388,7 +388,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // self-update: at start and every 6 hours (cheap when not due)
         if self.hub.check_updates {
-            self.updater.check(ctx, false);
+            self.updater.check(ctx, false, &self.hub.channel);
         }
         // X86CODE_LAUNCHER_FPS=1: frames per second on stderr (idle cost checks)
         static FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
