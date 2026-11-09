@@ -67,6 +67,8 @@ pub enum Dialog {
 pub struct App {
     /// fresh phones already restarted once after a stalled first boot
     pub first_boot_retried: HashSet<String>,
+    /// phones running at the last frame (a stop starts an automatic pre-translate update)
+    was_running: HashSet<String>,
     pub dialog: Option<Dialog>,
     pub shared: Arc<Mutex<Shared>>,
     pub insts: Vec<instance::Instance>,
@@ -191,6 +193,7 @@ impl App {
         let mut app = App {
             dialog: None,
             first_boot_retried: HashSet::new(),
+            was_running: HashSet::new(),
             shared,
             insts: instance::list(),
             status: HashMap::new(),
@@ -417,6 +420,13 @@ impl eframe::App for App {
             }
             ctx.request_repaint_after(Duration::from_secs(10));
         }
+        let running: HashSet<String> = self.status.values().filter(|s| s.phase != instance::Phase::Off).map(|s| s.id.clone()).collect();
+        if self.was_running.iter().any(|id| !running.contains(id)) {
+            // its .live feedback is written at exit
+            self.aot.want_auto(Duration::from_secs(5));
+        }
+        self.aot.phones_running = !running.is_empty();
+        self.was_running = running;
         self.aot.tick();
         if self.aot.building() {
             ctx.request_repaint_after(Duration::from_millis(500));

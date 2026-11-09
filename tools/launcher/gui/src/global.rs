@@ -34,6 +34,12 @@ pub struct Aot {
     pub message_pid: Option<u32>,
     /// "Redo all" asked for confirmation
     pub confirm_redo: bool,
+    /// Automatic update: when to look (after a phone stops, and at start) whether phones translated code the image
+    /// lacks (their .live feedback); `auto_check`: a fresh status was asked for and is awaited
+    pub auto_at: Option<Instant>,
+    auto_check: bool,
+    /// set each frame by the app: no new image goes in while a phone runs (it waits for the last one to stop)
+    pub phones_running: bool,
 }
 
 impl Aot {
@@ -59,6 +65,9 @@ impl Aot {
             message: String::new(),
             message_pid: None,
             confirm_redo: false,
+            auto_at: Some(Instant::now() + Duration::from_secs(20)),
+            auto_check: false,
+            phones_running: false,
         };
         if a.runtime_root.is_some() {
             a.refresh();
@@ -117,7 +126,34 @@ impl Aot {
         (self.child.is_none() && matches!(p.state.as_str(), "planning" | "building" | "assembling") && aot_alive(p.pid) && pid_is_aot(p.pid)).then_some(p.pid)
     }
 
+    /// Fold what phones translated themselves into the image soon (it is swapped in by a rename: running phones keep
+    /// the one they mapped, the next start of an app gets the new one).
+    pub fn want_auto(&mut self, after: Duration) {
+        self.auto_at = Some(Instant::now() + after);
+    }
+
+    fn auto_tick(&mut self) {
+        if self.auto_at.is_some_and(|t| Instant::now() >= t) && self.runtime_root.is_some() && !self.building() && !self.phones_running {
+            self.auto_at = None;
+            self.auto_check = true;
+            self.refresh();
+            return;
+        }
+        if !self.auto_check || self.shared.lock().unwrap().busy {
+            return;
+        }
+        self.auto_check = false;
+        let st = self.shared.lock().unwrap().status.clone();
+        // only once there is an image (Setup or the Pre-translate page made one) and something to add to it
+        if let Some(Ok(s)) = st {
+            if s.image_present && s.stale + s.missing > 0 && !self.building() && !self.phones_running {
+                self.start_build(false);
+            }
+        }
+    }
+
     pub fn tick(&mut self) {
+        self.auto_tick();
         if let Some(c) = &mut self.child {
             if let Ok(Some(code)) = c.try_wait() {
                 let pid = c.id();

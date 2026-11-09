@@ -848,6 +848,29 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                 occ.push((r.slot_off, r.slot_size, n.clone()));
             }
         }
+        // Slots that overlap (a chunk that left the image kept its record and slot, another chunk was later placed
+        // there, then the first came back unchanged: assembly failed "slot overlaps the previous chunk" on every
+        // update): keep the first by address; a later one being rebuilt gets a new slot, one that is not is evicted
+        // (its record stays with no file: re-admitted into free space by a later update).
+        occ.sort_by_key(|o| o.0);
+        let mut end = 0u64;
+        let mut clash: Vec<String> = vec![];
+        occ.retain(|o| {
+            if o.0 < end {
+                clash.push(o.2.clone());
+                return false;
+            }
+            end = o.0 + o.1;
+            true
+        });
+        for n in &clash {
+            if slots.remove(n).is_none() {
+                evict_rec(&mut man, n);
+            }
+        }
+        if !clash.is_empty() {
+            eprintln!("x86code-aot: {} chunks had overlapping slots: moved", clash.len());
+        }
         let heat = |n: &str, size: u64| -> f64 {
             let h: u64 = live_names.get(n).map(|c| c.hot.iter().map(|h| h.1 as u64).sum()).unwrap_or(0);
             h as f64 / size.max(1) as f64
@@ -929,6 +952,18 @@ pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn Fn
                 prog.chunks_total = todo.len();
                 eprintln!("x86code-aot: {n_back} evicted chunks re-admitted into freed space");
             }
+        }
+        // a chunk outside this image keeps no claim on its old slot once another chunk sits there (see above)
+        let names: HashSet<&str> = occ.iter().map(|o| o.2.as_str()).collect();
+        let lost: Vec<String> = man
+            .chunks
+            .iter()
+            .filter(|(n, r)| r.file.is_some() && r.slot_size > 0 && !names.contains(n.as_str()) && !evicted.contains(n))
+            .filter(|(_, r)| occ.iter().any(|o| o.0 < r.slot_off + r.slot_size && r.slot_off < o.0 + o.1))
+            .map(|(n, _)| n.clone())
+            .collect();
+        for n in &lost {
+            evict_rec(&mut man, n);
         }
     }
     if !evicted.is_empty() {
@@ -1423,4 +1458,15 @@ pub fn assemble(p: &Paths, plan: &Plan, man: &mut Manifest) -> Result<Image> {
     let img = Image { file: plan.image_name.clone(), size, code_size, chunks: files.len(), blocks: n[0], built_at: now() };
     man.image = Some(img.clone());
     Ok(img)
+}
+
+/// Marks a chunk record evicted: same key, no slot, no file (up to date, not in the image; a later update re-admits it
+/// into free space). Its chunk file stays until the chunk is rebuilt.
+fn evict_rec(man: &mut Manifest, name: &str) {
+    if let Some(r) = man.chunks.get_mut(name) {
+        r.slot_off = 0;
+        r.slot_size = 0;
+        r.file = None;
+        r.state = "evicted".into();
+    }
 }
