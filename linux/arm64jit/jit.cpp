@@ -385,6 +385,22 @@ static void gbt_ports_dump() {
                 st[5], st[6] ? 1 : 0, st[9], st[4] ? "  <== queued" : "");
     }
     fprintf(o, "dead names %u\n", dead);
+    // port sets and their members: a receive right in a set a thread waits on, with a message queued, while that
+    // thread stays asleep, is a lost port-set wakeup
+    static auto *setstat = (kr_t (*)(unsigned, unsigned, unsigned **, unsigned *))dsym("mach_port_get_set_status");
+    for (unsigned k = 0; setstat && kr == 0 && k < nn; k++) {
+        if (!(ty[k] & 0x80000)) continue;  // MACH_PORT_TYPE_PORT_SET
+        unsigned *mem = nullptr, nmem = 0;
+        if (setstat(*task_self, nm[k], &mem, &nmem) != 0) { fprintf(o, "set %#x: status failed\n", nm[k]); continue; }
+        fprintf(o, "set %#x: %u members:", nm[k], nmem);
+        for (unsigned j = 0; j < nmem; j++) {
+            int st[10] = {}; unsigned cnt = 10;
+            attrs(*task_self, mem[j], 2, st, &cnt);
+            fprintf(o, " %#x%s", mem[j], st[4] ? "(queued)" : "");
+        }
+        fprintf(o, "\n");
+        if (vmdealloc && mem) vmdealloc(*task_self, (uint64_t)mem, nmem * 4ull);
+    }
     fclose(o);
     if (vmdealloc && nm) { vmdealloc(*task_self, (uint64_t)nm, nn * 4ull); vmdealloc(*task_self, (uint64_t)ty, nt * 4ull); }
 }
