@@ -757,6 +757,24 @@ static Handler timebase_handler(const std::string &n) {
     return it == m.end() ? nullptr : it->second;
 }
 
+// geteuid() as libAccessibility sees it: the Mac user (501), not root. A simulator process runs as the Mac user, but
+// Darling answers 0 for every process. iOS 27's libAccessibility reads its preferences directly unless the caller is
+// root; then it asks the AX server in backboardd over IPC with a 1 s timeout. backboardd is "root" too, so it blocked on
+// its own server, and every app's AX preference read (a dozen at Settings' launch: button shapes, reduce motion, ...)
+// waited out the timeout: Settings showed a black screen for ~17 s. Only calls from libAccessibility's code: launchd_sim's
+// domain is uid 0, and a non-root launchd refused to bootstrap any job. X86CODE_A64_AX_EUID overrides (0: as before).
+static u64 g_ax_lo, g_ax_hi;
+void ax_euid_prepare(const std::string &cache) {
+    cache_exports(cache, "/usr/lib/libAccessibility.dylib", nullptr, &g_ax_lo, &g_ax_hi);
+}
+static void h_geteuid(GuestThread &t, u32) {
+    static const u64 ax = [] { const char *e = getenv("X86CODE_A64_AX_EUID"); return e ? strtoull(e, nullptr, 10) : 501ull; }();
+    static auto *dgeteuid = (uid_t (*)())dsym("geteuid");
+    const u64 lr = t.x(30);
+    if (ax && lr >= g_ax_lo && lr < g_ax_hi) { t.set_x(0, ax); return; }
+    t.set_x(0, dgeteuid ? (u64)dgeteuid() : 0);
+}
+
 // Special handlers that don't use g_thunks[i].native (everything else does)
 bool special_needs_native(const std::string &n) {
     static const char *own[] = {"___libkernel_init", "_pthread_create_with_workgroup_np", "__simple_dprintf", "__simple_vdprintf",
@@ -817,7 +835,7 @@ Handler special_handler(const std::string &n, int *nfixed, const char **native_n
     };
     if (auto it = renamed.find(n); it != renamed.end()) { *native_name = it->second; return h_generic; }
     static const std::map<std::string, Handler> special = {
-        {"____chkstk_darwin", h_noop}, {"_thread_chkstk_darwin", h_noop},
+        {"____chkstk_darwin", h_noop}, {"_thread_chkstk_darwin", h_noop}, {"_geteuid", h_geteuid},
         {"_sys_icache_invalidate", h_icache_invalidate}, {"_sys_cache_control", h_cache_control}, {"_sys_dcache_flush", h_noop},
         {"___libkernel_init", h_libkernel_init}, {"___libkernel_platform_init", h_zero}, {"___libkernel_voucher_init", h_zero},
         {"___libkernel_init_after_boot_tasks", h_zero}, {"___libplatform_init", h_zero}, {"___pthread_init", h_zero},

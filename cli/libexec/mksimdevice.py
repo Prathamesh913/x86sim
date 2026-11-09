@@ -419,9 +419,11 @@ def main():
         **({"SIMFB_RING": os.environ.get("SIMFB_RING") or "/Volumes/SystemRoot/run/user/%d/x86code-%s-simfb.ring" % (
             os.getuid(), os.path.basename(device.rstrip("/")).removeprefix("device-"))}),
         # Speed 3: launchd jobs only see Bootstrap.Child, so the JIT flags must be copied here to reach backboardd and
-        # SpringBoard. Speed 6: every X86CODE_A64_* flag (was a list that missed new ones, e.g. PERFMAP).
+        # SpringBoard. Speed 6: every X86CODE_A64_* flag (was a list that missed new ones, e.g. PERFMAP). X86SIM_SCRATCH: the
+        # JIT's scratch dir (a64-penv, a64-slim-park, gbt, crash dumps); without it the JIT falls back to the home of its
+        # uid, which in a user-namespace phone (the AppImage's) is 0: /root/scratch, unreadable, and all of those were off.
         **({k: v for k, v in os.environ.items()
-            if (k.startswith("X86CODE_A64_") and k not in ("X86CODE_A64_EXE", "X86CODE_A64_LOG")) or k == "SIMFB_HZ"}
+            if (k.startswith("X86CODE_A64_") and k not in ("X86CODE_A64_EXE", "X86CODE_A64_LOG")) or k in ("SIMFB_HZ", "X86SIM_SCRATCH")}
           ),
         "SIMULATOR_UDID": udid,
         "SIMULATOR_DEVICE_NAME": dt.get("name", "x86code"),
