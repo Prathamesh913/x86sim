@@ -314,6 +314,18 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     return lib;
 }
 
+// fcntl(F_GETPATH) on a stub dylib's fd: its install name. Darling answers from /proc/self/fd, i.e.
+// "memfd:libsystem_kernel.dylib (deleted)"; dyld_sim recorded that as the image's path, and every process's XPC service
+// bootstrap then failed on it in launchd ("Failed to bootstrap path: path = /Volumes/SystemRoot/memfd:...", ~120 lines a
+// boot).
+const char *stub_name_for_fd(int fd) {
+    struct stat a, b;
+    if (g_libs.empty() || fstat(fd, &a) != 0) return nullptr;
+    for (auto &l : g_libs)
+        if (fstat(l.fd, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) return l.install_name.c_str();
+    return nullptr;
+}
+
 int stub_fd_for_path(const char *path) {
     for (auto &l : g_libs)
         if (l.install_name == path) return dup(l.fd);

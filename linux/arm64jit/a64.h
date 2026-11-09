@@ -269,6 +269,7 @@ void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *));
 void *gh_malloc(size_t); void *gh_calloc(size_t, size_t); void *gh_realloc(void *, size_t); void gh_free(void *);
 void *gh_memalign(size_t align, size_t size); size_t gh_size(const void *); size_t gh_good_size(size_t);                               // from ___libkernel_init: patches the mapped cache text
 int stub_fd_for_path(const char *path);  // open() redirect: a dup of the stub dylib's fd, or -1
+const char *stub_name_for_fd(int fd);    // the install name of a stub dylib open on fd, or nullptr
 
 void set_guest_key_destructor(u64 key, u64 guest_dtor);  // pthread keys (handlers.cpp, jit.cpp)
 

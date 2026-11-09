@@ -567,22 +567,18 @@ grep -E "Successfully spawned|exited due|exited with" "$ST/launchd.log" | sed "s
 echo "== lsim.out (tail)"; tail -5 "$ST/lsim.out"
 # Report cgroup containment
 echo "== cgroup containment"
-# Prefer the running x86sim scope that already holds our guests (highest memory.current). A stale
-# scope left from a previous KEEP boot would otherwise win `list-units | head` and report false OUTs.
-SCOPE=""
-best=-1
-for s in $(systemctl --user list-units 'x86sim-*.scope' --no-legend 2>/dev/null | awk '/running/{print $1}'); do
-	cg=$(systemctl --user show "$s" -p ControlGroup --value 2>/dev/null)
-	cur=$(cat /sys/fs/cgroup$cg/memory.current 2>/dev/null || echo 0)
-	if [ "$cur" -gt "$best" ]; then best=$cur; SCOPE=$s; fi
-done
+# This boot's own scope (the one this script runs in); a phone's processes are those of its Darling prefix (as
+# boot-inner.sh's join_prefix_cgroup matches them). Before, the scope with the most memory and every process of any
+# phone counted: another running phone's processes were reported as OUT of this one.
+SCOPE=$(awk -F: '/^0::/{print $NF; exit}' /proc/$$/cgroup 2>/dev/null); SCOPE=${SCOPE##*/}
+case $SCOPE in x86sim-*.scope) ;; *) SCOPE="" ;; esac
 if [ -n "$SCOPE" ]; then
 	CG=$(systemctl --user show "$SCOPE" -p ControlGroup --value 2>/dev/null)
 	echo "scope=$SCOPE memory.current=$(cat /sys/fs/cgroup$CG/memory.current 2>/dev/null) memory.max=$(cat /sys/fs/cgroup$CG/memory.max 2>/dev/null)"
 	in=0; out=0; in_rss=0; out_rss=0
 	for p in /proc/[0-9]*; do
 		[ -r "$p/environ" ] || continue
-		grep -qaz X86CODE_A64 "$p/environ" 2>/dev/null || continue
+		grep -qsazxF -e "DPREFIX=$DPREFIX" -e "A64_DPREFIX=$DPREFIX" -e "__mldr_sockpath=$DPREFIX/.darlingserver.sock" "$p/environ" 2>/dev/null || continue
 		cg=$(awk -F: '/^0::/{print $NF; exit}' "$p/cgroup" 2>/dev/null)
 		rss=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); rss=${rss:-0}
 		case "$cg" in
@@ -593,7 +589,7 @@ if [ -n "$SCOPE" ]; then
 	# darlingserver for this prefix
 	for p in /proc/[0-9]*; do
 		[ -r "$p/cmdline" ] || continue
-		tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "darlingserver $DPREFIX" || continue
+		tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -qF "darlingserver $DPREFIX " || continue
 		cg=$(awk -F: '/^0::/{print $NF; exit}' "$p/cgroup" 2>/dev/null)
 		rss=$(awk '/^VmRSS/{print $2}' "$p/status" 2>/dev/null); rss=${rss:-0}
 		case "$cg" in
