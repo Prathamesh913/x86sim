@@ -1,16 +1,15 @@
 #!/bin/sh
-# x86Code: build the optional diagnostic shims host/simshim/diag/lib<name>.dylib (x86_64 iOS simulator) on the Mac
-# ($X86SIM_MAC). Use one with X86CODE_INSERT=host/simshim/diag/lib<name>.dylib on a boot (see each file's header).
+# x86Code: build the optional diagnostic shims host/simshim/diag/arm64/lib<name>.dylib (arm64 iOS simulator) on the Mac
+# ($X86SIM_MAC). Use one with X86CODE_INSERT=host/simshim/diag/arm64/lib<name>.dylib on a boot (see each file's header).
 #   build/mac-build-diag.sh [name ...]     (default: all; name = source file without extension, e.g. syncdiag)
 # X86CODE_DATA_DIR (their log directory) is the device's data directory as seen inside Darling.
-# DIAG_ARCH=arm64: arm64 iOS-simulator build into arm64/lib<name>.dylib (for the arm64 runtime; X86SIM_DEVICE = that phone).
+# X86SIM_DEVICE: the phone whose data directory gets the logs.
 set -e
 . "$(dirname "$0")/mac-env.sh"
 cd "$X/host/simshim/diag"
 DATA="/Volumes/SystemRoot$X86SIM_DEVICE/data"
 names=${*:-$(ls *.c *.m | sed 's/\.[cm]$//')}
-OUT=.
-if [ "${DIAG_ARCH:-}" = arm64 ]; then SIMCC="xcrun -sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator"; OUT=arm64; mkdir -p arm64; fi
+OUT=arm64; mkdir -p arm64
 for n in $names; do
 	src=$(ls $n.c $n.m 2>/dev/null | head -1)
 	[ -n "$src" ] || { echo "no source for $n" >&2; exit 1; }

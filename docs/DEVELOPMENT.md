@@ -29,7 +29,7 @@ host/       simulator-side code (Mach-O, run inside Darling): simhost (x86_64), 
             host/<name>/arm64 of simfb, simhid, simaudio, iosurfaced, metalhostd (+ vkmtl), fpsim2host, netconfig,
             openurl, simshim/{compat,diag}
 linux/      native Linux pieces: arm64jit (the JIT host library), mtlvk (Rust, Metal on Vulkan), mdnsd, hostnet
-tests/      sample apps (tests/apps), arm64 JIT tests (tests/arm64), probes (tests/probes), Metal (mtlprobe + shaders)
+tests/      sample apps (tests/apps), arm64 JIT tests (tests/arm64), Metal (mtlprobe + shaders)
             and IOSurface (iosprobe) tests, perf.py
 tools/      launcher/: the launcher GUI, x86code-aot, x86code-mcp; debug/: core dumps, stacks, stuck processes,
             Darling install (dinstall.sh); runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux

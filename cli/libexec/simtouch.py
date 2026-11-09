@@ -83,8 +83,7 @@ def edge_at(x, y, w, h):
     return None
 
 
-# x86Code: permission prompts. cli/libexec/seedperms.py pre-answers them before a boot; whatever still comes up (an app
-# we didn't seed, a service whose store we don't know) is answered here: OCR the frame, tap the allowing button.
+# x86Code: permission prompts are answered here: OCR the frame, tap the allowing button.
 # Preference order: the location prompt's "Allow While Using App", then a lone "Allow" (notifications, TCC).
 def find_allow_button():
     import subprocess

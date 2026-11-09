@@ -1,7 +1,7 @@
 // x86Code: diagnostic shim (arm64): which dictionary gets a nil object. In processes named in X86CODE_NILDICT (default
 // Spotlight) +[NSDictionary dictionaryWithObjects:forKeys:count:] logs keys, the non-nil objects and the caller when an
 // object is nil (CoreSpotlight's _CSSuggestionToken threw "attempt to insert nil object from objects[0]").
-// Log: X86CODE_DATA_DIR/var/log/nildict.<pid>.log. X86CODE_INSERT=<this dylib> (DIAG_ARCH=arm64 build/mac-build-diag.sh).
+// Log: X86CODE_DATA_DIR/var/log/nildict.<pid>.log. X86CODE_INSERT=<this dylib> (build/mac-build-diag.sh).
 #import <Foundation/Foundation.h>
 #include "diagpath.h"
 #include <objc/runtime.h>

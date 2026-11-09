@@ -20,7 +20,7 @@ import fbring
 
 OUT = os.path.join(x86config.get("X86SIM_SITE"), "live")
 FPS = int(sys.argv[1]) if len(sys.argv) > 1 else 60
-# x86Code: the size comes from the ring's frames (devices differ: 1179x2556, 1206x2622, ...); the width is cropped
+# x86Code: the size comes from the ring's frames (models differ: 1206x2622, 1320x2868, ...); the width is cropped
 # to even for 4:2:0 and the stream is half size
 W = H = OW = OH = None
 

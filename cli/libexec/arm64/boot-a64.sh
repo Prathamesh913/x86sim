@@ -1,7 +1,6 @@
 #!/bin/bash
-# x86Code: boot the arm64 device (iOS 27.0 runtime, every process under libarm64jit; ARM64-PLAN stage 2) for SECS
-# seconds and summarise. Everything is separate from the x86_64 iOS 26.5 stack, which keeps running untouched:
-# its own Darling prefix (A64_DPREFIX, default $X86SIM_SCRATCH/a64prefix: only that container is shut down and
+# x86Code: boot a phone (iOS 27 arm64 runtime, every process under libarm64jit) for SECS seconds and summarise. Each
+# phone has its own Darling prefix (A64_DPREFIX, default $X86SIM_SCRATCH/a64prefix: only that container is shut down and
 # restarted), device (var/device-a64), state dir (var/run-a64) and frame ring (/dev/shm/x86code-a64-simfb.ring).
 # DNS: own linux/mdnsd server per boot (Speed 26, below). mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
 # socket ($ST/mtlvk.sock) and pidfile — never pkill -x mtlvk (would hit a frozen x86 stack's mtlvk).
@@ -184,8 +183,7 @@ UI="com.apple.installcoordinationd com.apple.mobiletimerd com.apple.backboardd c
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"
-# FileProvider (Speed 16, on demand: started when Files opens): fileproviderd + the sim2host stand-in (as rundev's x86
-# fpsim2host) give Files its Browse locations (iCloud Drive, On My iPhone, Recently Deleted). Without them Files only
+# FileProvider (Speed 16, on demand: started when Files opens): fileproviderd + the sim2host stand-in (host/fpsim2host) give Files its Browse locations (iCloud Drive, On My iPhone, Recently Deleted). Without them Files only
 # showed Recents. DesktopServicesHelper (Speed 17, on demand): Files lists On My iPhone (the LocalStorage domain, no
 # extension in iOS 27) through DesktopServices, whose com.apple.DesktopServicesHelper.FileService does the file
 # operations. Without it the folder stayed "Loading" and New Folder did nothing.
@@ -428,7 +426,7 @@ stop_prefix() {
 	fi
 }
 stop_prefix
-# Speed 23: jetsam stand-in (cli/libexec/jetsam.py, as the x86_64 boot's rundev.sh): reclaims extensions and older
+# Speed 23: jetsam stand-in (cli/libexec/jetsam.py): reclaims extensions and older
 # background apps that RunningBoard keeps suspended, as a device's memorystatus does. Without it every poster
 # extension PosterBoard updated at boot (12 of them, ~470 MB PSS) and every app opened stayed resident.
 # X86SIM_JETSAM=0: off. Scoped to this prefix's container (jetsam.container_ns).
@@ -456,9 +454,8 @@ rm -rf "$DPREFIX/private/var/run/x86code-suspended" "$DPREFIX/private/var/run/x8
 # the Darling pieces our build fixed (libsystem_kernel ...), also into a recreated prefix: cli/libexec/arm64/prefix-heal.sh
 [ "${A64_PREFIX_HEAL:-1}" != 0 ] && sh "$X/cli/libexec/arm64/prefix-heal.sh" "$DPREFIX"
 # Speed 27: frameworks a Mac host has in /System/Library/Frameworks that the simulator opens there by absolute path (not
-# under its runtime root), as run-launchd-sim.sh does for the x86_64 boot: CoreSpotlight reads its localized strings
-# from [NSBundle bundleWithPath:@"/System/Library/Frameworks/CoreSpotlight.framework"]. The arm64 prefix only had the
-# install root's link into the iOS 26.5 runtime, which is gone: every CoreSpotlight string was nil (PHOTO_TOKEN) and
+# under its runtime root): CoreSpotlight reads its localized strings
+# from [NSBundle bundleWithPath:@"/System/Library/Frameworks/CoreSpotlight.framework"]. Without it every CoreSpotlight string was nil (PHOTO_TOKEN) and
 # Spotlight crashed on the first typed letter ("attempt to insert nil object" in -[_CSSuggestionToken init...]). The
 # booted runtime's own copy (its real path) is linked in the prefix's upper layer at every boot.
 for fw in CoreSpotlight; do
@@ -499,7 +496,7 @@ H="/Volumes/SystemRoot$X/host/simhost/simhost"
 A64_TIMEOUT=$([ "${A64_KEEP:-0}" = 1 ] && echo 86400 || echo $((SECS + 5)))
 CMDFILE=$ST/simhost.cmd
 # Speed 26: DNS. On a Mac the simulator's libsystem_dnssd talks to the host's mDNSResponder at /var/run/mDNSResponder;
-# rundev.sh (x86_64) runs linux/mdnsd/mdnsresponder.py for that, this boot had none: every lookup failed with -1003
+# linux/mdnsd/mdnsresponder.py plays it. Without one every lookup failed with -1003
 # (mobileassetd could not fetch Siri's assets, News/Spotlight/Settings search had no network). Own server per boot
 # ($ST/mDNSResponder), linked into this container's /var/run. X86CODE_MDNS=0: none.
 MDNS_LINK=

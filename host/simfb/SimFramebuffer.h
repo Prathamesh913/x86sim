@@ -1,7 +1,7 @@
 /*
  * SimFramebuffer.h -- reconstructed interface of Apple's private
  * SimFramebuffer.framework (CoreSimulator-1174.9.2, shipped with Xcode 27.1),
- * as loaded by the iOS 26.5 runtime's SimFramebufferClient shim via
+ * as loaded by the runtime's SimFramebufferClient shim via
  *   dlopen(getenv("SIMULATOR_FRAMEBUFFER_FRAMEWORK")) + dlsym() x 59.
  *
  * Purpose: let us write an x86_64 replacement that runs inside the runtime
@@ -128,7 +128,7 @@
  *  - SFBConnectionCopyDisplays: CFArrayCreate(..., &display, 1, &kCFTypeArrayCallBacks).
  *  - SFBConnectionCopyDisplay(conn, id) / CopyDisplayByUID(conn, uid): CFRetain'd
  *    display or NULL.
- *  - Display (portrait iPhone 15 Pro-ish, 1179x2556 @3x, 60 Hz):
+ *  - Display (portrait, the model's size @3x, 60 Hz):
  *        name        = CFSTR("iPhone")            (any CFString)
  *        uid         = CFSTR("com.x86code.simfb.display.0")  (MUST be non-NULL)
  *        deviceName  = CFSTR("iPhone")

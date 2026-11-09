@@ -45,7 +45,7 @@ mac:
 	build/mac-build-arm64-shims.sh simshim simaudio simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig
 
 mac-diag:
-	DIAG_ARCH=arm64 build/mac-build-diag.sh
+	build/mac-build-diag.sh
 
 clean:
 	cd linux/mtlvk && cargo clean

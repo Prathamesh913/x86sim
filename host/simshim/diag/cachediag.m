@@ -1,7 +1,7 @@
 // x86Code: diagnostic shim (arm64): does dyld_sim find a framework in the shared cache by the paths CFBundle uses?
 // In processes named in X86CODE_CACHEDIAG (default com.apple.WebKit.WebContent) logs _dyld_shared_cache_contains_path
 // and realpath for WebKit's executable path forms, and what CFBundle reports for WebKit.framework.
-// Log: X86CODE_DATA_DIR/var/log/cachediag.<pid>.log. X86CODE_INSERT=<this dylib> (DIAG_ARCH=arm64 build/mac-build-diag.sh).
+// Log: X86CODE_DATA_DIR/var/log/cachediag.<pid>.log. X86CODE_INSERT=<this dylib> (build/mac-build-diag.sh).
 #import <Foundation/Foundation.h>
 #include "diagpath.h"
 #include <mach-o/dyld.h>

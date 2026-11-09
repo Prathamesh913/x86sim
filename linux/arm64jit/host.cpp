@@ -39,7 +39,7 @@ const DarwinApi *g_darwin;
 // Speed 19: Darling's x86_64 libsystem_platform fills generically: bzero and memset are memset_pattern4, which calls
 // memmove once per 4 bytes (a 12.6 MB full-screen bitmap clear = 3.1M calls; ~25% of SpringBoard's main thread when an
 // app opens). Guest calls bind to these instead (glibc memset; pattern fills double in place with memcpy). Darling's
-// own native callers keep theirs (the x86_64 runtime is unchanged).
+// own native callers keep theirs.
 namespace {
 void fast_bzero(void *p, size_t n) { memset(p, 0, n); }
 void *fast_memset(void *p, int c, size_t n) { return memset(p, c, n); }

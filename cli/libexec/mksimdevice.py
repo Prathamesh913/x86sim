@@ -349,7 +349,7 @@ def main():
                            "StandardOutPath": log, "StandardErrorPath": log}, f)
         # x86Code: iOS 27 MTLCompiler lives on disk as Metal.framework/XPCServices/MTLCompilerService.xpc
         # (moved out of the dyld cache). launchd_sim discovers it as a multi-instance Application XPC
-        # service (same as iOS 26.5 on x86). Do NOT install a single-instance LaunchDaemon for the
+        # service. Do NOT install a single-instance LaunchDaemon for the
         # same label: that makes "create copy of service" fail with error 137 and every pipeline dies.
         # A64: Metal.framework's executable is cache-only; without an on-disk Metal binary, xpc_bundle
         # cannot resolve the framework and MTLCompiler lookups are "No such process" (error 3).

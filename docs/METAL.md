@@ -258,7 +258,7 @@ The device name, families and limits the app sees are the client's own (MTLSimDr
 `X86CODE_METAL=backboardd`: backboardd's QuartzCore finds a device and switches its render server to Metal. In a
 200 s boot it created 27 render pipelines and 0 failed. They include CA's image/colour-matrix/blend fragment
 shaders and the iOS 26 glass shaders (`glass_background_no_bleed_lpf`, `glass_background_sdf_no_bleed_lpf`,
-`variable_blur_*`, `downsample_blur_*`). The swapchain's three 1179x2556 BGRA IOSurfaces (from simfb, created in
+`variable_blur_*`, `downsample_blur_*`). The swapchain's three full-screen BGRA IOSurfaces (from simfb, created in
 backboardd) become render targets over their own pages. No command buffer failed and no selector was
 unimplemented.
 

@@ -5,7 +5,7 @@
 # omits sleepd + usernotificationsd (~400 MB RSS each); std keeps them for cold-boot BKS.
 #
 # Matches /proc/<pid>/comm (15-char truncated). Never touches SpringBoard, backboardd,
-# launchd_sim, or the x86_64 stack. A64_SLIM=0 disables. Interval: A64_SLIM_SECS (default 5;
+# or launchd_sim. A64_SLIM=0 disables. Interval: A64_SLIM_SECS (default 5;
 # they grow to 400–600 MB RSS in ~15 s under the JIT, so a short interval matters).
 set -euo pipefail
 INTERVAL=${A64_SLIM_SECS:-5}

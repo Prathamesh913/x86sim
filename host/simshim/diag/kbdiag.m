@@ -1,7 +1,7 @@
 // x86Code: diagnostic shim (SpringBoard; arm64): hardware-keyboard focus. Logs how SpringBoard builds its keyboard
 // focus targets (SBKeyboardFocusTarget: scene -> clientHandle -> processHandle -> pid), the coordinator's focus changes
 // and the policy target it sends to backboardd. Log: X86CODE_DATA_DIR/var/log/kbdiag.<pid>.log.
-// X86CODE_INSERT=<this dylib> (build: DIAG_ARCH=arm64 build/mac-build-diag.sh kbdiag).
+// X86CODE_INSERT=<this dylib> (build: build/mac-build-diag.sh kbdiag).
 #import <Foundation/Foundation.h>
 #include "diagpath.h"
 #include <objc/runtime.h>

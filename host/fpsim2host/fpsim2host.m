@@ -3,14 +3,14 @@
 // In an iOS simulator, FileProvider (fileproviderd, its extensions, apps) sends the file operations a simulator process
 // can't do itself to the host's fileproviderd: open by file id, openat/mkdirat/unlinkat/renameat on behalf of the
 // extension, xattrs, dataless files... (+[FPDaemonConnection simulatorHostConnection], the NSXPCInterface from
-// FPSimulatorSupportInterface()). There is no Mac here: this simulator job (cli/libexec/rundev.sh: com.x86code.fpsim2host,
+// FPSimulatorSupportInterface()). There is no Mac here: this simulator job (cli/libexec/arm64/boot-a64.sh: com.x86code.fpsim2host,
 // MachServices com.apple.FileProvider.sim2host; simshim keeps the connection a simulator one) does them in-process.
 // Without it the On My iPhone extension failed "can't resolve did=... [78: Function not implemented]" and Files could
 // not open any document.
 //
 // The calls are handled in -forwardInvocation: with the protocol's own method signatures, so argument types come from
 // FileProvider itself. Every method's signature is logged at start (data/var/log/fpsim2host.log), and every call.
-// All 16 methods are answered (tests/probes/s2hprobe exercises them over XPC): open by id, openat/mkdirat/unlinkat/
+// All 16 methods are answered: open by id, openat/mkdirat/unlinkat/
 // renameat, xattrs, package lookup (FileProvider's own fpfs_pkg_path_lookup on the path), directory entries
 // (getattrlistbulk records), dataless files (SF_DATALESS + sparse logical size; materialize copies the content in and
 // clears the flag; nothing faults on read), purgeable and sync-root marks (kept in xattrs), materialization handlers

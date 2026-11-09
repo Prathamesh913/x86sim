@@ -5,7 +5,7 @@ On a Mac the simulator has no mDNSResponder of its own: its libsystem_dnssd (mDN
 dnssd_clientstub) connects to the host's daemon at /var/run/mDNSResponder (MDNS_UDS_SERVERPATH, overridable with
 DNSSD_UDS_PATH). Network.framework (nw_resolver), CFNetwork and libinfo's getaddrinfo all resolve through it.
 Here this Linux process plays the host daemon: it listens on var/run/mDNSResponder, the container's
-/var/run/mDNSResponder is a symlink to it (cli/libexec/run-launchd-sim.sh), and it answers with real Linux DNS lookups.
+/var/run/mDNSResponder is a symlink to it (cli/libexec/arm64/boot-a64.sh), and it answers with real Linux DNS lookups.
 
 Protocol: Apple's mDNSShared/dnssd_ipc.h (VERSION 1). A request is a 28-byte ipc_msg_hdr (version, datalen,
 ipc_flags, op, client_context[8], reg_index; all big-endian except client_context, which is echoed raw) and datalen
