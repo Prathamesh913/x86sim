@@ -39,13 +39,19 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: x86Code ${{ env.TAG }}
           prerelease: true
-          draft: false
+          # the repo has immutable releases: assets go up while it is a draft, then it is published (next step)
+          draft: true
           generate_release_notes: true
           body: |
-            Pre-release build. Download the AppImage, `chmod +x` it and run it: the setup wizard checks this computer,
-            installs Darling into /opt/x86code (one password prompt), downloads iOS 27.2 from Apple (about 8 GB) and
-            makes your first phone. See docs/RELEASE.md.
+            Pre-release build. Download the AppImage, `chmod +x` it and run it: the Setup page checks this computer,
+            prepares the simulator host (no root where user namespaces are available, otherwise one password prompt),
+            downloads iOS 27.2 from Apple (about 8 GB), pre-translates it and makes your first phone.
           files: |
             dist/*.AppImage
             dist/*.zsync
             dist/SHA256SUMS
+
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --prerelease
