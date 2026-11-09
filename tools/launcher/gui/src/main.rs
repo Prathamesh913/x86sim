@@ -7,6 +7,7 @@ mod home;
 mod phone;
 mod setup;
 mod theme;
+mod updater;
 mod viewer;
 
 use eframe::egui;
@@ -73,6 +74,7 @@ pub struct App {
     pub view: View,
     pub viewers: HashMap<String, viewer::Viewer>,
     pub hub: host::HubSettings,
+    pub updater: updater::Updater,
     pub open: HashSet<&'static str>,
     pub add: Option<AddDialog>,
     pub models: Vec<(String, String)>,
@@ -195,6 +197,7 @@ impl App {
             view,
             viewers: HashMap::new(),
             hub: host::load_hub(),
+            updater: Default::default(),
             open,
             add: None,
             models: x86code_core::sim::models(),
@@ -383,6 +386,10 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // self-update: at start and every 6 hours (cheap when not due)
+        if self.hub.check_updates {
+            self.updater.check(ctx, false);
+        }
         // X86CODE_LAUNCHER_FPS=1: frames per second on stderr (idle cost checks)
         static FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *FPS.get_or_init(|| std::env::var_os("X86CODE_LAUNCHER_FPS").is_some()) {
@@ -474,11 +481,17 @@ impl eframe::App for App {
                     self.refresh_instances();
                 }
                 // footer: host status, pinned to the bottom
-                let footer_h = 40.0 + if self.aot.building() { 30.0 } else { 0.0 };
+                let upd_h = match self.updater.phase() {
+                    updater::Phase::Available(_) | updater::Phase::Ready(..) => 34.0,
+                    updater::Phase::Downloading(_) => 30.0,
+                    _ => 0.0,
+                };
+                let footer_h = 40.0 + upd_h + if self.aot.building() { 30.0 } else { 0.0 };
                 ui.add_space((ui.available_height() - footer_h).max(S4));
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 4.0;
+                    self.update_footer(ui);
                     if self.aot.building() {
                         let frac = self.aot.progress.as_ref().map(|p| if p.chunks_total > 0 { p.chunks_done as f32 / p.chunks_total as f32 } else { 0.0 }).unwrap_or(0.0);
                         ui.label(muted(format!("Pre-translating · {:.0}%", frac * 100.0)));

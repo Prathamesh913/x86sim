@@ -751,6 +751,8 @@ impl App {
                 save |= ui.add(egui::Slider::new(&mut self.hub.card_w, 200.0..=360.0).show_value(false)).drag_stopped();
             });
         });
+        ui.add_space(S5);
+        save |= self.update_settings(ui);
         if save {
             let _ = host::save_hub(&self.hub);
         }

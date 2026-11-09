@@ -147,11 +147,13 @@ pub struct HubSettings {
     pub card_w: f32,
     /// order of the phones on the home view: "name" | "newest" | "oldest" | "model" | "ios"
     pub sort: String,
+    /// look for a newer x86Code release (AppImage only) at start and every few hours
+    pub check_updates: bool,
 }
 
 impl Default for HubSettings {
     fn default() -> Self {
-        HubSettings { thumbnails: true, open_on_start: false, card_w: 250.0, sort: "name".into() }
+        HubSettings { thumbnails: true, open_on_start: false, card_w: 250.0, sort: "name".into(), check_updates: true }
     }
 }
 

@@ -16,3 +16,4 @@ pub mod macho;
 pub mod ring;
 pub mod setup;
 pub mod sim;
+pub mod update;
