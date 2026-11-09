@@ -547,7 +547,10 @@ if [ "${A64_PREFETCH:-1}" != 0 ]; then
 	JC=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
 	# Speed 14: prefetch.early = the pages present up to A64_PREFETCH_EARLY_SECS (default 24, ~home), snapshotted
 	# every 3 s and saved by first-touch time; prefetch.hot = everything mapped 60 s in (read after, capped)
+	# (nullglob: before the image's first load there is no .map yet, and a literal "*.map" crashed the recording)
+	shopt -s nullglob
 	PF_FILES=("$X86SIM_RUNTIME"/System/Library/Caches/com.apple.dyld/dyld_sim_shared_cache_arm64* "$JC"/*.map "$JC"/*.map.idx)
+	shopt -u nullglob
 	pf_record() { python3 -I "$X/cli/libexec/arm64/prefetch.py" record "$1" "${PF_FILES[@]}"; }
 	PF_ES=${A64_PREFETCH_EARLY_SECS:-24}
 	# early: also every other mapped file of the runtime, the jitcache dir and the darling prefix (non-cache dylibs,

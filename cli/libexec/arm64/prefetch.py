@@ -64,7 +64,14 @@ def ranges_of(pages, size):
     return ranges
 
 
+def existing(files):
+    """The files that exist (a shell glob that matched nothing arrives literally, e.g. jc/*.map before the image's
+    first load has made its map: that crashed the recording, so the next boot prefetched nothing)."""
+    return [f for f in files if f.endswith("/") or os.path.exists(f)]
+
+
 def record(hot, files):
+    files = existing(files)
     out = []
     for p, pages in used_pages(files).items():
         size = os.path.getsize(p)
@@ -78,6 +85,7 @@ def record(hot, files):
 
 
 def record_seq(hot, secs, step, files):
+    files = existing(files)
     import time
     first = {}   # path -> {page: seconds since start when first present}
     t0 = time.monotonic()
