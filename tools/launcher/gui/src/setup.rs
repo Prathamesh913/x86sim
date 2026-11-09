@@ -218,7 +218,7 @@ impl App {
         }
         step_header(ui, 4, "Pre-translate", built);
         list_card(ui, |ui| {
-            list_row(ui, icon::LIGHTNING, "Faster starts", "Translates iOS's code for this computer ahead of time (once per iOS version and x86Code update; it stays on this computer). Starts on its own once iOS is here; phones work meanwhile, just slower.", |ui| {
+            list_row(ui, icon::LIGHTNING, "Faster starts", "Translates iOS ahead of time, once. Starts on its own; phones work meanwhile, just slower.", |ui| {
                 if ui.add_enabled(have_rt, Btn::secondary("Open Pre-translate")).clicked() {
                     self.view = View::Aot;
                 }

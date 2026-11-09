@@ -270,6 +270,13 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
         training.push(p.jc.clone());
     }
     let hot = hot::load(&training, &uuid, &p.aot.join("hot.bin"), cfg.train_until)?;
+    // "hot" and "loaded" pick what phones have run; with no training yet (a fresh install) they would pick nothing, so
+    // the first build translates everything
+    let mut cfg = cfg.clone();
+    if hot.blocks.is_empty() && hot.live.is_empty() && cfg.scope != "all" {
+        cfg.scope = "all".into();
+    }
+    let cfg = &cfg;
     let mut sources = discover::cache_sources(&cache);
     let mut placed_paths = HashMap::new();
     let placements = discover::read_placement(&p.placement());
@@ -1283,7 +1290,7 @@ pub fn assemble(p: &Paths, plan: &Plan, man: &mut Manifest) -> Result<Image> {
     recs.sort_by_key(|r| r.slot_off);
     let files: Vec<ChunkFile> = recs.iter().map(|r| ChunkFile::open(&p.chunks().join(r.file.as_ref().unwrap()))).collect::<Result<_>>()?;
     if files.is_empty() {
-        bail!("no chunks to assemble");
+        bail!("nothing to pre-translate yet");
     }
     let f0 = &files[0];
     let cb = 0usize;

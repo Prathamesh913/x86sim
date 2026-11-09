@@ -633,7 +633,7 @@ impl App {
         // ---- options
         section(ui, "Options", |_| {});
         list_card(ui, |ui| {
-            form_row(ui, "How much", "Common is quick; Everything covers every app and framework.", false, |ui| {
+            form_row(ui, "How much", "Common and More follow what your phones use (until a phone has run, they cover everything); Everything covers every app and framework.", false, |ui| {
                 let scopes = [("hot", "Common"), ("loaded", "More"), ("all", "Everything")];
                 let sel = scopes.iter().position(|s| self.aot.cfg.scope == s.0);
                 if let Some(i) = segmented(ui, &scopes.map(|s| s.1), sel, !building) {
@@ -845,10 +845,13 @@ pub(crate) fn list_row(ui: &mut egui::Ui, ic: &str, title_text: &str, detail: &s
             ui.painter().rect_filled(r, 8.0, RAISED);
             ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, ic, font(17.0), INK_2);
             ui.add_space(4.0);
+            // the text wraps before the trailing buttons (room for about two) instead of running under them
+            let text_w = (ui.available_width() - 200.0).max(160.0);
             ui.vertical(|ui| {
+                ui.set_max_width(text_w);
                 ui.spacing_mut().item_spacing.y = 1.0;
-                ui.label(strong(title_text));
-                ui.label(muted(detail));
+                ui.add(egui::Label::new(strong(title_text)).wrap());
+                ui.add(egui::Label::new(muted(detail)).wrap());
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), trailing);
         });
