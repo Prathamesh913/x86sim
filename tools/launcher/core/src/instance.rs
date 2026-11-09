@@ -39,6 +39,8 @@ pub struct Instance {
     pub log_dir: PathBuf,
     pub is_default: bool,
     pub udid: String,
+    /// when the phone's folder was made (unix seconds; 0 if the file system doesn't record it): lists show newest first
+    pub created: u64,
 }
 
 /// Models 2: the second integrated display of a two-screen model (iPhone Duo: "LCD-1", screenID 3, 2007x2853,
@@ -166,12 +168,19 @@ pub fn load(dir: &Path) -> Instance {
         ring,
         inner,
         is_default,
+        created: std::fs::metadata(dir)
+            .and_then(|m| m.created())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
     }
 }
 
 pub fn list() -> Vec<Instance> {
     let mut v: Vec<Instance> = crate::sim::devices().into_iter().map(|d| load(&d.1)).collect();
-    v.sort_by(|a, b| b.is_default.cmp(&a.is_default).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    // newest first (then by name, for phones made in the same second or on file systems without creation times)
+    v.sort_by(|a, b| b.created.cmp(&a.created).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     v
 }
 

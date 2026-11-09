@@ -31,6 +31,9 @@ pub struct Shared {
     pub monitor: instance::Monitor,
     pub polled: bool,
     pub fetches: Vec<host::Fetch>,
+    /// bumped when the window changes the phone list itself (add, rename, delete): a poll that read the list before
+    /// that doesn't write its older copy back over it
+    pub insts_gen: u64,
 }
 
 #[derive(Clone, PartialEq)]
@@ -112,6 +115,7 @@ impl App {
             let mut last_sig = 0u64;
             let mut n = 0u64;
             loop {
+                let gen0 = sh.lock().unwrap().insts_gen;
                 let insts = instance::list();
                 let sig;
                 {
@@ -141,7 +145,9 @@ impl App {
                     }
                     sig = h.finish();
                     g.status = st.into_iter().map(|s| (s.id.clone(), s)).collect();
-                    g.insts = insts;
+                    if g.insts_gen == gen0 {
+                        g.insts = insts;
+                    }
                     g.polled = true;
                     g.fetches = fetches;
                 }
@@ -301,6 +307,10 @@ impl App {
     pub fn refresh_instances(&mut self) {
         self.insts = instance::list();
         self.runtimes = host::runtimes();
+        // the poller's copy too, at once: otherwise the next sync shows its older list until the next poll (~2 s)
+        let mut g = self.shared.lock().unwrap();
+        g.insts = self.insts.clone();
+        g.insts_gen += 1;
     }
 
     fn sync(&mut self) {
