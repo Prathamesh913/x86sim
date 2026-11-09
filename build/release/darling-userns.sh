@@ -18,9 +18,13 @@ holder() {
 	p=$(cat "$PIDF" 2>/dev/null) || return 1
 	[ -n "$p" ] && [ -e "/proc/$p/root/opt/x86code/.holder-$ID" ] && echo "$p"
 }
+# /opt/x86code/darling is a link in $O (bind-mounted at /opt): pointed at this version's tree on every call. A holder
+# outlives app versions with the same Darling build (the updater installs new ones, AppRun keeps the newest two): its
+# link went on naming the version that started it, and once that one was removed every boot failed ("nsenter: failed
+# to execute /opt/x86code/darling/bin/darling"). Same build id, same tree.
+mkdir -p "$O/x86code"
+ln -sfn "$TREE" "$O/x86code/darling"
 if ! p=$(holder); then
-	mkdir -p "$O/x86code"
-	ln -sfn "$TREE" "$O/x86code/darling"
 	: > "$O/x86code/.holder-$ID"
 	rm -f "$PIDF"
 	setsid unshare -r -m sh -c 'mount --bind "$1" /opt && echo $$ > "$2" && exec sleep 2147483647' sh "$O" "$PIDF" \

@@ -173,13 +173,15 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 # IXPlaceholder ... com.apple.installcoordinationd ... lookup error 3"). Idle cost none until an install looks it up.
 # mobiletimerd (on demand): AlarmKit (com.apple.alarmkitservices) and the timer/alarm servers, which a Mac's simulator
 # runs. Without it AlarmManager.requestAuthorization() never answered (Cadence's "Allow" did nothing).
+# nanotimekitcompaniond (on demand: its Mach services start it) renders the Watch app's faces: without it Face Gallery's
+# previews stayed empty (com.apple.nanotimekit.facesnapshotserver: no such process).
 UI="com.apple.installcoordinationd com.apple.mobiletimerd com.apple.backboardd com.apple.SpringBoard com.apple.sleepd com.apple.TextInput.kbd com.apple.FileCoordination
 	com.apple.usernotificationsd com.apple.InputUI com.apple.assistantd com.apple.assetsd com.apple.geod com.apple.navd
 	com.apple.campo com.apple.FileProvider com.apple.DesktopServicesHelper com.apple.PosterBoard com.apple.financed
 	com.apple.passd com.apple.finhealthd com.apple.healthd com.apple.healthappd com.apple.medialibraryd
 	com.apple.StatusKitAgent com.apple.mobileassetd com.apple.assetsubscriptiond com.apple.corespeechd com.apple.sirittsd
 	com.apple.siriinferenced com.apple.siriknowledged com.apple.siriactionsd com.apple.searchd com.apple.corespotlightservice
-	com.apple.assistant_cdmd com.apple.nanoregistryd"
+	com.apple.assistant_cdmd com.apple.nanoregistryd com.apple.nanotimekitcompaniond"
 UI_SLIM="com.apple.backboardd com.apple.SpringBoard com.apple.TextInput.kbd com.apple.FileCoordination com.apple.InputUI
 	com.apple.assistantd"
 FULLUI="com.apple.chronod"

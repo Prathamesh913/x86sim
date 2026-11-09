@@ -85,6 +85,14 @@ enum Obj {
     Pso(ComputePipelineState),
     Sampler(SamplerState),
     Rps(RenderPipelineState),
+    /// A render pipeline whose functions did not translate. The app gets a pipeline object anyway: draws with it are
+    /// skipped. Refusing it (a nil pipeline) let the app draw with nil, and Apple's MTLSimImplementation in metalhostd
+    /// aborts the whole host for that ("Attempting to draw with nil pipeline state"): every app lost its GPU connection
+    /// and the screen froze (Watch's Face Gallery, the Pride Weave face's barber_vertex_shader).
+    RpsFailed,
+    /// The same for a compute pipeline (its dispatches are skipped): "Attempting to dispatch without pipeline set"
+    /// aborted metalhostd the same way.
+    PsoFailed,
     Dss(DepthStencilState),
 }
 
@@ -112,6 +120,8 @@ pub type Sink = Arc<dyn Fn(u32, u64, Vec<u8>) + Send + Sync>;
 pub struct State {
     device: Device,
     objs: HashMap<u64, Obj>,
+    /// The current encoder's pipeline is an Obj::RpsFailed / PsoFailed: its draws / dispatches are skipped
+    skip_draws: std::cell::Cell<bool>,
     mirrors: HashMap<u64, Mirror>,
     helper: CommandQueue,
     out: Sink,
@@ -189,7 +199,8 @@ impl State {
                 Obj::Func(_) => 5,
                 Obj::Pso(_) => 6,
                 Obj::Sampler(_) => 7,
-                Obj::Rps(_) => 8,
+                Obj::Rps(_) | Obj::RpsFailed => 8,
+                Obj::PsoFailed => 6,
                 Obj::Dss(_) => 9,
             };
             n[k] += 1;
@@ -249,7 +260,7 @@ impl State {
         if vram_targets {
             eprintln!("mtlvk: render targets over IOSurfaces are drawn in VRAM (MTLVK_VRAM_TARGETS)");
         }
-        Ok(State { device, objs: HashMap::new(), mirrors: HashMap::new(), helper, out, log: std::env::var_os("MTLVK_LOG").is_some(), lib_bytes: HashMap::new(), func_src: HashMap::new(),
+        Ok(State { device, objs: HashMap::new(), skip_draws: std::cell::Cell::new(false), mirrors: HashMap::new(), helper, out, log: std::env::var_os("MTLVK_LOG").is_some(), lib_bytes: HashMap::new(), func_src: HashMap::new(),
             vram_targets, proxies: HashMap::new(), proxy_views: HashMap::new(), shared_vram: HashMap::new(), proxy_keys: HashMap::new(), buf_keys: HashMap::new(),
             written: Default::default(), stats_seen: 0, kinds: HashMap::new() })
     }
@@ -513,8 +524,10 @@ impl State {
                         w.i32(0).u32(tew).u32(max).u32(stat);
                     }
                     Err(e) => {
-                        eprintln!("mtlvk: CPS_NEW {id:#x}: {e}");
-                        w.i32(-1).u32(0).u32(0).u32(0).text(&e);
+                        eprintln!("mtlvk: CPS_NEW {id:#x}: {e} (its dispatches are skipped)");
+                        self.objs.insert(id, Obj::PsoFailed);
+                        let max = if max_total == 0 { 1024 } else { max_total.min(1024) };
+                        w.i32(0).u32(32).u32(max).u32(0);
                     }
                 }
                 Some(w.0)
@@ -539,8 +552,9 @@ impl State {
                         w.i32(0).u32(0);
                     }
                     Err(e) => {
-                        eprintln!("mtlvk: RPS_NEW {id:#x}: {e}");
-                        w.i32(-1).u32(0).text(&e);
+                        eprintln!("mtlvk: RPS_NEW {id:#x}: {e} (its draws are skipped)");
+                        self.objs.insert(id, Obj::RpsFailed);
+                        w.i32(0).u32(0);
                     }
                 }
                 Some(w.0)
@@ -1074,6 +1088,7 @@ impl State {
                 C_CS_BEGIN => {
                     enc.end()?;
                     let dt = DispatchType::try_from(c.u32()).map_err(err("dispatch type"))?;
+                    self.skip_draws.set(false);
                     enc = Enc::Compute(cb.compute_command_encoder_with_dispatch_type(dt).map_err(err("compute encoder"))?);
                 }
                 C_CS_END => {
@@ -1144,6 +1159,7 @@ impl State {
                             None => a.texture.clone().map(|t| (t, a.level)),
                         }).collect();
                     }
+                    self.skip_draws.set(false);
                     enc = Enc::Render(cb.render_command_encoder(&pass).map_err(err("render encoder"))?);
                 }
                 C_RE_END => {
@@ -1304,7 +1320,14 @@ impl State {
     fn compute_command(&self, enc: &mut ComputeCommandEncoder, kind: u32, c: &mut Rd) -> Res<()> {
         let e = |e: metal2vulkan_runtime::Error| e.to_string();
         match kind {
-            C_CS_PIPELINE => enc.set_compute_pipeline_state(self.pso(c.u64())?).map_err(e)?,
+            C_CS_PIPELINE => {
+                let id = c.u64();
+                let failed = matches!(self.objs.get(&id), Some(Obj::PsoFailed));
+                self.skip_draws.set(failed);
+                if !failed {
+                    enc.set_compute_pipeline_state(self.pso(id)?).map_err(e)?;
+                }
+            }
             C_CS_BUFFER => {
                 let (b, off, index) = (c.u64(), c.u64(), c.u32());
                 let b = if b == 0 { None } else { Some(self.buf(b)?) };
@@ -1341,7 +1364,8 @@ impl State {
                 let (k, _) = (c.u32(), c.u32());
                 let grid = Size::new(c.u64(), c.u64(), c.u64());
                 let group = Size::new(c.u64(), c.u64(), c.u64());
-                if k == 0 {
+                if self.skip_draws.get() {
+                } else if k == 0 {
                     enc.dispatch_threads(grid, group).map_err(e)?;
                 } else {
                     enc.dispatch_threadgroups(grid, group).map_err(e)?;
@@ -1365,7 +1389,14 @@ impl State {
     fn render_command(&self, enc: &mut RenderCommandEncoder, kind: u32, c: &mut Rd) -> Res<()> {
         let e = |e: metal2vulkan_runtime::Error| e.to_string();
         match kind {
-            C_RE_PIPELINE => enc.set_render_pipeline_state(self.rps(c.u64())?).map_err(e)?,
+            C_RE_PIPELINE => {
+                let id = c.u64();
+                let failed = matches!(self.objs.get(&id), Some(Obj::RpsFailed));
+                self.skip_draws.set(failed);
+                if !failed {
+                    enc.set_render_pipeline_state(self.rps(id)?).map_err(e)?;
+                }
+            }
             C_RE_BUFFER => {
                 let (b, off, stage, index) = (c.u64(), c.u64(), c.u32(), c.u32());
                 let b = if b == 0 { None } else { Some(self.buf(b)?) };
@@ -1431,14 +1462,18 @@ impl State {
             C_RE_DRAW => {
                 let (p, start, count, inst, base) = (c.u32(), c.u32(), c.u32(), c.u32(), c.u32());
                 let p = PrimitiveType::try_from(p).map_err(err("primitive"))?;
-                enc.draw_primitives(p, start, count, inst, base).map_err(e)?;
+                if !self.skip_draws.get() {
+                    enc.draw_primitives(p, start, count, inst, base).map_err(e)?;
+                }
             }
             C_RE_DRAW_INDEXED => {
                 let (p, count, it, inst) = (c.u32(), c.u32(), c.u32(), c.u32());
                 let (ib, off, base_vertex, base_inst) = (c.u64(), c.u64(), c.i32(), c.u32());
                 let p = PrimitiveType::try_from(p).map_err(err("primitive"))?;
                 let it = IndexType::try_from(it).map_err(err("index type"))?;
-                enc.draw_indexed_primitives(p, count, it, self.buf(ib)?, off, inst, base_vertex, base_inst).map_err(e)?;
+                if !self.skip_draws.get() {
+                    enc.draw_indexed_primitives(p, count, it, self.buf(ib)?, off, inst, base_vertex, base_inst).map_err(e)?;
+                }
             }
             C_RE_USE => {
                 let (res, usage, is_tex) = (c.u64(), c.u32(), c.u32());
