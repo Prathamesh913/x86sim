@@ -359,6 +359,50 @@ __attribute__((constructor)) static void shim_ifimage_init(void)
 	_dyld_register_func_for_add_image(shim_ifimage_added);
 }
 
+// x86Code: button haptics. backboardd's BKButtonHapticsController enters a dispatch group, asks ButtonResolver
+// -[BRButtonResolverController scheduleReadyNotificationOnDispatchQueue:withBlock:] and leaves the group in that block;
+// every later haptics configuration waits on the group first (_configureAsyncWithBlock: -> dispatch_group_wait
+// forever). ButtonResolver reports ready only once the button-haptics hardware answers, and there is none here: the
+// first side-button press (lock) queued a configuration that never ran, and the unlock that followed froze the phone
+// (SpringBoard's AnimationKit waited on it with the screen dimmed). The block now also runs 2 s after it was scheduled
+// if ButtonResolver has not called it, and runs once either way: no hardware, zero haptic slots.
+#include <dispatch/dispatch.h>
+#include <stdlib.h>
+static IMP shim_br_ready_orig;
+static void shim_br_ready(id self, SEL sel, dispatch_queue_t q, void (^blk)(void))
+{
+	if (!blk || !q) {
+		((void (*)(id, SEL, dispatch_queue_t, void (^)(void))) shim_br_ready_orig)(self, sel, q, blk);
+		return;
+	}
+	int* fired = calloc(1, sizeof(int));
+	void (^b)(void) = Block_copy(blk);
+	void (^once)(void) = ^{
+		if (__sync_bool_compare_and_swap(fired, 0, 1))
+			b();
+	};
+	((void (*)(id, SEL, dispatch_queue_t, void (^)(void))) shim_br_ready_orig)(self, sel, q, once);
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), q, ^{
+		if (__sync_bool_compare_and_swap(fired, 0, 1)) {
+			write(2, "simshim: ButtonResolver not ready after 2 s (no button haptics hardware): ready block run\n", 90);
+			b();
+		}
+	});
+}
+static void shim_br_added(const struct mach_header* mh, intptr_t slide)
+{
+	if (shim_br_ready_orig)
+		return;
+	Class c = objc_getClass("BRButtonResolverController");
+	Method m = c ? class_getInstanceMethod(c, sel_registerName("scheduleReadyNotificationOnDispatchQueue:withBlock:")) : NULL;
+	if (m)
+		shim_br_ready_orig = method_setImplementation(m, (IMP) shim_br_ready);
+}
+__attribute__((constructor)) static void shim_br_init(void)
+{
+	_dyld_register_func_for_add_image(shim_br_added);
+}
+
 #if defined(__arm64__)
 // x86Code (arm64, Speed 11): iconservicesagent keeps its icon store (IconsCache/<uuid>/, which also holds the Metal
 // shader cache __METAL_CACHE__ it points MTLSetShaderCachePath at) only if the store directory's owner is

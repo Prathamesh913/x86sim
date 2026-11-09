@@ -4,7 +4,7 @@
     {"id": "wallpaper", "title": "Wallpaper", "default": false,
      "desc": "The live lock and home screen wallpaper. Off by default: a still picture instead.",
      "tech": "PosterBoard and the MercuryPoster extension (the live lock and home wallpaper). Off: SpringBoard shows its last saved wallpaper snapshot (static; black on a new device).",
-     "jobs": ["com.apple.PosterBoard"], "park": ["MercuryPosterExtension"],
+     "jobs": ["com.apple.PosterBoard"],
      "chunks": ["PosterBoard", "MercuryPoster"], "cost_mb": 207, "when": "boot"},
     {"id": "spotlight", "title": "Search", "default": true,
      "desc": "Swipe down to search. Off: search shows nothing.",
