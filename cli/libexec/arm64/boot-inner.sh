@@ -19,13 +19,19 @@ join_prefix_cgroup() {
 		pid=${p#/proc/}; pid=${pid%/cmdline}
 		cmd=$(tr '\0' ' ' < "$p" 2>/dev/null)
 		case "$cmd" in
-			*"darlingserver ${DPREFIX}"*) echo "$pid" > "$cgfile" 2>/dev/null || true ;;
+			# "a64prefix " must not match another phone's "a64prefix-<name> "
+			*"darlingserver ${DPREFIX} "*) echo "$pid" > "$cgfile" 2>/dev/null || true ;;
 		esac
 	done
-	for p in $(grep -lsaz X86CODE_A64 /proc/[0-9]*/environ 2>/dev/null); do
+	# only this phone's processes: its guests (SIMULATOR_UDID), Darling's loaders (__mldr_sockpath, A64_DPREFIX) and
+	# host helpers (DPREFIX). Every phone's processes have X86CODE_A64_*, and taking those pulled the other running
+	# phones into this scope (stopping this phone then killed them too).
+	for p in $(grep -lsazxF -e "DPREFIX=$DPREFIX" -e "A64_DPREFIX=$DPREFIX" -e "__mldr_sockpath=$DPREFIX/.darlingserver.sock" \
+			${PHONE_UDID:+-e "SIMULATOR_UDID=$PHONE_UDID"} /proc/[0-9]*/environ 2>/dev/null); do
 		pid=${p#/proc/}; echo "${pid%/environ}" > "$cgfile" 2>/dev/null || true
 	done
 }
+PHONE_UDID=$(grep -o 'SIMULATOR_UDID=[0-9A-Fa-f-]*' "$A64_CMDFILE" 2>/dev/null | head -1 | cut -d= -f2)
 if [ -n "$A64_TZNAME" ] && [ -f "/usr/share/zoneinfo/$A64_TZNAME" ]; then
 	timeout 30 "$X86SIM_DARLING" shell ln -sf "/usr/share/zoneinfo/$A64_TZNAME" /private/etc/localtime < /dev/null > /dev/null 2>&1 || true
 fi

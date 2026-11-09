@@ -49,6 +49,12 @@ pub fn repo_root() -> PathBuf {
     if let Ok(r) = std::env::var("X86SIM_ROOT") {
         return PathBuf::from(r);
     }
+    // a build in place (<root>/tools/launcher/target/release/<exe>, as in the AppImage's data dir): that root
+    if let Some(r) = std::env::current_exe().ok().and_then(|e| e.ancestors().nth(5).map(Path::to_path_buf)) {
+        if r.join("cli/libexec/arm64/boot-a64.sh").exists() {
+            return r;
+        }
+    }
     // tools/launcher/core -> repo
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     here.ancestors().nth(3).map(Path::to_path_buf).unwrap_or(here)
@@ -262,6 +268,17 @@ pub struct Plan {
 
 /// Discover the chunk sources, the hot set and the scope (no translation).
 pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
+    // the placement table is part of the image's key: a phone's first boot copies the committed one into the cache dir
+    // (boot-a64.sh). Pre-translating before any boot (the setup page) must use that same table, or it builds an image
+    // under a key no phone looks for.
+    if !p.placement().exists() {
+        let build = p.jc.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("jc-")).unwrap_or("");
+        let shipped = repo_root().join(format!("cli/libexec/arm64/placement-{build}.txt"));
+        if !build.is_empty() && shipped.exists() {
+            std::fs::create_dir_all(&p.jc)?;
+            std::fs::copy(&shipped, p.placement()).with_context(|| format!("copying {}", shipped.display()))?;
+        }
+    }
     let cache = Cache::open(&cfg.runtime_root).context("opening the dyld cache")?;
     let uuid = cache.uuid_hex();
     // the cache dir's own per-process JIT caches are training profiles too (the sim records them on every boot)
