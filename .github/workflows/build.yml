@@ -43,7 +43,8 @@ jobs:
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" --add
           git submodule sync --recursive
-          git submodule update --init --depth 1 --jobs 8 external/metal2vulkan external/dynarmic
+          git submodule update --init --depth 1 --jobs 8 external/metal2vulkan
+          git submodule update --init --recursive --depth 1 --jobs 8 external/dynarmic
           git submodule update --init --recursive --depth 1 --jobs 8 external/darling
           du -sh external/*
 
