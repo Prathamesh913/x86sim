@@ -39,7 +39,7 @@ pub struct Instance {
     pub log_dir: PathBuf,
     pub is_default: bool,
     pub udid: String,
-    /// when the phone's folder was made (unix seconds; 0 if the file system doesn't record it): lists show newest first
+    /// when the phone's folder was made (unix seconds; 0 if the file system doesn't record it)
     pub created: u64,
 }
 
@@ -177,10 +177,28 @@ pub fn load(dir: &Path) -> Instance {
     }
 }
 
+/// Puts phones in a hub sort order ("name" | "newest" | "oldest" | "model": newest model first | "ios": newest iOS
+/// first); ties by name.
+pub fn sort(v: &mut [Instance], by: &str) {
+    let models = crate::sim::models();
+    let model_rank = |i: &Instance| models.iter().position(|m| m.1 == i.model_id && m.0 == i.model).or_else(|| models.iter().position(|m| m.1 == i.model_id)).unwrap_or(usize::MAX);
+    let ios = |i: &Instance| -> Vec<u32> { i.ios.trim_start_matches("iOS ").split('.').map(|n| n.parse().unwrap_or(0)).collect() };
+    let name = |a: &Instance, b: &Instance| a.name.to_lowercase().cmp(&b.name.to_lowercase());
+    v.sort_by(|a, b| {
+        match by {
+            "newest" => b.created.cmp(&a.created),
+            "oldest" => a.created.cmp(&b.created),
+            "model" => model_rank(a).cmp(&model_rank(b)),
+            "ios" => ios(b).cmp(&ios(a)),
+            _ => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| name(a, b))
+    });
+}
+
 pub fn list() -> Vec<Instance> {
     let mut v: Vec<Instance> = crate::sim::devices().into_iter().map(|d| load(&d.1)).collect();
-    // newest first (then by name, for phones made in the same second or on file systems without creation times)
-    v.sort_by(|a, b| b.created.cmp(&a.created).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    v.sort_by(|a, b| b.is_default.cmp(&a.is_default).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     v
 }
 

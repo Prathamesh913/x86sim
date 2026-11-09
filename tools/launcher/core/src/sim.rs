@@ -118,13 +118,31 @@ pub fn models() -> Vec<(String, String)> {
 fn load_models() -> Vec<(String, String)> {
     let txt = std::fs::read_to_string(repo_root().join("cli/lib/devicetypes-a64.json")).unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or_default();
-    let mut out = vec![];
+    let mut out: Vec<(String, String)> = vec![];
     if let Some(m) = v.as_object() {
         for (name, t) in m {
             out.push((name.clone(), t["model"].as_str().unwrap_or("").to_string()));
         }
     }
-    out.sort_by_key(|m| !m.0.starts_with("iPhone"));
+    // newest to oldest, as cli/lib/devicetypes-a64.json lists them (serde_json's map is sorted by name, so the file's
+    // own order is read from where each name sits in it), iPhones before iPads
+    let at = |name: &str| txt.find(&format!("\"{name}\": {{")).unwrap_or(usize::MAX);
+    // models the runtime lists as unsupported (with a "note": the iPhone Duo) are appended at the end of the file: they
+    // go right after the last model of their own generation ("iPhone19,4" after the other iPhone19s)
+    let generation = |id: &str| id.split(',').next().unwrap_or("").to_string();
+    let noted = |name: &str| v.get(name).is_some_and(|t| t.get("note").is_some());
+    let pos = |m: &(String, String)| -> (usize, usize) {
+        let own = at(&m.0);
+        if !noted(&m.0) {
+            return (own, 0);
+        }
+        let g = generation(&m.1);
+        let last = out.iter().filter(|o| !noted(&o.0) && generation(&o.1) == g).map(|o| at(&o.0)).max();
+        last.map(|l| (l, 1)).unwrap_or((own, 0))
+    };
+    let mut keyed: Vec<_> = out.iter().map(|m| ((!m.0.starts_with("iPhone"), pos(m)), m.clone())).collect();
+    keyed.sort_by_key(|k| k.0);
+    let out: Vec<_> = keyed.into_iter().map(|k| k.1).collect();
     out
 }
 

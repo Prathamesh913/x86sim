@@ -145,11 +145,13 @@ pub struct HubSettings {
     pub open_on_start: bool,
     /// home view card width
     pub card_w: f32,
+    /// order of the phones on the home view: "name" | "newest" | "oldest" | "model" | "ios"
+    pub sort: String,
 }
 
 impl Default for HubSettings {
     fn default() -> Self {
-        HubSettings { thumbnails: true, open_on_start: false, card_w: 250.0 }
+        HubSettings { thumbnails: true, open_on_start: false, card_w: 250.0, sort: "name".into() }
     }
 }
 

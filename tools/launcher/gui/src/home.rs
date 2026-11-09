@@ -42,9 +42,26 @@ impl App {
             (n, r) => format!("{n} phone{} · {r} running", if n == 1 { "" } else { "s" }),
         };
         let mut add = false;
+        let sorts = [("name", "Name"), ("newest", "Newest first"), ("oldest", "Oldest first"), ("model", "Model"), ("ios", "iOS version")];
+        let mut sort = self.hub.sort.clone();
         page_header(ui, "Phones", &subtitle, |ui| {
             add = ui.add(Btn::primary("Add phone").icon(icon::PLUS)).on_hover_text("Ctrl+N").clicked();
+            if n > 1 {
+                let cur = sorts.iter().find(|s| s.0 == sort).map(|s| s.1).unwrap_or("Name");
+                egui::ComboBox::from_id_salt("phonesort").icon(caret).width(150.0).selected_text(body(format!("{}  {cur}", icon::SORT_ASCENDING))).show_ui(ui, |ui| {
+                    for (k, label) in sorts {
+                        if ui.selectable_label(sort == k, label).clicked() {
+                            sort = k.to_string();
+                        }
+                    }
+                });
+            }
         });
+        if sort != self.hub.sort {
+            self.hub.sort = sort;
+            let _ = x86code_core::host::save_hub(&self.hub);
+        }
+        x86code_core::instance::sort(&mut self.insts, &self.hub.sort);
         if add {
             self.open_add_dialog();
         }
