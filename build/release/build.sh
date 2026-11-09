@@ -45,6 +45,8 @@ arm64jit)
 	;;
 arm64host)
 	step "arm64host"
+	# Darling's in-tree SDK links its usr/lib dylibs into external/darling/build; on a fresh checkout point that at $DB
+	[ -e "$X/external/darling/build" ] || ln -s "$DB" "$X/external/darling/build"
 	mkdir -p "$L" && ARM64HOST_OUT=$L/arm64host "$X/host/arm64host/build.sh" "$DB"
 	;;
 mtlvk)

@@ -55,10 +55,11 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: ccache
-        uses: actions/cache@v4
+        id: ccache
+        uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ github.sha }}-${{ github.run_id }}
           restore-keys: ccache-${{ runner.os }}-
 
       - name: Cargo cache
@@ -82,6 +83,13 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: tail -n 80 build/release/out/*.log || true
+
+      - name: Save ccache (also after a failure, so a retry doesn't rebuild Darling from scratch)
+        if: always() && steps.ccache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}-${{ github.run_id }}
 
       - name: AppImage
         id: pack
