@@ -1,3 +1,3 @@
 #!/bin/sh
-# x86Code: lipo for the Linux build (build/linux-env.sh)
+# x86Sim: lipo for the Linux build (build/linux-env.sh)
 exec llvm-lipo "$@"

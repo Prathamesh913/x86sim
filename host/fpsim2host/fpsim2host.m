@@ -1,9 +1,9 @@
-// x86Code: stand-in for the Mac host's FileProvider simulator support service, com.apple.FileProvider.sim2host.
+// x86Sim: stand-in for the Mac host's FileProvider simulator support service, com.apple.FileProvider.sim2host.
 //
 // In an iOS simulator, FileProvider (fileproviderd, its extensions, apps) sends the file operations a simulator process
 // can't do itself to the host's fileproviderd: open by file id, openat/mkdirat/unlinkat/renameat on behalf of the
 // extension, xattrs, dataless files... (+[FPDaemonConnection simulatorHostConnection], the NSXPCInterface from
-// FPSimulatorSupportInterface()). There is no Mac here: this simulator job (cli/libexec/arm64/boot-a64.sh: com.x86code.fpsim2host,
+// FPSimulatorSupportInterface()). There is no Mac here: this simulator job (cli/libexec/arm64/boot-a64.sh: com.x86sim.fpsim2host,
 // MachServices com.apple.FileProvider.sim2host; simshim keeps the connection a simulator one) does them in-process.
 // Without it the On My iPhone extension failed "can't resolve did=... [78: Function not implemented]" and Files could
 // not open any document.
@@ -299,7 +299,7 @@ static void replyv(NSInvocation* inv, NSArray* objs, const long long* nums, int 
 		uint64_t type = 0;
 		int r = fpfs_pkg_path_lookup ? fpfs_pkg_path_lookup(full, NULL, accept, &isPkg, &demoted, &type, detection) : 0;
 		int e = errno;
-		// x86Code: a Mac's fileproviderd also takes directories whose extension LaunchServices registers as a package
+		// x86Sim: a Mac's fileproviderd also takes directories whose extension LaunchServices registers as a package
 		// type (.app, .bundle, ...) for packages, bundle bit or not; Linux file systems never carry the bundle bit,
 		// and FileProvider's own lookup (detection 0, as LocalStorage asks) answered "plain directory" for them.
 		struct stat st;
@@ -374,7 +374,7 @@ static void replyv(NSInvocation* inv, NSArray* objs, const long long* nums, int 
 		// the flags are kept in an xattr so they can be read back.
 		NSFileHandle* fh = objArg(inv, 2);
 		uint64_t flags = (uint64_t) intArg(inv, 3);
-		int r = fsetxattr(fh.fileDescriptor, "com.apple.x86code.purgeable", &flags, sizeof(flags), 0, 0);
+		int r = fsetxattr(fh.fileDescriptor, "com.apple.x86sim.purgeable", &flags, sizeof(flags), 0, 0);
 		int e = errno;
 		LOG("  -> %d errno %d", r, r < 0 ? e : 0);
 		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
@@ -385,7 +385,7 @@ static void replyv(NSInvocation* inv, NSArray* objs, const long long* nums, int 
 		// every item (misc/fsctl.c); the mark is kept in an xattr.
 		NSFileHandle* fh = objArg(inv, 2);
 		int flags = (int) intArg(inv, 3);
-		int r = fsetxattr(fh.fileDescriptor, "com.apple.x86code.syncroot", &flags, sizeof(flags), 0, 0);
+		int r = fsetxattr(fh.fileDescriptor, "com.apple.x86sim.syncroot", &flags, sizeof(flags), 0, 0);
 		int e = errno;
 		LOG("  -> %d errno %d", r, r < 0 ? e : 0);
 		reply(inv, @[], 0, r < 0 ? posixError(e) : nil);
@@ -457,7 +457,7 @@ int main(int argc, char** argv) {
 		snprintf(p, sizeof(p), "%s/var/log/fpsim2host.log", home ? home : "/tmp");
 		logf_ = fopen(p, "a");
 		void* fp = dlopen("/System/Library/Frameworks/FileProvider.framework/FileProvider", RTLD_NOW);
-		dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", RTLD_NOW); // x86Code: UTType (pkgLookup)
+		dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", RTLD_NOW); // x86Sim: UTType (pkgLookup)
 		FPSimulatorSupportInterface = fp ? dlsym(fp, "FPSimulatorSupportInterface") : NULL;
 		fpfs_pkg_path_lookup = fp ? dlsym(fp, "fpfs_pkg_path_lookup") : NULL;
 		handlers = [NSMutableDictionary new];

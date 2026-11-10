@@ -11,11 +11,11 @@
 // back to Darling's malloc (blocks that native code allocated and the guest frees).
 // Speed 8: a scavenger thread (every 5 s) sorts each class's global free list and gives back (MADV_DONTNEED) the whole
 // pages that free blocks cover; those blocks move to a side list kept in host memory (their headers would re-touch
-// the pages), and refill hands them out after the free list. X86CODE_A64_GHEAP_SCAVENGE=0 turns it off.
+// the pages), and refill hands them out after the free list. X86SIM_A64_GHEAP_SCAVENGE=0 turns it off.
 // Speed 13: zero on free, as Apple's libmalloc does for small blocks. A free small block is all zero except its 16-byte
 // header (list link + free marker), which small_alloc clears, so every small allocation comes back zeroed (and calloc
 // needs no memset). Code relies on it: assetsd's LEOTokenizerCreate ARC-stores into a fresh sqlite3_malloc(8) and
-// released the stale free-list link it found there. X86CODE_A64_GHEAP_ZERO=0 turns it off.
+// released the stale free-list link it found there. X86SIM_A64_GHEAP_ZERO=0 turns it off.
 #include "a64.h"
 #include <cerrno>
 #include <signal.h>
@@ -55,7 +55,7 @@ struct Global {
     u64 scavenged_at = 0;          // nfree after the last scavenge (skip a class until it grows)
 } g_global[kClasses];
 std::atomic<u64> g_released_bytes{0};
-const bool g_zero = [] { const char *e = getenv("X86CODE_A64_GHEAP_ZERO"); return !(e && *e == '0'); }();
+const bool g_zero = [] { const char *e = getenv("X86SIM_A64_GHEAP_ZERO"); return !(e && *e == '0'); }();
 
 std::mutex g_large_mu;
 std::unordered_map<u64, u64> g_large;  // address -> mapped size
@@ -181,7 +181,7 @@ void scavenge(int c) {
 void start_scavenger() {
     static std::once_flag once;
     std::call_once(once, [] {
-        if (const char *e = getenv("X86CODE_A64_GHEAP_SCAVENGE"); e && *e == '0') return;
+        if (const char *e = getenv("X86SIM_A64_GHEAP_SCAVENGE"); e && *e == '0') return;
         // RAM 14: a native thread blocks every signal. A process-directed signal (the SIGTERM/SIGHUP a WebKit helper
         // gets when its host app dies) taken here ran Darling's handler, which needs this thread's darlingserver
         // RPC socket: there is none, so it aborted (__darling_thread_rpc_socket) instead of exiting.

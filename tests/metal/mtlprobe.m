@@ -1,5 +1,5 @@
-// x86Code: mtlprobe -- Metal stand-in test client, run inside the simulator as a launchd job
-// (com.x86code.mtlprobe=tests/metal/mtlprobe). Goes through the real path: sim Metal.framework ->
+// x86Sim: mtlprobe -- Metal stand-in test client, run inside the simulator as a launchd job
+// (com.x86sim.mtlprobe=tests/metal/mtlprobe). Goes through the real path: sim Metal.framework ->
 // MTLSimDriver -> XPC "com.apple.metal.simulator.mtlprobe" -> metalhostd (Apple's MTLSimImplementation over
 // VKMTLDevice) -> mtlvk (Vulkan). Prints one line per check and a summary.
 #import <Foundation/Foundation.h>
@@ -539,7 +539,7 @@ static void render_tests(id<MTLDevice> dev, id<MTLCommandQueue> q) {
 		g_surfaceTex = st;
 	}
 
-	// x86Code Speed 1c: arm64 home is 1206 wide — tight rows 4824, IOSurface stride 4864.
+	// x86Sim Speed 1c: arm64 home is 1206 wide — tight rows 4824, IOSurface stride 4864.
 	// Render a known pattern into a 1206-wide surface and check every texel + that the 40-byte
 	// pad is untouched (a width*4 write would smear into the pad and shift rows when read back).
 	{

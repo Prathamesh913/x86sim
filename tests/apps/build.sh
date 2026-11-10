@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86Code: build the test apps (tests/apps/<name>) for the arm64 iOS Simulator on the Mac (X86SIM_MAC) with swiftc —
+# x86Sim: build the test apps (tests/apps/<name>) for the arm64 iOS Simulator on the Mac (X86SIM_MAC) with swiftc —
 # no Xcode project — and copy the .app bundles to $X86SIM_SCRATCH/apps/. Usage: tests/apps/build.sh [name...]
 # On Linux (X86SIM_BUILD=linux, build/mac-env.sh: the default when sdks/iPhoneSimulator.sdk exists) the same commands
 # run here: build/linux-bin's xcrun/codesign map to build/linux-swiftc.sh + ld64.lld.
@@ -18,7 +18,7 @@ for n in $names; do
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
-<key>CFBundleIdentifier</key><string>com.x86code.test.$n</string>
+<key>CFBundleIdentifier</key><string>com.x86sim.test.$n</string>
 <key>CFBundleName</key><string>$n</string><key>CFBundleDisplayName</key><string>$n</string>
 <key>CFBundleExecutable</key><string>$n</string><key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string>

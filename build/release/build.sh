@@ -1,17 +1,17 @@
 #!/bin/sh
-# x86Code release build: everything the AppImage carries, built from source, nothing from Apple.
+# x86Sim release build: everything the AppImage carries, built from source, nothing from Apple.
 #   OUT (default build/release/out): all outputs; the source tree is only read (works on a read-only checkout)
-#   Darling is configured with the fixed install prefix /opt/x86code/darling (its binaries carry that path: darling
+#   Darling is configured with the fixed install prefix /opt/x86sim/darling (its binaries carry that path: darling
 #   execs $PREFIX/bin/darlingserver, darlingserver overlays $PREFIX/libexec/darling) and installed with DESTDIR into
-#   $OUT/destdir. The setup wizard's privileged step copies it to /opt/x86code/darling-<version> (root-owned, bin/darling
-#   setuid) and points the /opt/x86code/darling symlink at it.
+#   $OUT/destdir. The setup wizard's privileged step copies it to /opt/x86sim/darling-<version> (root-owned, bin/darling
+#   setuid) and points the /opt/x86sim/darling symlink at it.
 #   JOBS (default nproc), STEPS (default "darling arm64jit arm64host mtlvk launcher")
 set -e
 X=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=$(mkdir -p "${OUT:-$X/build/release/out}" && cd "${OUT:-$X/build/release/out}" && pwd)
 JOBS=${JOBS:-$(nproc)}
 STEPS=${STEPS:-darling arm64jit arm64host mtlvk launcher}
-PREFIX=/opt/x86code/darling
+PREFIX=/opt/x86sim/darling
 DB=$OUT/dbuild
 DEST=$OUT/destdir
 L=$DEST$PREFIX/libexec/darling/usr/libexec/darling

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use x86code_core::{aot, host, sim};
+use x86sim_core::{aot, host, sim};
 
 #[derive(Default)]
 pub struct AotShared {
@@ -115,7 +115,7 @@ impl Aot {
         });
     }
 
-    /// A run of ours, or one started elsewhere (x86code-aot, the MCP server) that is still alive.
+    /// A run of ours, or one started elsewhere (x86sim-aot, the MCP server) that is still alive.
     pub fn building(&self) -> bool {
         self.child.is_some() || self.external_run().is_some()
     }
@@ -159,10 +159,10 @@ impl Aot {
                 let pid = c.id();
                 self.child = None;
                 if !code.success() {
-                    // the builder's own words (x86code-aot: …), not just "failed"
+                    // the builder's own words (x86sim-aot: …), not just "failed"
                     let log = std::fs::read_to_string(aot::scratch().join("launcher-aot.log")).unwrap_or_default();
                     let last = log.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-                    let last = last.strip_prefix("x86code-aot: ").unwrap_or(last);
+                    let last = last.strip_prefix("x86sim-aot: ").unwrap_or(last);
                     self.message = if last.is_empty() { format!("The run stopped ({code})") } else { last.to_string() };
                     self.message_pid = Some(pid);
                 } else {
@@ -180,7 +180,7 @@ impl Aot {
         if self.last_poll.elapsed() > every {
             self.last_poll = Instant::now();
             self.progress = std::fs::read(self.paths.progress()).ok().and_then(|b| serde_json::from_slice(&b).ok());
-            // a newer run finished cleanly (e.g. started from x86code-aot or the MCP server): the old error is stale
+            // a newer run finished cleanly (e.g. started from x86sim-aot or the MCP server): the old error is stale
             if let Some(p) = &self.progress {
                 if p.state == "done" && !self.message.is_empty() && self.message_pid != Some(p.pid) {
                     self.message.clear();
@@ -192,7 +192,7 @@ impl Aot {
 
     pub fn start_build(&mut self, full: bool) {
         let _ = self.paths.save_config(&self.effective_cfg());
-        let exe = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("x86code-aot"))).unwrap_or_else(|| "x86code-aot".into());
+        let exe = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("x86sim-aot"))).unwrap_or_else(|| "x86sim-aot".into());
         let mut cmd = Command::new(exe);
         cmd.arg("--jc").arg(&self.jc);
         if let Some(d) = &self.device {
@@ -218,11 +218,11 @@ impl Aot {
                 self.child = Some(c);
                 self.message.clear();
             }
-            Err(e) => self.message = format!("cannot start x86code-aot: {e}"),
+            Err(e) => self.message = format!("cannot start x86sim-aot: {e}"),
         }
     }
 
-    /// Stops the run (ours or another's): x86code-aot ends its builders and records what finished (resumable).
+    /// Stops the run (ours or another's): x86sim-aot ends its builders and records what finished (resumable).
     fn cancel(&mut self) {
         let pid = self.child.as_ref().map(|c| c.id()).or_else(|| self.external_run());
         if let Some(pid) = pid {
@@ -250,9 +250,9 @@ fn ago(unix: u64) -> String {
     }
 }
 
-/// The pid is an x86code-aot (a reused pid is not a run)
+/// The pid is an x86sim-aot (a reused pid is not a run)
 fn pid_is_aot(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim().starts_with("x86code-aot"))
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim().starts_with("x86sim-aot"))
 }
 
 fn aot_alive(pid: u32) -> bool {
@@ -848,7 +848,7 @@ impl App {
         });
         ui.add_space(S5);
         section(ui, "Separate windows", |_| {});
-        let running: Vec<x86code_core::instance::Instance> = self.insts.iter().filter(|i| self.phase(&i.id) != x86code_core::instance::Phase::Off).cloned().collect();
+        let running: Vec<x86sim_core::instance::Instance> = self.insts.iter().filter(|i| self.phase(&i.id) != x86sim_core::instance::Phase::Off).cloned().collect();
         list_card(ui, |ui| {
             if running.is_empty() {
                 egui::Frame::new().inner_margin(16).show(ui, |ui| {

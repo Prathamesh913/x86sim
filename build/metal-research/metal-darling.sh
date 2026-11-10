@@ -3,7 +3,7 @@
 #   metal-darling.sh metal|metallib <args...>   (run from the directory holding the inputs; paths relative)
 # Own Darling prefix (never the simulators'); shim supplies 2 symbols Darling's libSystem/libc++ lack.
 set -e
-X=/srv/projects/x86code; R=$X/build/metal-research; P=${METAL_DPREFIX:-$HOME/scratch/x86code/metal-prefix}
+X=/srv/projects/x86sim; R=$X/build/metal-research; P=${METAL_DPREFIX:-$HOME/scratch/x86sim/metal-prefix}
 tool=$1; shift; V=/Volumes/SystemRoot
 args=""; for a in "$@"; do args="$args '$(printf %s "$a" | sed "s/'/'\\\\''/g")'"; done
 DPREFIX=$P "$X/darling-prefix/bin/darling" shell /bin/sh -c "cd '$V$PWD' && DYLD_FORCE_FLAT_NAMESPACE=1 \

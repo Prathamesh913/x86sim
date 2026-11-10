@@ -1,6 +1,6 @@
 //! First-run setup (the AppImage's wizard, docs/RELEASE.md): host checks, the one privileged step (Darling into
-//! /opt/x86code, bin/darling setuid root), an iOS runtime (downloaded from Apple, or one already on disk linked in),
-//! and the setup state. In a checkout (no X86CODE_APP) the same checks run against the repo's darling-prefix.
+//! /opt/x86sim, bin/darling setuid root), an iOS runtime (downloaded from Apple, or one already on disk linked in),
+//! and the setup state. In a checkout (no X86SIM_APP) the same checks run against the repo's darling-prefix.
 use crate::aot::{repo_root, scratch};
 use anyhow::{Context, Result};
 use std::os::unix::fs::MetadataExt;
@@ -12,8 +12,8 @@ pub const DEFAULT_BUILD: &str = "24B8117";
 pub const DEFAULT_VERSION: &str = "27.2";
 /// free space a download needs: the 8 GB archive, the decrypted image and the ~23 GB unpacked tree side by side
 pub const DOWNLOAD_NEED_GB: f64 = 45.0;
-/// /opt/x86code/darling: the install prefix the release's Darling is built with (build/release/build.sh)
-pub const OPT_DARLING: &str = "/opt/x86code/darling";
+/// /opt/x86sim/darling: the install prefix the release's Darling is built with (build/release/build.sh)
+pub const OPT_DARLING: &str = "/opt/x86sim/darling";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Level {
@@ -35,13 +35,13 @@ fn check(name: &'static str, level: Level, detail: impl Into<String>, fix: impl 
     Check { name, level, detail: detail.into(), fix: fix.into() }
 }
 
-/// Running from the AppImage (its AppRun sets X86CODE_APP to the payload copy in the data dir)
+/// Running from the AppImage (its AppRun sets X86SIM_APP to the payload copy in the data dir)
 pub fn appimage() -> Option<PathBuf> {
-    std::env::var_os("X86CODE_APP").map(PathBuf::from)
+    std::env::var_os("X86SIM_APP").map(PathBuf::from)
 }
 
 pub fn version() -> String {
-    std::env::var("X86CODE_VERSION").unwrap_or_else(|_| format!("{} (checkout)", env!("CARGO_PKG_VERSION")))
+    std::env::var("X86SIM_VERSION").unwrap_or_else(|_| format!("{} (checkout)", env!("CARGO_PKG_VERSION")))
 }
 
 fn on_path(cmd: &str) -> bool {
@@ -64,7 +64,7 @@ pub enum DarlingState {
     Outdated { installed: String },
 }
 
-/// bin/darling of what boots: the data dir's darling-prefix (-> /opt/x86code/darling in the AppImage)
+/// bin/darling of what boots: the data dir's darling-prefix (-> /opt/x86sim/darling in the AppImage)
 pub fn darling_bin() -> PathBuf {
     repo_root().join("darling-prefix/bin/darling")
 }
@@ -75,8 +75,8 @@ pub fn darling_state() -> DarlingState {
     if !userns() && (md.uid() != 0 || md.mode() & 0o4000 == 0) {
         return DarlingState::NotSetuid;
     }
-    if let Ok(want) = std::env::var("X86CODE_DARLING_ID") {
-        let have = std::fs::read_to_string(repo_root().join("darling-prefix/.x86code-complete")).unwrap_or_default().trim().to_string();
+    if let Ok(want) = std::env::var("X86SIM_DARLING_ID") {
+        let have = std::fs::read_to_string(repo_root().join("darling-prefix/.x86sim-complete")).unwrap_or_default().trim().to_string();
         if have != want.trim() {
             return DarlingState::Outdated { installed: have };
         }
@@ -86,13 +86,13 @@ pub fn darling_state() -> DarlingState {
 
 /// Darling runs without root, through a user namespace (the AppImage's userns mode, build/release/darling-userns.sh)
 pub fn userns() -> bool {
-    repo_root().join("darling-prefix/.x86code-userns").exists()
+    repo_root().join("darling-prefix/.x86sim-userns").exists()
 }
 
 /// The command the privileged step runs (shown to the user, also for running it by hand with sudo)
 pub fn install_command(stage: &Path) -> Option<Vec<String>> {
     let app = appimage()?;
-    let id = std::env::var("X86CODE_DARLING_ID").ok()?;
+    let id = std::env::var("X86SIM_DARLING_ID").ok()?;
     Some(vec!["sh".into(), app.join("install-helper.sh").to_string_lossy().into(), "install".into(), stage.to_string_lossy().into(), id.trim().into()])
 }
 
@@ -103,7 +103,7 @@ pub fn stage_dir() -> PathBuf {
 /// The privileged step (blocking; run it on a thread): copy the AppImage's Darling tree out of the AppImage mount (root
 /// can't read a user's FUSE mount) and install it with pkexec. Progress lines go to `say`.
 pub fn install_darling(say: &dyn Fn(&str)) -> Result<()> {
-    let src = std::env::var_os("X86CODE_DARLING_STAGE").map(PathBuf::from).context("not running from the AppImage")?;
+    let src = std::env::var_os("X86SIM_DARLING_STAGE").map(PathBuf::from).context("not running from the AppImage")?;
     let stage = stage_dir();
     say("Copying Darling out of the AppImage…");
     let _ = std::fs::remove_dir_all(&stage);
@@ -134,7 +134,7 @@ pub fn checks() -> Vec<Check> {
     let model = cpu.lines().find(|l| l.starts_with("model name")).and_then(|l| l.split(':').nth(1)).unwrap_or("").trim().to_string();
     let cores = cpu.lines().filter(|l| l.starts_with("processor")).count();
     v.push(if std::env::consts::ARCH != "x86_64" {
-        check("Processor", Level::Fail, format!("{} (x86-64 needed)", std::env::consts::ARCH), "x86Code runs on 64-bit Intel and AMD processors.")
+        check("Processor", Level::Fail, format!("{} (x86-64 needed)", std::env::consts::ARCH), "x86Sim runs on 64-bit Intel and AMD processors.")
     } else if !missing.is_empty() {
         check("Processor", Level::Fail, format!("{model}: no {}", missing.join(", ")), "The translator needs SSE4.1, POPCNT and CMPXCHG16B (any x86-64 CPU since about 2009).")
     } else {
@@ -211,7 +211,7 @@ pub fn checks() -> Vec<Check> {
         check("Programs", Level::Fail, format!("missing: {}", miss.join(", ")), "Install them with your package manager (ipsw and 7-Zip come with the AppImage).")
     });
     // Python's dnspython (phones' DNS): the AppImage carries it
-    let pylib = std::env::var("X86CODE_PYLIB").unwrap_or_default();
+    let pylib = std::env::var("X86SIM_PYLIB").unwrap_or_default();
     let dns = Command::new("python3").args(["-c", &format!("import sys; sys.path.append({pylib:?}); import dns.resolver")]).stdin(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     if !dns {
         v.push(check("Python dnspython", Level::Warn, "not found", "Install python3-dnspython: phones' network name lookups need it."));

@@ -1,4 +1,4 @@
-// x86Code: AudioDemo, the audio test app (tests/audio.sh): a sine tone through AVAudioEngine (an AVAudioSourceNode on
+// x86Sim: AudioDemo, the audio test app (tests/audio.sh): a sine tone through AVAudioEngine (an AVAudioSourceNode on
 // the output device) and the microphone's level (an input-node tap). Launch arguments for tests:
 //   -tone SECONDS [-freq HZ]   play the tone at launch, then print "tone done frames=N rate=R"
 //   -mic SECONDS               record at launch, then print "mic done frames=N rms=X peak=Y"

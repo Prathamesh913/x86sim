@@ -2,12 +2,12 @@
 # tests/arm64/train.sh [TAG] (Speed 25): a training pass for a phone's AOT image. Cold boot, the gate's app pass
 # (Settings + General > About, Calendar, Photos, Maps, keyboard, Siri, Files, Health, Wallet), then Messages (compose +
 # keyboard), News, Safari (a page), more Settings pages and the app switcher; the phone is stopped (every process
-# saves its JIT profile into the cache dir) and `x86code-aot --device D update` rebuilds the image from them.
+# saves its JIT profile into the cache dir) and `x86sim-aot --device D update` rebuilds the image from them.
 # A64_DEVICE=<device> (default var/device-a64). NOUPDATE=1: no image rebuild. NOSTOP=1: leave the phone running
-# (no update then). Logs in $GATE_OUT/<TAG> (default ~/scratch/x86code/gate/train).
+# (no update then). Logs in $GATE_OUT/<TAG> (default ~/scratch/x86sim/gate/train).
 . "$(dirname "$0")/gate/lib.sh"
 # the processes load the image; their JIT profiles (image blocks + newly translated ones) are training input
-export X86CODE_A64_AOT_AUTOSAVE=1
+export X86SIM_A64_AOT_AUTOSAVE=1
 T=${1:-train}; export GATE_OUT=${GATE_OUT:-$SCR/gate}; O=$GATE_OUT/$T
 "$(dirname "$0")/gate/gate.sh" "$T"; echo "gate: $? failed checks"
 mkdir -p "$O"

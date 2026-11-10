@@ -1,8 +1,8 @@
-// x86Code: iosurfaced -- the simulator's "com.apple.IOSurface.Remote" service (Darling side).
+// x86Sim: iosurfaced -- the simulator's "com.apple.IOSurface.Remote" service (Darling side).
 //
 // On a Mac, CoreSimulator's SimRenderServer hosts IOSurfaceRemoteServer and every simulator process's
 // IOSurface.framework talks to it (docs/protocols/IOSURFACE.md). Here the simulator's own IOSurface clients
-// talk to this process instead: a launchd job of the device (cli/libexec/mksimdevice.py, X86CODE_IOSURFACE=1).
+// talk to this process instead: a launchd job of the device (cli/libexec/mksimdevice.py, X86SIM_IOSURFACE=1).
 //
 // Surfaces are mmap(MAP_SHARED|MAP_ANON) memory handed out as xpc_shmem ("MemoryObject"). darlingserver moves
 // shared anonymous memory into a memfd when it is first shared, so every process that maps the surface (and
@@ -425,7 +425,7 @@ static void handle(xpc_connection_t peer, Refs* refs, xpc_object_t msg) {
 int main(int argc, char** argv) {
 	(void)argc; (void)argv;
 	setvbuf(stderr, NULL, _IOLBF, 0);
-	gLog = getenv("X86CODE_IOSURFACE_LOG") != NULL;
+	gLog = getenv("X86SIM_IOSURFACE_LOG") != NULL;
 	gByID = [NSMutableDictionary new];
 	gByPort = [NSMutableDictionary new];
 	// all state lives on the main queue: one serial queue for every peer
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
 	});
 	xpc_connection_resume(l);
 	fprintf(stderr, "iosurfaced: serving com.apple.IOSurface.Remote\n");
-	// x86Code: CFRunLoopRun keeps the main thread draining the main queue. dispatch_main's
+	// x86Sim: CFRunLoopRun keeps the main thread draining the main queue. dispatch_main's
 	// pthread_exit parks the A64 JIT main thread so XPC peer handlers never run (backboardd
 	// hangs after "simfb: swapchain" waiting for Initialize). Same fix as metalhostd.
 	fprintf(stderr, "iosurfaced: CFRunLoopRun\n");

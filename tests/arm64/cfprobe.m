@@ -12,7 +12,7 @@ int main(int argc, char **argv) {
         if (mb) { CFURLRef u = CFBundleCopyBundleURL(mb); NSLog(@"bundle url %@", u); }
         NSLog(@"bundleForClass %@", [NSBundle bundleForClass:[NSString class]].bundlePath);
         NSLog(@"home %@ tmp %@", NSHomeDirectory(), NSTemporaryDirectory());
-        NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.x86code.cfprobe"];
+        NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.x86sim.cfprobe"];
         [d setObject:@"v" forKey:@"k"];
         NSLog(@"defaults %@", [d objectForKey:@"k"]);
         NSLog(@"ls / %lu", (unsigned long)[[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/" error:nil].count);

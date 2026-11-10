@@ -4,14 +4,14 @@
 // placement table's hash):
 //   <key>.<exe>.bin  per process (warm start / AOT training), written on SIGUSR1 (memlog) or at exit with STATS.
 //   <key>.aot        Stage 4 AOT image: the union of every .bin's blocks, translated by one builder process
-//                    (X86CODE_A64_AOT_BUILD=1, at its exit). Every ASLR-off process (Speed 7; otherwise .app/
-//                    executables, or X86CODE_A64_AOT_PROCS=name,name|all) loads it at start instead of its .bin.
-//                    X86CODE_A64_AOT=0 disables.
+//                    (X86SIM_A64_AOT_BUILD=1, at its exit). Every ASLR-off process (Speed 7; otherwise .app/
+//                    executables, or X86SIM_A64_AOT_PROCS=name,name|all) loads it at start instead of its .bin.
+//                    X86SIM_A64_AOT=0 disables.
 // When the process runs with ADDR_NO_RANDOMIZE (setarch -R), the key also holds libarm64jit's load base: a file
 // is used only when host addresses match too (otherwise the reloc table re-bases the emitted host addresses).
 //
 // Saves x86 blocks whose guest PC is in the sim shared-cache range to a file under
-// X86CODE_A64_JITCACHE_DIR (default $X86SIM_SCRATCH/jitcache), keyed by the dyld cache UUID
+// X86SIM_A64_JITCACHE_DIR (default $X86SIM_SCRATCH/jitcache), keyed by the dyld cache UUID
 // and a build id (bump when emit / StackLayout / fuse_svc / inline objc change). Blocks that
 // emit HostCall (svc thunks, CNTPCT, …) are excluded — they bake ASLR-sensitive host pointers.
 //
@@ -57,7 +57,7 @@ constexpr u64 kCacheLo = 0x1c0000000ull;
 constexpr u64 kCacheHi = 0x300000000ull;
 // CODEGEN_VERSION: bump whenever translated code would change (emitter, IR passes, StackLayout, fuse_svc, inline objc,
 // the cache format, reloc kinds). Speed 18: it replaces the libarm64jit build-id hash, so a rebuild that leaves codegen
-// alone keeps every image chunk (tools/launcher x86code-aot mirrors this value: core/src/key.rs).
+// alone keeps every image chunk (tools/launcher x86sim-aot mirrors this value: core/src/key.rs).
 // Loading still checks what can be checked: the prelude size and handler layout, reloc kinds, the image UUID.
 constexpr u64 kCodegenVersion = 0x00000033ull;  // Perf 15: strncmp, memchr, strchr, strnlen, os_unfair_lock fast paths as guest code (0x30: Perf 14: NZCV, x0, x8 pinned in r12-r14 (0x2a: Perf 9: forward block links skip the halt check (0x29: Perf 8: import stubs link to the libsystem stub dylibs, fixed in the cache window; their svc thunk blocks persisted (0x25: Perf 7: PopRSB hit path inline per return site (0x24: Perf 6: RSB 32 entries (0x23: Perf 5: spills to free callee-saved GPRs first (0x22: Perf 4: GetSetElimination forwards W<->X (0x21: Perf 1f: no objc_msgSend hit/miss counters (0x20: Perf 1c: image RSB push sites linked at load (0x1f: Perf 1b: unlinked RSB entries go to the fast dispatch handler (0x1e: Perf 1: dyld_sim's some_image_overridden count patched (dyldsim.cpp) (0x1d: RAM 13: host calls through a fixed stub page (no reach limit) (0x1c: LSE atomics/CAS/CASP drop a top-byte tag inline (0x1b: RAM 3: unchecked fastmem (no inline address check, r13 allocatable) (0x1a: Speed 35: inline FRINTA/FRINTX, FCVTAS/FCVTAU in image chunks (0x19: Speed 25: RSB push sites persisted unlinked (0x18: RSB on 0x17: Swift scan steps found per runtime) (0x15: Speed 20 lock-free exclusive monitor)
 // kCodegenVersion (bits 0-15), code-shaping env flags (16-18), placement table hash (32-63). The load base is not
@@ -76,7 +76,7 @@ std::weak_ptr<Dynarmic::A64::Jit::SharedCode> g_shared;
 
 }  // namespace
 
-// Simulator scratch dir: $X86SIM_SCRATCH, else <home>/scratch/x86code. launchd jobs get no sim.env, so the home comes
+// Simulator scratch dir: $X86SIM_SCRATCH, else <home>/scratch/x86sim. launchd jobs get no sim.env, so the home comes
 // from the passwd entry of the real uid (HOME may be scrubbed or the guest's), then $HOME.
 const std::string &scratch_dir() {
     static const std::string d = [] {
@@ -84,14 +84,14 @@ const std::string &scratch_dir() {
         const char *home = nullptr;
         if (struct passwd *pw = getpwuid(getuid())) home = pw->pw_dir;
         if (!home || !*home) home = getenv("HOME");
-        return std::string(home ? home : "") + "/scratch/x86code";
+        return std::string(home ? home : "") + "/scratch/x86sim";
     }();
     return d;
 }
 
 namespace {
 std::string default_dir() {
-    if (const char *d = getenv("X86CODE_A64_JITCACHE_DIR")) return d;
+    if (const char *d = getenv("X86SIM_A64_JITCACHE_DIR")) return d;
     if (const char *s = getenv("X86SIM_SCRATCH")) return std::string(s) + "/jitcache";
     return scratch_dir() + "/jitcache";
 }
@@ -103,7 +103,7 @@ std::string g_runtime_root;  // Linux path of RuntimeRoot/ (from the cache path)
 std::vector<bool> g_place_used;
 std::mutex g_place_mu;
 u32 placement_load(const std::string &dir) {
-    if (const char *e = getenv("X86CODE_A64_PLACEMENT"); e && atoi(e) == 0) return 0;
+    if (const char *e = getenv("X86SIM_A64_PLACEMENT"); e && atoi(e) == 0) return 0;
     FILE *f = fopen((dir + "/placement.txt").c_str(), "r");
     if (!f) return 0;
     u32 h = 2166136261u;
@@ -125,13 +125,13 @@ u32 placement_load(const std::string &dir) {
 }
 
 bool aot_eligible(const std::string &exe) {
-    if (const char *a = getenv("X86CODE_A64_AOT"); a && atoi(a) == 0) return false;
+    if (const char *a = getenv("X86SIM_A64_AOT"); a && atoi(a) == 0) return false;
     const char *b = strrchr(exe.c_str(), '/');
     std::string base = b ? b + 1 : exe;
-    // Speed 28 (debug): X86CODE_A64_AOT_EXCLUDE=name,name keeps those processes off the image (bisecting)
-    if (const char *x = getenv("X86CODE_A64_AOT_EXCLUDE"); x && (std::string(",") + x + ",").find("," + base + ",") != std::string::npos)
+    // Speed 28 (debug): X86SIM_A64_AOT_EXCLUDE=name,name keeps those processes off the image (bisecting)
+    if (const char *x = getenv("X86SIM_A64_AOT_EXCLUDE"); x && (std::string(",") + x + ",").find("," + base + ",") != std::string::npos)
         return false;
-    if (const char *l = getenv("X86CODE_A64_AOT_PROCS")) {
+    if (const char *l = getenv("X86SIM_A64_AOT_PROCS")) {
         std::string list = std::string(",") + l + ",";
         // Speed 7: "all" only where the image can be mapped shared (ASLR off: launchd_sim's children); elsewhere it
         // would be a private ~200 MB copy.
@@ -174,11 +174,11 @@ bool placement_claim(const Placement *p, int fd) {
 
 void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     // Speed 7: FastDispatch table per process: 256K entries (4 MB) for apps and backboardd, whose hot sets need it;
-    // 64K (1 MB) for daemons. X86CODE_A64_FD_ENTRIES=n overrides.
+    // 64K (1 MB) for daemons. X86SIM_A64_FD_ENTRIES=n overrides.
     {
         const char *b = strrchr(exe.c_str(), '/');
         size_t n = exe.find(".app/") != std::string::npos || (b && !strcmp(b + 1, "backboardd")) ? 0x40000 : 0x10000;
-        if (const char *e = getenv("X86CODE_A64_FD_ENTRIES")) n = strtoul(e, nullptr, 0);
+        if (const char *e = getenv("X86SIM_A64_FD_ENTRIES")) n = strtoul(e, nullptr, 0);
         Dynarmic::A64::Jit::SetFastDispatchEntries(n);
     }
     g_dir = default_dir();
@@ -209,12 +209,12 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     char hex[40];
     for (int i = 0; i < 16; i++) sprintf(hex + 2 * i, "%02x", g_uuid[i]);
     auto on = [](const char *e, bool dflt) { const char *v = getenv(e); return v ? atoi(v) == 1 : dflt; };
-    g_build = kCodegenVersion | (u64)on("X86CODE_A64_FUSE_SVC", false) << 16 | (u64)on("X86CODE_A64_INLINE_OBJC", true) << 17 |
+    g_build = kCodegenVersion | (u64)on("X86SIM_A64_FUSE_SVC", false) << 16 | (u64)on("X86SIM_A64_INLINE_OBJC", true) << 17 |
               (u64)timebase_apple() << 18 |
               (u64)strict_monitor() << 19 | (u64)memcheck() << 20;  // CNTFRQ and the Swift deadline patch are in the code
     if (u32 ph = placement_load(g_dir)) {
         g_build |= (u64)ph << 32;
-        if (getenv("X86CODE_A64_STATS")) logf("placement: %zu files, table %08x", g_place.size(), ph);
+        if (getenv("X86SIM_A64_STATS")) logf("placement: %zu files, table %08x", g_place.size(), ph);
     }
     char bh[24];
     snprintf(bh, sizeof bh, "%016llx", (unsigned long long)g_build);
@@ -223,12 +223,12 @@ void jitcache_prepare(const std::string &cache_path, const std::string &exe) {
     g_path = g_dir + "/" + g_key + "." + (b ? b + 1 : exe.c_str()) + ".bin";
     g_aot_path = g_dir + "/" + g_key + ".aot";
     g_aot_eligible = aot_eligible(exe);
-    if (getenv("X86CODE_A64_STATS"))
+    if (getenv("X86SIM_A64_STATS"))
         logf("jitcache: path %s", g_path.c_str());
 }
 
 u64 jitcache_image_code_bytes() {
-    if (!g_uuid_ok || !g_aot_eligible || (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0)) return 0;
+    if (!g_uuid_ok || !g_aot_eligible || (getenv("X86SIM_A64_JITCACHE") && atoi(getenv("X86SIM_A64_JITCACHE")) == 0)) return 0;
     u64 code = 0;
     if (FILE *f = fopen(g_aot_path.c_str(), "rb")) {
         if (fseek(f, 32, SEEK_SET) || fread(&code, 8, 1, f) != 1) code = 0;  // PersistHeader::code_size
@@ -239,22 +239,22 @@ u64 jitcache_image_code_bytes() {
 
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
     if (!g_uuid_ok) return;
-    // Speed 28 (debug): X86CODE_A64_LIVE_ONLY=name,name: no image and no .bin (every block translated live)
-    if (const char *x = getenv("X86CODE_A64_LIVE_ONLY")) {
+    // Speed 28 (debug): X86SIM_A64_LIVE_ONLY=name,name: no image and no .bin (every block translated live)
+    if (const char *x = getenv("X86SIM_A64_LIVE_ONLY")) {
         const size_t sl = g_path.rfind('/');
         const std::string f = g_path.substr(sl + 1);  // <key>.<exe>.bin
         for (std::string l = std::string(x) + ","; !l.empty();) {
             const std::string n = l.substr(0, l.find(','));
             l = l.substr(l.find(',') + 1);
             if (!n.empty() && f.size() > n.size() + 5 && f.compare(f.size() - n.size() - 5, n.size() + 5, "." + n + ".bin") == 0) {
-                logf("jitcache: live only (X86CODE_A64_LIVE_ONLY)");
+                logf("jitcache: live only (X86SIM_A64_LIVE_ONLY)");
                 g_uuid_ok = false;  // no save either
                 return;
             }
         }
     }
-    // Default on. X86CODE_A64_JITCACHE=0 disables load/save.
-    if (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) return;
+    // Default on. X86SIM_A64_JITCACHE=0 disables load/save.
+    if (getenv("X86SIM_A64_JITCACHE") && atoi(getenv("X86SIM_A64_JITCACHE")) == 0) return;
     // Perf 8: blocks of the libsystem stub dylibs (fixed in the cache window) are in the image and the .bin files. The
     // first process of a key records the stubs' code hash; one whose stubs differ neither loads nor saves.
     {
@@ -281,8 +281,8 @@ void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     // Speed 6: the AOT image's code is mapped from a relocated copy shared by every process with the same layout
-    // (X86CODE_A64_AOT_SHARE=0: private copy as before).
-    const bool share = &path == &g_aot_path && !(getenv("X86CODE_A64_AOT_SHARE") && atoi(getenv("X86CODE_A64_AOT_SHARE")) == 0);
+    // (X86SIM_A64_AOT_SHARE=0: private copy as before).
+    const bool share = &path == &g_aot_path && !(getenv("X86SIM_A64_AOT_SHARE") && atoi(getenv("X86SIM_A64_AOT_SHARE")) == 0);
     size_t n = Dynarmic::A64::Jit::LoadPersistentCache(shared, path, g_uuid, g_build, kCacheLo, kCacheHi, share);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     g_aot_loaded = n && &path == &g_aot_path;
@@ -296,12 +296,12 @@ void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared) {
 void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string &to) {
     if (!g_uuid_ok) return;
     const std::string &dst = to.empty() ? g_path : to;
-    if (getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) return;
+    if (getenv("X86SIM_A64_JITCACHE") && atoi(getenv("X86SIM_A64_JITCACHE")) == 0) return;
     mkdir(g_dir.c_str(), 0755);
     std::string tmp = dst + ".tmp." + std::to_string(getpid());  // Speed 8: two sim instances save the same <exe>.bin
     size_t bytes = Dynarmic::A64::Jit::SavePersistentCache(shared, tmp, g_uuid, g_build, kCacheLo, kCacheHi);
     if (!bytes) {
-        if (getenv("X86CODE_A64_STATS")) logf("jitcache: nothing to save");
+        if (getenv("X86SIM_A64_STATS")) logf("jitcache: nothing to save");
         return;
     }
     if (rename(tmp.c_str(), dst.c_str()) != 0) {
@@ -312,30 +312,30 @@ void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string
     logf("jitcache: saved %.1f MB to %s", bytes / 1048576.0, dst.c_str());
 }
 
-// Speed 5: the cache used to be written only on SIGUSR1 or at exit with X86CODE_A64_STATS, so normal use never warmed
+// Speed 5: the cache used to be written only on SIGUSR1 or at exit with X86SIM_A64_STATS, so normal use never warmed
 // it. Now a low-priority thread saves this process's .bin once translation has been quiet (<500 new blocks per 10 s)
 // for ~20 s, or every 120 s while it keeps growing, when at least
 // kMinNewBlocks blocks were added since the last save/load, and __exit saves under the same threshold
 // (jitcache_save_on_exit). The snapshot holds the shared lock only for the copy (no unlink; see SavePersistentCache).
-// X86CODE_A64_JITCACHE_AUTOSAVE=0 turns both off.
+// X86SIM_A64_JITCACHE_AUTOSAVE=0 turns both off.
 constexpr u64 kMinNewBlocks = 5000;
 std::atomic<u64> g_saved_blocks{0};
 
-// Speed 9: not in a process that loaded the AOT image (X86CODE_A64_AOT_AUTOSAVE=1 to keep it, for training .bins). Its
+// Speed 9: not in a process that loaded the AOT image (X86SIM_A64_AOT_AUTOSAVE=1 to keep it, for training .bins). Its
 // .bin is never read back while the image exists, yet every such process wrote one of ~240 MB (the image's blocks
 // registered so far): ~6.5 GB per boot.
 // Speed 31: training feedback from processes on the AOT image. Their .bin is never written (above), so blocks the image
 // lacks (untrained paths of cache libraries, placed app code) were translated live on every start, forever. With
-// X86CODE_A64_AOT_LIVE=1 (opt-in; Speed 32: as a default it grew the image past the slab) such a process keeps <key>.<exe>.live: the union of the descriptors it translated itself
+// X86SIM_A64_AOT_LIVE=1 (opt-in; Speed 32: as a default it grew the image past the slab) such a process keeps <key>.<exe>.live: the union of the descriptors it translated itself
 // (header like an A64JC06 file, descriptor count at +40, 24-byte entries from +160, no code). tools/launcher's hot set
-// reads them like training .bins, so `x86code-aot update` moves those blocks into their library's chunk.
+// reads them like training .bins, so `x86sim-aot update` moves those blocks into their library's chunk.
 static bool live_env() {
-    // Speed 33: default on (=0 off) now that feedback rebuilds stay in their slots (x86code-aot)
-    static const bool on = [] { const char *e = getenv("X86CODE_A64_AOT_LIVE"); return !e || atoi(e) != 0; }();
+    // Speed 33: default on (=0 off) now that feedback rebuilds stay in their slots (x86sim-aot)
+    static const bool on = [] { const char *e = getenv("X86SIM_A64_AOT_LIVE"); return !e || atoi(e) != 0; }();
     return on;
 }
 static bool live_on() {
-    return live_env() && g_aot_loaded && g_uuid_ok && !getenv("X86CODE_A64_AOT_BUILD");
+    return live_env() && g_aot_loaded && g_uuid_ok && !getenv("X86SIM_A64_AOT_BUILD");
 }
 std::atomic<u64> g_live_saved{0};
 // RAM 2 (JIT): the .live file was the union of every session's live translations, forever (SpringBoard.live: 1.2M
@@ -414,11 +414,11 @@ static void save_live(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
 }
 
 static bool autosave_on() {
-    const char *e = getenv("X86CODE_A64_JITCACHE_AUTOSAVE");
-    const char *a = getenv("X86CODE_A64_AOT_AUTOSAVE");
+    const char *e = getenv("X86SIM_A64_JITCACHE_AUTOSAVE");
+    const char *a = getenv("X86SIM_A64_AOT_AUTOSAVE");
     if (g_aot_loaded && !(a && atoi(a) == 1)) return false;
-    return !(e && atoi(e) == 0) && !(getenv("X86CODE_A64_JITCACHE") && atoi(getenv("X86CODE_A64_JITCACHE")) == 0) &&
-           !getenv("X86CODE_A64_AOT_BUILD");
+    return !(e && atoi(e) == 0) && !(getenv("X86SIM_A64_JITCACHE") && atoi(getenv("X86SIM_A64_JITCACHE")) == 0) &&
+           !getenv("X86SIM_A64_AOT_BUILD");
 }
 static void save_if_grown(Dynarmic::A64::Jit::SharedCode &sc, const char *why) {
     if (!autosave_on()) return;  // the image is loaded after the saver thread starts
@@ -474,7 +474,7 @@ void jitcache_save_on_exit() {
     if (auto sp = g_shared.lock()) save_if_grown(*sp, "exit");
 }
 
-// X86CODE_A64_AOT_BUILD=1, at the builder's exit: translate the union of every training .bin's blocks (same key)
+// X86SIM_A64_AOT_BUILD=1, at the builder's exit: translate the union of every training .bin's blocks (same key)
 // on this thread and save them as the AOT image. Stops short of the code cache's end (a full cache is cleared).
 // The AOT builder translates blocks of placed files too: map each file's segments (read-only; code needs no fixups)
 // at its slot, as dyld_sim would in a sim process. Returns the number mapped.
@@ -482,8 +482,8 @@ int placement_map_all() {
     int n = 0;
     for (const auto &p : g_place) {
         // Speed 31: app keys ("Containers/...") resolve under the device's data dir (tools/launcher passes it as
-        // X86CODE_A64_AOT_DEVICE_DATA); before, the app tier's files were never mapped and their chunks faulted.
-        static const char *dev_data = getenv("X86CODE_A64_AOT_DEVICE_DATA");
+        // X86SIM_A64_AOT_DEVICE_DATA); before, the app tier's files were never mapped and their chunks faulted.
+        static const char *dev_data = getenv("X86SIM_A64_AOT_DEVICE_DATA");
         const bool app = p.key.rfind("Containers/", 0) == 0;
         if (app ? !dev_data : g_runtime_root.empty()) continue;
         const std::string path = app ? std::string(dev_data) + "/" + p.key : g_runtime_root + p.key;
@@ -528,9 +528,9 @@ int placement_map_all() {
     return n;
 }
 
-// Speed 18: the chunked AOT image (tools/launcher, x86code-aot). X86CODE_A64_AOT_JOB=<job file>: this builder translates
+// Speed 18: the chunked AOT image (tools/launcher, x86sim-aot). X86SIM_A64_AOT_JOB=<job file>: this builder translates
 // the listed chunks, one library / executable each, every one into its own slot of the slab, and saves each as a chunk
-// file (A64CK01). x86code-aot assembles the chunks into the <key>.aot image (its own assembler).
+// file (A64CK01). x86sim-aot assembles the chunks into the <key>.aot image (its own assembler).
 // Job file lines:
 //   progress <file>                 JSON lines appended per chunk (and every ~100K blocks)
 //   pool <file>                     union the constant pool of an existing chunk (every chunk kept in the image)
@@ -657,7 +657,7 @@ static void aot_job(GuestThread &t, Dynarmic::A64::Jit::SharedCode &sc, const ch
 void jitcache_aot_build(GuestThread &t) {
     auto sp = g_shared.lock();
     if (!g_uuid_ok || !sp) { logf("aot: no shared code / cache key"); return; }
-    if (const char *job = getenv("X86CODE_A64_AOT_JOB")) { aot_job(t, *sp, job); return; }
+    if (const char *job = getenv("X86SIM_A64_AOT_JOB")) { aot_job(t, *sp, job); return; }
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     std::set<u64> descs;
@@ -675,7 +675,7 @@ void jitcache_aot_build(GuestThread &t) {
         }
         closedir(d);
     }
-    const u64 limit = (u64)(getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 256) * 7 / 8 << 20;
+    const u64 limit = (u64)(getenv("X86SIM_A64_CODECACHE_MB") ? atoi(getenv("X86SIM_A64_CODECACHE_MB")) : 256) * 7 / 8 << 20;
     if (!g_place.empty()) logf("aot: mapped %d of %zu placed files", placement_map_all(), g_place.size());
     size_t done = 0;
     for (u64 ld : descs) {

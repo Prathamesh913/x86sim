@@ -1,6 +1,6 @@
-// x86Code: diagnostic shim: logs getattrlist-family calls (requested and returned attribute bitmaps) in
-// processes named by X86CODE_ATTRDIAG (default lsparse), to see what CoreFoundation's resource keys ask for.
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+// x86Sim: diagnostic shim: logs getattrlist-family calls (requested and returned attribute bitmaps) in
+// processes named by X86SIM_ATTRDIAG (default lsparse), to see what CoreFoundation's resource keys ask for.
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <sys/attr.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,11 +12,11 @@
 	__attribute__((used)) static struct { const void* replacement; const void* replacee; } _interpose_##_replacee \
 	__attribute__((section("__DATA,__interpose"))) = { (const void*) (unsigned long) &_replacement, (const void*) (unsigned long) &_replacee };
 static int on;
-// x86Code: without X86CODE_ATTRDIAG (launchd jobs don't get our environment), the names in data/oslog.filter
+// x86Sim: without X86SIM_ATTRDIAG (launchd jobs don't get our environment), the names in data/oslog.filter
 __attribute__((constructor)) static void init(void) {
-	const char* w = getenv("X86CODE_ATTRDIAG");
+	const char* w = getenv("X86SIM_ATTRDIAG");
 	if (w) { on = strcmp(getprogname(), w) == 0; return; }
-	char f[300] = ""; int fd = open(X86CODE_DATA_DIR "/oslog.filter", O_RDONLY);
+	char f[300] = ""; int fd = open(X86SIM_DATA_DIR "/oslog.filter", O_RDONLY);
 	if (fd >= 0) { read(fd, f, sizeof f - 1); close(fd); }
 	for (char* t = strtok(f, ",\n"); t; t = strtok(NULL, ",\n")) if (!strcmp(t, getprogname())) on = 1;
 }
@@ -48,7 +48,7 @@ DYLD_INTERPOSE(d_getattrlist, getattrlist)
 DYLD_INTERPOSE(d_fgetattrlist, fgetattrlist)
 DYLD_INTERPOSE(d_getattrlistat, getattrlistat)
 
-// x86Code: by-id lookups (document ids: FileProvider/GenerationalStorage resolve "did=" items this way)
+// x86Sim: by-id lookups (document ids: FileProvider/GenerationalStorage resolve "did=" items this way)
 #include <sys/mount.h>
 extern int openbyid_np(fsid_t* fsid, fsobj_id_t* objid, int flags);
 extern ssize_t fsgetpath(char* buf, size_t bufsize, fsid_t* fsid, uint64_t objid);

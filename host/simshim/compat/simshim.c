@@ -1,4 +1,4 @@
-// x86Code simulator shim, injected into every simulator process (mksimdevice.py).
+// x86Sim simulator shim, injected into every simulator process (mksimdevice.py).
 // Stands in for host services a Linux host does not provide:
 //
 // - System power: IORegisterForSystemPower needs IOPMrootDomain, which Darling's
@@ -24,7 +24,7 @@ extern IOReturn IODeregisterForSystemPower(io_object_t* notifier);
 extern IOReturn IOAllowPowerChange(io_connect_t kernelPort, intptr_t notificationID);
 extern IOReturn IOCancelPowerChange(io_connect_t kernelPort, intptr_t notificationID);
 
-// x86Code (Speed 24): the fake ports are dead names, and IOServiceClose / IOObjectRelease on them succeed here. They
+// x86Sim (Speed 24): the fake ports are dead names, and IOServiceClose / IOObjectRelease on them succeed here. They
 // are MIG calls to the object's port; while this process held the receive right, nothing ever replied. iOS 27.2's
 // NSURLSession closes its system-power connection with IOServiceClose when a session is invalidated, so geod's
 // session queue blocked for good, and Maps waited for geod at launch (black screen, SpringBoard waiting on Maps).
@@ -95,7 +95,7 @@ static int shim_csops_audittoken(pid_t pid, unsigned int ops, void* useraddr, si
 	{
 		// the raw syscall: csops() in the simulator is libsystem_sim_kernel's own version
 		int r = syscall(169 /* SYS_csops */, pid, ops, useraddr, usersize);
-		if (getenv("X86CODE_SHIMLOG"))
+		if (getenv("X86SIM_SHIMLOG"))
 		{
 			char line[128];
 			int n = snprintf(line, sizeof(line), "simshim: csops_audittoken(%d, %u, %zu) -> %d errno %d\n", pid, ops, usersize, r, r ? errno : 0);
@@ -107,7 +107,7 @@ static int shim_csops_audittoken(pid_t pid, unsigned int ops, void* useraddr, si
 }
 DYLD_INTERPOSE(shim_csops_audittoken, csops_audittoken)
 
-// x86Code: the xpc_init_services() skip that was here is gone. launchd_sim's pid-domain
+// x86Sim: the xpc_init_services() skip that was here is gone. launchd_sim's pid-domain
 // uncork reply was lost to a workqueue wakeup race in Darling's sem_down/sem_up
 // (libsystem_kernel emulation, workq_kernreturn.c), now fixed.
 
@@ -170,11 +170,11 @@ typedef uint64_t os_state_handle_t;
 extern os_state_handle_t os_state_add_handler(dispatch_queue_t queue, void* block);
 extern void os_state_remove_handler(os_state_handle_t handle);
 #define SHIM_STATE_HANDLE_BASE 0x7a000000ULL
-// x86Code (Speed 24, diagnostics): X86CODE_STATEDUMP=<dir> in a job's environment (X86SIM_JOBENV) keeps its
+// x86Sim (Speed 24, diagnostics): X86SIM_STATEDUMP=<dir> in a job's environment (X86SIM_JOBENV) keeps its
 // state-capture handlers (what sysdiagnose collects: RunningBoard's assertions and process states, ...); creating
 // <dir>/req runs them all (every 5 s while it exists) and writes each one's title and data (a binary plist holding a
 // description string; `strings` reads it) to <dir>/<pid>.<n>. <dir> must not be in the prefix overlay (the guest
-// caches the miss): use a guest path into the device data, e.g. /Volumes/SystemRoot<data>/tmp/x86code-state.
+// caches the miss): use a guest path into the device data, e.g. /Volumes/SystemRoot<data>/tmp/x86sim-state.
 #include <Block.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -191,7 +191,7 @@ static void shim_state_run(void* ctx)
 		return;
 	for (int i = 0; i < shim_nstate; i++)
 		dispatch_async(shim_state[i].q ? shim_state[i].q : dispatch_get_global_queue(0, 0), ^{
-			struct shim_state_hints h = { 1, "x86code", 1, 1 };
+			struct shim_state_hints h = { 1, "x86sim", 1, 1 };
 			struct shim_state_data* d = shim_state[i].b(&h);
 			if (!d)
 				return;
@@ -205,7 +205,7 @@ static void shim_state_run(void* ctx)
 static void shim_state_keep(dispatch_queue_t queue, void* block)
 {
 	static dispatch_source_t timer;
-	const char* dir = getenv("X86CODE_STATEDUMP");
+	const char* dir = getenv("X86SIM_STATEDUMP");
 	if (!dir || shim_nstate >= 64)
 		return;
 	shim_state[shim_nstate].q = queue;
@@ -274,7 +274,7 @@ extern int sandbox_extension_release(int64_t);
 static char* fake_token(const char* cls, const char* what)
 {
 	char buf[1200];
-	snprintf(buf, sizeof(buf), "x86code-sandbox-extension;%s;%s", cls ? cls : "", what ? what : "");
+	snprintf(buf, sizeof(buf), "x86sim-sandbox-extension;%s;%s", cls ? cls : "", what ? what : "");
 	return strdup(buf);
 }
 #define SB_FILE(name, ...) static char* shim_##name(const char* cls, const char* path, uint32_t flags, ##__VA_ARGS__) { return fake_token(cls, path); } DYLD_INTERPOSE(shim_##name, name)
@@ -302,7 +302,7 @@ DYLD_INTERPOSE(shim_sandbox_extension_consume, sandbox_extension_consume)
 static int shim_sandbox_extension_release(int64_t handle) { return 0; }
 DYLD_INTERPOSE(shim_sandbox_extension_release, sandbox_extension_release)
 
-// x86Code: no Metal here. IconFoundation's -[IFConcreteImage ICRIconLayer] (and CALayer, which calls it) builds the icon layer natively
+// x86Sim: no Metal here. IconFoundation's -[IFConcreteImage ICRIconLayer] (and CALayer, which calls it) builds the icon layer natively
 // (ICRIconLayer: needs an RBDevice, i.e. Metal, and the image's layer data, which iconservicesagent cannot
 // produce with its software renderer: "layer data size zero", TextureIOError.usingSoftwareRenderer), else nil.
 // SpringBoard's home screen asks for native layers only (SBHGetIconLayerFromIconServicesImage without the
@@ -359,7 +359,7 @@ __attribute__((constructor)) static void shim_ifimage_init(void)
 	_dyld_register_func_for_add_image(shim_ifimage_added);
 }
 
-// x86Code: button haptics. backboardd's BKButtonHapticsController enters a dispatch group, asks ButtonResolver
+// x86Sim: button haptics. backboardd's BKButtonHapticsController enters a dispatch group, asks ButtonResolver
 // -[BRButtonResolverController scheduleReadyNotificationOnDispatchQueue:withBlock:] and leaves the group in that block;
 // every later haptics configuration waits on the group first (_configureAsyncWithBlock: -> dispatch_group_wait
 // forever). ButtonResolver reports ready only once the button-haptics hardware answers, and there is none here: the
@@ -404,7 +404,7 @@ __attribute__((constructor)) static void shim_br_init(void)
 }
 
 #if defined(__arm64__)
-// x86Code (arm64, Speed 11): iconservicesagent keeps its icon store (IconsCache/<uuid>/, which also holds the Metal
+// x86Sim (arm64, Speed 11): iconservicesagent keeps its icon store (IconsCache/<uuid>/, which also holds the Metal
 // shader cache __METAL_CACHE__ it points MTLSetShaderCachePath at) only if the store directory's owner is
 // "_iconservices", the daemon's user on a device. Here every process runs as the host user, so the store was wiped
 // at every launch ("one or more preconditions have been met to delete previous cache"): every boot re-rendered all
@@ -446,7 +446,7 @@ __attribute__((constructor)) static void shim_owner_init(void)
 		_dyld_register_func_for_add_image(shim_owner_added);
 }
 
-// x86Code (arm64, Speed 24): the simulator build of RunningBoard never suspends an app whose Info.plist lists the
+// x86Sim (arm64, Speed 24): the simulator build of RunningBoard never suspends an app whose Info.plist lists the
 // "audio" background mode (-[RBProcess _lock_suspend]: "Ignoring suspend because this process is simulated and has
 // background audio capabilities"; a device suspends it unless it holds a running assertion, e.g. while it plays).
 // Maps and Health stayed running in the background after every use (~1 GB each; jetsam.py only reclaims suspended
@@ -527,49 +527,49 @@ __attribute__((constructor)) static void shim_rb_init(void)
 }
 #endif
 
-// x86Code: the Metal stand-in (host/metalhostd). MTLSimDriver marks its connections to com.apple.metal.simulator[.<proc>]
+// x86Sim: the Metal stand-in (host/metalhostd). MTLSimDriver marks its connections to com.apple.metal.simulator[.<proc>]
 // as sim-to-host (xpc_connection_enable_sim2host_4sim: messages packed in the host's macOS XPC format, for the
 // Mac-side SimMetalHost). Our service, metalhostd, runs inside the simulator on the simulator's libxpc, which drops
 // such messages (the handshake failed with an XPC error), so those connections stay plain simulator connections.
 // iOS 27 MTLSimDriver may call enable_sim2host before the connection name is set; a NULL name used to fall through
 // and enable sim2host framing, which hangs MTLCreateSystemDefaultDevice against in-sim metalhostd. When
-// X86CODE_METAL_IN_SIM is set (mksimdevice with Metal), skip sim2host for unnamed connections too.
+// X86SIM_METAL_IN_SIM is set (mksimdevice with Metal), skip sim2host for unnamed connections too.
 #include <xpc/xpc.h>
 extern void xpc_connection_enable_sim2host_4sim(xpc_connection_t c);
 static void shim_xpc_connection_enable_sim2host_4sim(xpc_connection_t c)
 {
 	const char* name = xpc_connection_get_name(c);
 	static int logged;
-	if (getenv("X86CODE_SIMSHIM_XPC_LOG") && logged < 32) {
+	if (getenv("X86SIM_SIMSHIM_XPC_LOG") && logged < 32) {
 		logged++;
 		fprintf(stderr, "simshim: enable_sim2host name=%s\n", name ? name : "(null)");
 	}
 	if (name && strncmp(name, "com.apple.metal.simulator", 25) == 0)
 		return;
-	// x86Code: same for IOSurface's connection: our com.apple.IOSurface.Remote (host/iosurfaced/iosurfaced)
+	// x86Sim: same for IOSurface's connection: our com.apple.IOSurface.Remote (host/iosurfaced/iosurfaced)
 	// is a simulator process too
 	if (name && strcmp(name, "com.apple.IOSurface.Remote") == 0)
 		return;
-	// x86Code: and FileProvider's host service, served in the simulator by host/fpsim2host
+	// x86Sim: and FileProvider's host service, served in the simulator by host/fpsim2host
 	if (name && strcmp(name, "com.apple.FileProvider.sim2host") == 0)
 		return;
-	// x86Code: iOS 27 may enable_sim2host before set_name (MTLSimDriver, and possibly IOSurface.Remote).
+	// x86Sim: iOS 27 may enable_sim2host before set_name (MTLSimDriver, and possibly IOSurface.Remote).
 	// Our stand-ins (metalhostd, iosurfaced, fpsim2host) are in-sim and cannot take host framing; a null-name
 	// enable hangs the first sync message. Skip all unnamed enables — named host-forwarded services set the
-	// name first. X86CODE_METAL_IN_SIM remains set by mksimdevice for documentation / older shims.
+	// name first. X86SIM_METAL_IN_SIM remains set by mksimdevice for documentation / older shims.
 	if (!name)
 		return;
 	xpc_connection_enable_sim2host_4sim(c);
 }
 DYLD_INTERPOSE(shim_xpc_connection_enable_sim2host_4sim, xpc_connection_enable_sim2host_4sim)
 
-// x86Code: diagnostics, opt-in. Apps get no log file from launchd here; if the Darling file
-// /private/var/tmp/x86code-stderr-progs (~/.darling/private/var/tmp/) lists a process name (comma-separated, e.g.
+// x86Sim: diagnostics, opt-in. Apps get no log file from launchd here; if the Darling file
+// /private/var/tmp/x86sim-stderr-progs (~/.darling/private/var/tmp/) lists a process name (comma-separated, e.g.
 // "Preferences,Photos,Maps"), that process sends stderr, and its os_log (DT mode), to
-// /private/var/tmp/x86code-<name>.log. Off by default: DT mode also streams to diagnosticd (see X86CODE_NODT).
+// /private/var/tmp/x86sim-<name>.log. Off by default: DT mode also streams to diagnosticd (see X86SIM_NODT).
 static void shim_quiet_os_log(void)
 {
-	// x86Code: no logd and no diagnosticd here. Processes that launchd starts get OS_ACTIVITY_MODE=disable from
+	// x86Sim: no logd and no diagnosticd here. Processes that launchd starts get OS_ACTIVITY_MODE=disable from
 	// cli/libexec/mksimdevice.py, but apps and extensions that SpringBoard/RunningBoard start don't, and their os_log
 	// looked up com.apple.diagnosticd for every message (Spotlight and the Maps widget: ~45,000 failed lookups in
 	// a few minutes, darlingserver at 90% CPU and launchd_sim at 40%, the UI stalled). libtrace reads the
@@ -581,7 +581,7 @@ static void shim_quiet_os_log(void)
 __attribute__((constructor)) static void shim_app_stderr_init(void)
 {
 	char buf[1024] = "";
-	int lf = open("/private/var/tmp/x86code-stderr-progs", O_RDONLY);
+	int lf = open("/private/var/tmp/x86sim-stderr-progs", O_RDONLY);
 	if (lf < 0) { shim_quiet_os_log(); return; }
 	ssize_t got = read(lf, buf, sizeof buf - 1);
 	close(lf);
@@ -594,15 +594,15 @@ __attribute__((constructor)) static void shim_app_stderr_init(void)
 	for (const char* s = list; s && *s; ) {
 		const char* e = strchr(s, ',');
 		size_t l = e ? (size_t) (e - s) : strlen(s);
-		// x86Code: "name+" also turns on info/debug messages (OS_ACTIVITY_MODE=debug)
+		// x86Sim: "name+" also turns on info/debug messages (OS_ACTIVITY_MODE=debug)
 		int dbg = l > 0 && s[l - 1] == '+';
 		if (dbg) l--;
 		if (l == n && !strncmp(s, p, n)) {
-			// x86Code: launchd jobs get OS_ACTIVITY_MODE=disable (mksimdevice.py), which also silences DT mode
+			// x86Sim: launchd jobs get OS_ACTIVITY_MODE=disable (mksimdevice.py), which also silences DT mode
 			if (dbg) setenv("OS_ACTIVITY_MODE", "debug", 1);
 			else if (getenv("OS_ACTIVITY_MODE") && !strcmp(getenv("OS_ACTIVITY_MODE"), "disable")) unsetenv("OS_ACTIVITY_MODE");
 			char path[256];
-			snprintf(path, sizeof path, "/private/var/tmp/x86code-%s.log", p);
+			snprintf(path, sizeof path, "/private/var/tmp/x86sim-%s.log", p);
 			int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
 			if (fd >= 0) { dup2(fd, 2); close(fd); setenv("OS_ACTIVITY_DT_MODE", "1", 1); }
 			break;

@@ -1,8 +1,8 @@
-// x86Code: diagnostic shim: logs +[STRPOPACKCoder encodeObject:error:] / decodeObjectOfClass:fromData:error:
+// x86Sim: diagnostic shim: logs +[STRPOPACKCoder encodeObject:error:] / decodeObjectOfClass:fromData:error:
 // (ChronoServices boxes such as CHSWidgetExtensionsBox are OPACK data inside NSXPC messages; SpringBoard
 // crashed decoding a nil one). Log: data/var/log/chsdiag.<prog>.<pid>.log
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -14,7 +14,7 @@ static int logfd(void)
 	static int fd = -1;
 	if (fd < 0) {
 		char p[200];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/chsdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/chsdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;

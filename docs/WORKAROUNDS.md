@@ -17,9 +17,9 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | MTLSimDriverHost / SimMetalHost (GPU) | host/metalhostd + linux/mtlvk + metal2vulkan | The runtime's own MTLSimImplementation on a Vulkan-backed device; feature coverage is what metal2vulkan translates (see METAL.md). |
 | SimRenderServer's com.apple.IOSurface.Remote | host/iosurfaced | Surfaces as shared anonymous memory; no compression, no GPU-private surfaces. |
 | Host mDNSResponder | linux/mdnsd | Unicast DNS (GetAddrInfo, QueryRecord). Register/Browse/Resolve are accepted but return nothing (no multicast DNS, no Bonjour). |
-| Host configd (network state for configd_sim's SimulatorSupport) | linux/hostnet + host/netconfig + com.x86code.host-configd | A snapshot of the default-route interface at boot; not updated when Linux networking changes. |
+| Host configd (network state for configd_sim's SimulatorSupport) | linux/hostnet + host/netconfig + com.x86sim.host-configd | A snapshot of the default-route interface at boot; not updated when Linux networking changes. |
 | Host fileproviderd (com.apple.FileProvider.sim2host) | host/fpsim2host | All 16 methods. Dataless files are SF_DATALESS + a sparse file of the logical size: nothing faults on read (materialization handlers are kept but never called); purgeable and sync-root marks are only recorded (xattrs). |
-| `simctl openurl` / `simctl launch` / terminate / get_app_container / listapps / push / location / addmedia / io | host/openurl (com.x86code.openurl) + cli/libexec/simctl.py | Opens through FrontBoard's open-application service with the Bridge's debug options (arguments, environment, `--console` through stdout/stderr files the CLI follows, `--wait-for-debugger`), carrying the Bridge's entitlements. `--console` follows stdout/stderr files; `--console-pty` gives the app a Linux pty (opened by path through `/Volumes/SystemRoot/dev/pts/N`). `location` (set/clear/list/run/start) goes through CLSimulationManager to locationd as on a Mac. |
+| `simctl openurl` / `simctl launch` / terminate / get_app_container / listapps / push / location / addmedia / io | host/openurl (com.x86sim.openurl) + cli/libexec/simctl.py | Opens through FrontBoard's open-application service with the Bridge's debug options (arguments, environment, `--console` through stdout/stderr files the CLI follows, `--wait-for-debugger`), carrying the Bridge's entitlements. `--console` follows stdout/stderr files; `--console-pty` gives the app a Linux pty (opened by path through `/Volumes/SystemRoot/dev/pts/N`). `location` (set/clear/list/run/start) goes through CLSimulationManager to locationd as on a Mac. |
 | `simctl install` / `uninstall` (CoreSimulatorBridge in the device) | host/openurl + cli/libexec/appinstall.sh | Same call as CoreSimulatorBridge (IXAppInstallCoordinator with developer MIInstallOptions), from a launchd job instead of the Bridge; the bundle is first copied into the device's tmp directory (staging), installd then copies it as on a Mac. No `installationInfo` result, no app data containers (`simctl install_app_data`). |
 | Device type (CoreSimulator's `.simdevicetype`: capabilities.plist via `SIMULATOR_CAPABILITIES`) | cli/lib/devicetypes-a64.json, cli/lib/devicetype-*.json, mksimdevice.py | The models in devicetypes-a64.json (`<device>/model`). The profile's other parts (chrome, framebuffer mask PDF, sensor-bar image) are not used. |
 | Host /System/Library lookups by absolute path | cli/libexec/arm64/boot-a64.sh (links into the Darling prefix) | CoreSpotlight.framework (the runtime's copy) and host data fetched from a Mac by fetch-macos-host.sh (GeoServicesData); others the simulator might open on the host path are absent. |
@@ -32,7 +32,7 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 |---|---|---|
 | **Icon-layer fallback**: when `-[IFConcreteImage ICRIconLayer]` returns nil, return a CALayer with the flat CGImage | simshim.c | ICRIconLayer needs an RBDevice and layer data that iconservicesagent's software renderer does not produce, so the first SpringBoard showed gray icons. Faithful: iconservicesagent rendering layer data on the Metal stand-in. |
 | **Dummy sandbox extensions**: `sandbox_extension_issue_*` return opaque tokens, `consume`/`release` accept any token | simshim.c | Darling has no `__mac_syscall("Sandbox")` (ENOSYS) and nothing is sandboxed. Faithful: a sandbox (MACF) implementation. |
-| **os_log disabled**: `OS_ACTIVITY_MODE=disable` for every launchd job (mksimdevice.py) and, from simshim, for processes launched by SpringBoard/RunningBoard; `os_state_add_handler` returns dummy handles meanwhile | mksimdevice.py, simshim.c | No logd/diagnosticd: logd crashed every process in `firehose_buffer_create` (Mach memory entries); without a draining diagnosticd, DT-mode senders block or flood lookups. `X86CODE_NODT=all,-<label>` / `x86code-stderr-progs` turn logging back on per process for debugging. Faithful: logd + diagnosticd running on Darling's memory entries. |
+| **os_log disabled**: `OS_ACTIVITY_MODE=disable` for every launchd job (mksimdevice.py) and, from simshim, for processes launched by SpringBoard/RunningBoard; `os_state_add_handler` returns dummy handles meanwhile | mksimdevice.py, simshim.c | No logd/diagnosticd: logd crashed every process in `firehose_buffer_create` (Mach memory entries); without a draining diagnosticd, DT-mode senders block or flood lookups. `X86SIM_NODT=all,-<label>` / `x86sim-stderr-progs` turn logging back on per process for debugging. Faithful: logd + diagnosticd running on Darling's memory entries. |
 | **System-domain jobs loaded into the user domain** (`LimitLoadToSessionType: System` dropped) | mksimdevice.py | launchd_sim's system domain never leaves bootstrap mode here (on a Mac CoreSimulator ends it). Faithful: the missing bootstrap-completion step. |
 | **Sim-to-host connections kept as simulator connections** (`xpc_connection_enable_sim2host_4sim` skipped for Metal, IOSurface, FileProvider host services) | simshim.c | Our stand-ins run inside the simulator on the simulator's libxpc, which drops macOS-format messages. Faithful: running them as macOS processes on the host libxpc (Darling's), which would need the sim-to-host XPC path. |
 | **System power** registration that never fires | simshim.c | Darling's iokitd has no IOPMrootDomain; the device never sleeps. |
@@ -45,7 +45,7 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 | **The standard boot lists its jobs** (`A64_JOBS` sets in boot-a64.sh, trimmed by the device's feature toggles) instead of loading every LaunchDaemon of the runtime | cli/libexec/arm64/boot-a64.sh | Jobs are added as apps need them, each with the reason in a comment. A Mac's device loads the whole set. |
 | **Fresh container per boot**: the phone's previous container is stopped (its own processes, found by exact checks, then `darling shutdown` and a sweep of what it misses) | cli/libexec/arm64/boot-a64.sh | Leftover processes and two launchd_sims on one device break new boots; killing processes inside a running container leaves darlingserver in a state where new jobs hang. |
 | **statfs reports `apfs`** for local Linux file systems | Darling (libsystem_kernel statfs conversion) | FileProvider only accepts APFS volumes (the iOS simulator only runs on APFS). |
-| **chflags flags stored in an xattr** (`user.x86code.bsdflags`, hidden from listxattr) | Darling (helper/misc/bsdflags.h) | Linux has no BSD file flags; this keeps them per file across processes. |
+| **chflags flags stored in an xattr** (`user.x86sim.bsdflags`, hidden from listxattr) | Darling (helper/misc/bsdflags.h) | Linux has no BSD file flags; this keeps them per file across processes. |
 | **fsctl answers APFS requests as for a plain directory tree**; unknown ones ENOTTY | Darling (misc/fsctl.c) | Enough for FileProvider's sync-root and dir-stat queries. |
 | **O_SYMLINK on regular files/directories reopens through /proc/self/fd** | Darling (fcntl/openat.c) | Linux O_PATH descriptors can't be read; XNU's O_SYMLINK only differs for symlinks. |
 | **setrlimit(RLIMIT_NOFILE) below the current limit succeeds and changes nothing** | Darling (misc/setrlimit.c) | mldr keeps each thread's darlingserver socket at the top of the process's initial fd range; a lowered limit made thread creation abort (revisiond). Faithful: Darling's internal fds below the limit, or a limit enforced only on the process's own fds. |
@@ -58,9 +58,9 @@ coverage), **F** = faithful fix listed for contrast because it replaced an earli
 
 ## Diagnostics that change behaviour only when enabled (opt-in)
 
-`host/simshim/diag/*` (via `X86CODE_INSERT`), `X86CODE_SHIMLOG`, `X86CODE_JOBLOG` (default on in boot-a64.sh),
-`X86CODE_KEEPALIVE`, `MTLVK_LOG`, `MTLVK_DUMP_PASSES`/`MTLVK_DUMP_REPLACE`, `X86CODE_VKMTL_LOG`/`X86CODE_VKMTL_DUMP`,
-`X86CODE_IOSURFACE_LOG`, `X86CODE_MDNS_LOG`. They are not workarounds but are listed so they are not mistaken for
+`host/simshim/diag/*` (via `X86SIM_INSERT`), `X86SIM_SHIMLOG`, `X86SIM_JOBLOG` (default on in boot-a64.sh),
+`X86SIM_KEEPALIVE`, `MTLVK_LOG`, `MTLVK_DUMP_PASSES`/`MTLVK_DUMP_REPLACE`, `X86SIM_VKMTL_LOG`/`X86SIM_VKMTL_DUMP`,
+`X86SIM_IOSURFACE_LOG`, `X86SIM_MDNS_LOG`. They are not workarounds but are listed so they are not mistaken for
 required parts.
 
 ## Replaced workarounds (F, for history)
@@ -85,7 +85,7 @@ required parts.
   scroll events or a synthesized two-finger pan), not be ignored.
 
 - Audio: host/simaudio (in-process HAL stand-in) + cli/libexec/simaudio.py (PipeWire), opt-in with
-  `X86CODE_AUDIO=1`; AVAudioEngine fails at the output unit's initialize. A faithful version would
+  `X86SIM_AUDIO=1`; AVAudioEngine fails at the output unit's initialize. A faithful version would
   answer coreaudiod's MIG protocol on `com.apple.audio.audiohald`.
 - Clipboard sync (`x86sim pbcopy/pbpaste`, Linux clipboard <-> pasted), rotation (`x86sim rotate`), software
   keyboard toggle: not started.

@@ -1,5 +1,5 @@
 {
-  "_comment": "x86Code Speed 18: optional features of the arm64 device. A device's features.json ({\"features\": {\"id\": bool}}) overrides the defaults; boot-a64.sh applies it at boot, tools/launcher (x86code-aot features, the GUI, the MCP server) edits it. A job is left out only when every feature listing it is off. Boot-critical jobs (MIN set, backboardd, SpringBoard, kbd, FileCoordination, sleepd, usernotificationsd) are never listed. cost_mb: PSS measured on a booted device (Speed 17/18 runs); when = boot (paid at every boot) or use (on demand: paid once the feature is used).",
+  "_comment": "x86Sim Speed 18: optional features of the arm64 device. A device's features.json ({\"features\": {\"id\": bool}}) overrides the defaults; boot-a64.sh applies it at boot, tools/launcher (x86sim-aot features, the GUI, the MCP server) edits it. A job is left out only when every feature listing it is off. Boot-critical jobs (MIN set, backboardd, SpringBoard, kbd, FileCoordination, sleepd, usernotificationsd) are never listed. cost_mb: PSS measured on a booted device (Speed 17/18 runs); when = boot (paid at every boot) or use (on demand: paid once the feature is used).",
   "features": [
     {"id": "wallpaper", "title": "Wallpaper", "default": false,
      "desc": "The live lock and home screen wallpaper. Off by default: a still picture instead.",
@@ -33,7 +33,7 @@
     {"id": "files", "title": "Files", "default": true,
      "desc": "Off: Files only shows Recents.",
      "tech": "fileproviderd, the sim2host stand-in and DesktopServicesHelper. Off: Files shows only Recents.",
-     "jobs": ["com.apple.FileProvider", "com.apple.DesktopServicesHelper", "com.x86code.fpsim2host",
+     "jobs": ["com.apple.FileProvider", "com.apple.DesktopServicesHelper", "com.x86sim.fpsim2host",
               "com.apple.searchd", "com.apple.corespotlightservice"],
      "chunks": ["fileproviderd", "DesktopServicesHelper", "fpsim2host"], "cost_mb": 55, "when": "use"},
     {"id": "wallet", "title": "Wallet", "default": true,

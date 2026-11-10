@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: coarse checks of the simulator's newest frame (shm ring, cli/libexec/fbring.py), for boot waits and the
+"""x86Sim: coarse checks of the simulator's newest frame (shm ring, cli/libexec/fbring.py), for boot waits and the
 smoke test. Samples a 118x256 grid of the frame.
     framecheck.py stats                 print seq, dark/bright fractions (luma < 30 / > 200), mean saturation
     framecheck.py home                  exit 0 if the frame looks like the home screen: not the boot logo (~98% dark)
@@ -15,7 +15,7 @@ import fbring
 
 GW, GH = 118, 256
 # Optional ring path: argv "... framecheck.py [/path/to.ring] stats|home|..." or SIMFB_RING_LINUX.
-# Arm64 boots use /dev/shm/x86code-a64-simfb.ring; the fbring default is the x86 ring.
+# Arm64 boots use /dev/shm/x86sim-a64-simfb.ring; the fbring default is the x86 ring.
 _RING = None
 
 
@@ -73,7 +73,7 @@ def check(kind, ref=None):
 def main():
     global _RING
     a = sys.argv[1:]
-    # Leading path to a .ring file (arm64: /dev/shm/x86code-a64-simfb.ring) selects the ring.
+    # Leading path to a .ring file (arm64: /dev/shm/x86sim-a64-simfb.ring) selects the ring.
     if a and a[0].endswith(".ring"):
         _RING = a[0]
         a = a[1:]

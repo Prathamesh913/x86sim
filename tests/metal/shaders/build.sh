@@ -1,5 +1,5 @@
 #!/bin/sh
-# x86Code: compile probe.metal on the Mac for the iOS simulator (AIR + metallib), fetch the results.
+# x86Sim: compile probe.metal on the Mac for the iOS simulator (AIR + metallib), fetch the results.
 # Outputs: probe.air (AIR bitcode), probe.metallib, probe.ll (disassembled AIR, for reading).
 set -e
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}; . "$X86SIM_ROOT/build/mac-env.sh"

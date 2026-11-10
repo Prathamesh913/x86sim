@@ -1,6 +1,6 @@
-// x86Code: diagnostic shim (SpringBoard, runningboardd; arm64): why SpringBoard has no FBApplicationProcess for
+// x86Sim: diagnostic shim (SpringBoard, runningboardd; arm64): why SpringBoard has no FBApplicationProcess for
 // osservice<com.apple.campo> (Siri): logs FrontBoard's process-class decision, RunningBoard's angel answer and the
-// scene transaction's client process. Log: X86CODE_DATA_DIR/var/log/siridiag.<pid>.log. X86CODE_INSERT=<this dylib>.
+// scene transaction's client process. Log: X86SIM_DATA_DIR/var/log/siridiag.<pid>.log. X86SIM_INSERT=<this dylib>.
 #import <Foundation/Foundation.h>
 #include "diagpath.h"
 #include <objc/runtime.h>
@@ -9,7 +9,7 @@
 #include <unistd.h>
 static int logfd(void) {
 	static int fd = -1;
-	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86CODE_DATA_DIR "/var/log/siridiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
+	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86SIM_DATA_DIR "/var/log/siridiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
 	return fd;
 }
 static const char *D(id o) { return o ? [[o description] UTF8String] : "(nil)"; }

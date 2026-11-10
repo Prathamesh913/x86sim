@@ -10,7 +10,7 @@
 // (HDR, BC, 16-bit or float texels, the sRGB->linear flag, 3D) runs libate's own code: the replaced
 // "sub sp, sp, #176" is emulated and the guest continues at the next instruction.
 //
-// Default on (3 clean gates, Speed 31); X86CODE_A64_ASTC_NATIVE=0: libate's own decode; =verify decodes natively into a side
+// Default on (3 clean gates, Speed 31); X86SIM_A64_ASTC_NATIVE=0: libate's own decode; =verify decodes natively into a side
 // buffer, lets libate decode, and compares the two at the next call (logs mismatching bytes).
 #include "a64.h"
 #include "third_party/astcenc/astcenc.h"
@@ -29,7 +29,7 @@ constexpr u32 kEntryWord = 0xd102c3ffu;  // sub sp, sp, #176
 
 int mode() {  // 0 off, 1 native, 2 verify
     static const int m = [] {
-        const char *e = getenv("X86CODE_A64_ASTC_NATIVE");
+        const char *e = getenv("X86SIM_A64_ASTC_NATIVE");
         if (!e) return 1;
         if (!strcmp(e, "verify")) return 2;
         return atoi(e) == 0 ? 0 : 1;

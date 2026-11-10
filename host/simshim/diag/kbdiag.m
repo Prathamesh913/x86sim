@@ -1,7 +1,7 @@
-// x86Code: diagnostic shim (SpringBoard; arm64): hardware-keyboard focus. Logs how SpringBoard builds its keyboard
+// x86Sim: diagnostic shim (SpringBoard; arm64): hardware-keyboard focus. Logs how SpringBoard builds its keyboard
 // focus targets (SBKeyboardFocusTarget: scene -> clientHandle -> processHandle -> pid), the coordinator's focus changes
-// and the policy target it sends to backboardd. Log: X86CODE_DATA_DIR/var/log/kbdiag.<pid>.log.
-// X86CODE_INSERT=<this dylib> (build: build/mac-build-diag.sh kbdiag).
+// and the policy target it sends to backboardd. Log: X86SIM_DATA_DIR/var/log/kbdiag.<pid>.log.
+// X86SIM_INSERT=<this dylib> (build: build/mac-build-diag.sh kbdiag).
 #import <Foundation/Foundation.h>
 #include "diagpath.h"
 #include <objc/runtime.h>
@@ -12,7 +12,7 @@
 #include <sys/time.h>
 static int logfd(void) {
 	static int fd = -1;
-	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86CODE_DATA_DIR "/var/log/kbdiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
+	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86SIM_DATA_DIR "/var/log/kbdiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
 	return fd;
 }
 static const char *D(id o) { return o ? [[[o description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "] UTF8String] : "(nil)"; }

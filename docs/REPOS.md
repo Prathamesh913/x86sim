@@ -1,41 +1,41 @@
-# x86Code repositories
+# x86Sim repositories
 
-Everything lives in the GitHub organization **`x86code`**. This repo (`x86code/x86code`, **private**) holds our own
+Everything lives in the GitHub organization **`x86sim`**. This repo (`x86sim/x86sim`, **private**) holds our own
 code; Darling, dynarmic and metal2vulkan are git submodules under `external/`. The submodule repos are **public GitHub
 forks** of their upstreams (`darlinghq/*`, `azahar-emu/dynarmic`, `steelbrain/metal2vulkan`). Our work is on branch
-**`x86code`**; the upstream default branch (`main`/`master`) is mirrored unchanged. In the local checkouts, `origin` =
-the x86code fork (SSH), `upstream` = the original repo.
+**`x86sim`**; the upstream default branch (`main`/`master`) is mirrored unchanged. In the local checkouts, `origin` =
+the x86sim fork (SSH), `upstream` = the original repo.
 
 | Local path | Repo | Upstream | Upstream base commit |
 |---|---|---|---|
-| `.` (this repo) | git@github.com:x86code/x86code.git (`main`) | (ours) | - |
-| `external/darling` | git@github.com:x86code/darling.git | darlinghq/darling (`master`) | `60ba801d` |
-| `external/darling/src/external/xnu` | git@github.com:x86code/darling-xnu.git | darlinghq/darling-xnu (`main`) | `fa29287a` |
-| `external/darling/src/external/darlingserver` | git@github.com:x86code/darlingserver.git | darlinghq/darlingserver (`main`) | `89751e64` |
-| `external/darling/src/external/libkqueue` | git@github.com:x86code/darling-libkqueue.git | darlinghq/darling-libkqueue (`master`) | `b0795a2e` |
-| `external/darling/src/external/iokitd` | git@github.com:x86code/darling-iokitd.git | darlinghq/darling-iokitd (`master`) | `5549ac4c` |
-| `external/darling/src/external/libplatform` | git@github.com:x86code/darling-libplatform.git | darlinghq/darling-libplatform (`master`) | `5a3e5b52` |
-| `external/darling/src/external/libpthread` | git@github.com:x86code/darling-libpthread.git | darlinghq/darling-libpthread (`master`) | `f07f265b` |
-| `external/darling/src/external/dyld` | git@github.com:x86code/darling-dyld.git | darlinghq/darling-dyld (`main`) | `63f667cf` |
-| `external/darling/src/external/libunwind` | git@github.com:x86code/darling-libunwind.git | darlinghq/darling-libunwind (`main`) | `a91da1a0` |
-| `external/darling/src/external/objc4` | git@github.com:x86code/darling-objc4.git | darlinghq/darling-objc4 (`master`) | `1a12df76` |
-| `external/darling/src/external/sqlite` | git@github.com:x86code/darling-sqlite.git | darlinghq/darling-sqlite (`master`) | `3472e256` |
-| `external/metal2vulkan` | git@github.com:x86code/metal2vulkan.git | steelbrain/metal2vulkan (`master`) | `f6a96b7d` |
-| `external/dynarmic` | git@github.com:x86code/dynarmic.git | azahar-emu/dynarmic | - |
+| `.` (this repo) | git@github.com:x86sim/x86sim.git (`main`) | (ours) | - |
+| `external/darling` | git@github.com:x86sim/darling.git | darlinghq/darling (`master`) | `60ba801d` |
+| `external/darling/src/external/xnu` | git@github.com:x86sim/darling-xnu.git | darlinghq/darling-xnu (`main`) | `fa29287a` |
+| `external/darling/src/external/darlingserver` | git@github.com:x86sim/darlingserver.git | darlinghq/darlingserver (`main`) | `89751e64` |
+| `external/darling/src/external/libkqueue` | git@github.com:x86sim/darling-libkqueue.git | darlinghq/darling-libkqueue (`master`) | `b0795a2e` |
+| `external/darling/src/external/iokitd` | git@github.com:x86sim/darling-iokitd.git | darlinghq/darling-iokitd (`master`) | `5549ac4c` |
+| `external/darling/src/external/libplatform` | git@github.com:x86sim/darling-libplatform.git | darlinghq/darling-libplatform (`master`) | `5a3e5b52` |
+| `external/darling/src/external/libpthread` | git@github.com:x86sim/darling-libpthread.git | darlinghq/darling-libpthread (`master`) | `f07f265b` |
+| `external/darling/src/external/dyld` | git@github.com:x86sim/darling-dyld.git | darlinghq/darling-dyld (`main`) | `63f667cf` |
+| `external/darling/src/external/libunwind` | git@github.com:x86sim/darling-libunwind.git | darlinghq/darling-libunwind (`main`) | `a91da1a0` |
+| `external/darling/src/external/objc4` | git@github.com:x86sim/darling-objc4.git | darlinghq/darling-objc4 (`master`) | `1a12df76` |
+| `external/darling/src/external/sqlite` | git@github.com:x86sim/darling-sqlite.git | darlinghq/darling-sqlite (`master`) | `3472e256` |
+| `external/metal2vulkan` | git@github.com:x86sim/metal2vulkan.git | steelbrain/metal2vulkan (`master`) | `f6a96b7d` |
+| `external/dynarmic` | git@github.com:x86sim/dynarmic.git | azahar-emu/dynarmic | - |
 
 metal2vulkan is dual-licensed GPL-2.0-or-later OR LGPL-3.0-or-later; LICENSE files are kept.
 
-In the top-level darling `.gitmodules` (branch `x86code`) every submodule points at an `x86code` fork: the ones we
-modify (above) by SSH, the rest by HTTPS (`https://github.com/x86code/darling-<name>.git`, unmodified forks of
-darlinghq's). Push a modified submodule's `x86code` branch before the parents that point at it (innermost first:
+In the top-level darling `.gitmodules` (branch `x86sim`) every submodule points at an `x86sim` fork: the ones we
+modify (above) by SSH, the rest by HTTPS (`https://github.com/x86sim/darling-<name>.git`, unmodified forks of
+darlinghq's). Push a modified submodule's `x86sim` branch before the parents that point at it (innermost first:
 e.g. darling-xnu, then darling, then this repo); `git push --recurse-submodules=check` refuses otherwise.
 
-## Commits on `x86code`
+## Commits on `x86sim`
 
 ### darling
-- `674c357c` Point submodules at absolute URLs; use designgears private forks for x86Code-modified ones
+- `674c357c` Point submodules at absolute URLs; use designgears private forks for x86Sim-modified ones
 - `59e024cd` mldr commpage: set kCache64 cache line size bit
-- `53e5b414` Update submodules to x86Code branches
+- `53e5b414` Update submodules to x86Sim branches
 - `b6e14cd8` Update xnu: file flags, fsctl, O_SYMLINK reopen, simulator host version
 
 ### darling-xnu
@@ -43,7 +43,7 @@ e.g. darling-xnu, then darling, then this repo); `git push --recurse-submodules=
 - `1dcf807` openat O_SYMLINK: reopen regular files and directories with real access instead of O_PATH
 - `fd1345e` fsctl/ffsctl: implement the APFS requests the iOS simulator uses (ENOTTY otherwise)
 - `988c6f3` File flags: persist chflags flags in an xattr, report them in stat/getattrlist; getattrlist volume-attribute and dir/file packing fixes
-- `a340593` IOSurface/memfd: add x86Code memfd syscall 599
+- `a340593` IOSurface/memfd: add x86Sim memfd syscall 599
 - `1d0e910` Code signing: csops and mac_syscall emulation
 - `833ad1d` Networking: PF_ROUTE/rtnetlink, socket options, ioctls, EVFILT_SOCK state (ports willi/darling-xnu#7, #8)
 - `e95ba1c` Workqueue, ulock/psynch and thread reuse; TSD, sim-compat and signal fixes (ports willi/darling-xnu#26)
@@ -76,32 +76,32 @@ e.g. darling-xnu, then darling, then this repo); `git push --recurse-submodules=
 ## Clone
 
 ```sh
-git clone git@github.com:x86code/x86code.git && cd x86code
-make submodules     # external/darling (recursive, x86code branches), external/dynarmic and external/metal2vulkan
-# our Darling submodules are checked out detached at the x86code commits; to work on them:
+git clone git@github.com:x86sim/x86sim.git && cd x86sim
+make submodules     # external/darling (recursive, x86sim branches), external/dynarmic and external/metal2vulkan
+# our Darling submodules are checked out detached at the x86sim commits; to work on them:
 for d in xnu darlingserver libkqueue iokitd libplatform libpthread dyld libunwind objc4; do
-  git -C external/darling/src/external/$d checkout x86code
+  git -C external/darling/src/external/$d checkout x86sim
 done
-git -C external/darling checkout x86code; git -C external/metal2vulkan checkout x86code
+git -C external/darling checkout x86sim; git -C external/metal2vulkan checkout x86sim
 ```
 
 ## Committing further work
 
-1. In the submodule: commit on `x86code`, `git push origin x86code`.
-2. In `external/darling`: `git add src/external/<name> && git commit && git push origin x86code`.
+1. In the submodule: commit on `x86sim`, `git push origin x86sim`.
+2. In `external/darling`: `git add src/external/<name> && git commit && git push origin x86sim`.
 3. In this repo: `git add external/darling` (or `external/metal2vulkan`), commit, push `main`.
 
 After `.gitmodules` changes in an existing checkout run `git submodule sync`.
 
-## Pulling upstream into x86code
+## Pulling upstream into x86sim
 
 ```sh
 cd <repo>
 git remote add upstream https://github.com/darlinghq/<name>.git   # if missing
 git fetch upstream
-git checkout x86code
+git checkout x86sim
 git merge upstream/<main|master>        # or rebase, if history is still private-only
-git push origin x86code
+git push origin x86sim
 git push origin upstream/<main|master>:refs/heads/<main|master>   # keep the mirror branch current
 ```
 For the top-level darling, after merging upstream re-check `.gitmodules` (new upstream submodules

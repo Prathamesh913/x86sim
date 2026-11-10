@@ -50,12 +50,12 @@ final class VC: UITableViewController {
             try? fm.removeItem(at: dir)
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             let a = dir.appendingPathComponent("a.txt"), b = dir.appendingPathComponent("b.txt")
-            try "hello x86code".write(to: a, atomically: true, encoding: .utf8)
+            try "hello x86sim".write(to: a, atomically: true, encoding: .utf8)
             try fm.moveItem(at: a, to: b)
             let s = try String(contentsOf: b, encoding: .utf8)
             let size = (try fm.attributesOfItem(atPath: b.path)[.size] as? Int) ?? -1
             let list = try fm.contentsOfDirectory(atPath: dir.path)
-            X86Test.log("files", s == "hello x86code" && size == 13 && list == ["b.txt"], "size \(size) list \(list)")
+            X86Test.log("files", s == "hello x86sim" && size == 12 && list == ["b.txt"], "size \(size) list \(list)")
         } catch { X86Test.log("files", false, "\(error)") }
         // defaults
         let ud = UserDefaults.standard

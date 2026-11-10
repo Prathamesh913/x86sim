@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86Code: drop-in for `xcrun -sdk <sdk> swiftc ...` on Linux. Compiles Swift for the iOS simulator / macOS (Mach-O)
+# x86Sim: drop-in for `xcrun -sdk <sdk> swiftc ...` on Linux. Compiles Swift for the iOS simulator / macOS (Mach-O)
 # with the swift.org Linux toolchain against the Apple SDKs in sdks/, links with ld64.lld (ad-hoc signed for arm64).
 #   build/linux-swiftc.sh [-sdk iphonesimulator|macosx|<path>] [-target <triple>] <swiftc args...>
 # Without -sdk the SDK follows -target (*-simulator -> iPhoneSimulator.sdk, *-macos* -> MacOSX.sdk); without -target

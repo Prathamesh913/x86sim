@@ -1,6 +1,6 @@
-// x86Code: diagnostic shim: logs file-system calls failing with EINVAL/ENOTSUP/ENOSYS (and their callers) in the
+// x86Sim: diagnostic shim: logs file-system calls failing with EINVAL/ENOTSUP/ENOSYS (and their callers) in the
 // processes named in data/oslog.filter. Log: data/var/log/errdiag.<prog>.<pid>.log
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -30,7 +30,7 @@ static int on(void)
 {
 	if (en < 0) {
 		char buf[1024] = {0};
-		int f = open(X86CODE_DATA_DIR "/oslog.filter", O_RDONLY);
+		int f = open(X86SIM_DATA_DIR "/oslog.filter", O_RDONLY);
 		en = 0;
 		if (f >= 0) {
 			ssize_t n = read(f, buf, sizeof(buf) - 1); close(f);
@@ -41,7 +41,7 @@ static int on(void)
 		}
 		if (en) {
 			char p[300];
-			snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/errdiag.%s.%d.log", getprogname(), getpid());
+			snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/errdiag.%s.%d.log", getprogname(), getpid());
 			fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 			if (fd < 0) en = 0;
 		}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: the host side of the simulator's audio (the Mac's coreaudiod on a Linux host).
+"""x86Sim: the host side of the simulator's audio (the Mac's coreaudiod on a Linux host).
 
 host/simaudio/libsimaudio.dylib (in every simulator process) presents an output and an input device and connects
 here for each running stream: a 16-byte header ("x86A", u32 direction 0=output/1=input, u32 rate, u32 channels),

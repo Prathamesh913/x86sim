@@ -1,5 +1,5 @@
 #!/bin/sh
-# x86Code release build: packages for building Darling + our Linux pieces on Ubuntu 24.04 (the CI runner and the local
+# x86Sim release build: packages for building Darling + our Linux pieces on Ubuntu 24.04 (the CI runner and the local
 # docker check in build/release/README in docs/RELEASE.md). Run as root (CI: sudo). LLVM_VERSION picks clang from
 # apt.llvm.org (our Darling fork is developed with clang 23; -fno-objc-constant-literals needs a recent clang).
 set -e

@@ -1,7 +1,7 @@
 //! The training hot set: block descriptors recorded by training boots (`<uuid>-<build>.<exe>.bin` files, any build),
 //! with the number of profiles each block appears in (hotter = more processes ran it). Cached in `<aot>/hot.bin`,
 //! rebuilt when the set of training files changes. Speed 31: also `<uuid>-<build>.<exe>.live` (descriptors only: what a
-//! process on the image translated itself, libarm64jit X86CODE_A64_AOT_LIVE=1).
+//! process on the image translated itself, libarm64jit X86SIM_A64_AOT_LIVE=1).
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -20,7 +20,7 @@ pub struct Hot {
 /// RAM 2 (JIT): a block's rank packs, from high to low bits: the number of distinct executables that ran it (bits
 /// 24-31: a .bin and a .live of the same program count once, so repeated boots no longer inflate it), a flag for
 /// blocks some process on the image translated itself (bit 23, .live) and sampled execution hits (bits 0-22,
-/// X86CODE_A64_COUNT). Sharing decides first: a block in the image is one clean page-cache copy for every process
+/// X86SIM_A64_COUNT). Sharing decides first: a block in the image is one clean page-cache copy for every process
 /// that runs it, a block left out is translated (time) and kept (private code + JIT metadata) by each of them.
 /// Before, the flag was worth more than any sharing (LIVE_RANK = 1 << 20 added per block) and a full build that did
 /// not fit left out whole libraries by summed rank per byte: the 2026-11-03 image had Foundation, libobjc,
@@ -105,7 +105,7 @@ fn live_descs(dirs: &[PathBuf], uuid: &str) -> Vec<u64> {
     v
 }
 
-/// Speed 33: sampled execution counts (libarm64jit X86CODE_A64_COUNT=1: `<uuid>-<build>.<exe>.cnt`, "A64CNT1\0",
+/// Speed 33: sampled execution counts (libarm64jit X86SIM_A64_COUNT=1: `<uuid>-<build>.<exe>.cnt`, "A64CNT1\0",
 /// u64 n, n x {u64 pc, u32 hits, u32 0}), summed by guest PC over every file.
 fn sample_counts(dirs: &[PathBuf], uuid: &str) -> HashMap<u64, u64> {
     let mut m: HashMap<u64, u64> = HashMap::new();

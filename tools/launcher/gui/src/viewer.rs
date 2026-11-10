@@ -7,7 +7,7 @@ use eframe::egui;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use x86code_core::{hid, instance::Instance, ring::Ring};
+use x86sim_core::{hid, instance::Instance, ring::Ring};
 
 pub const OFF: u8 = 0;
 pub const THUMB: u8 = 1;
@@ -54,7 +54,7 @@ pub struct Viewer {
     shift_held: bool,
 }
 
-fn convert(f: &x86code_core::ring::Frame, step: usize, rot: u32) -> Img {
+fn convert(f: &x86sim_core::ring::Frame, step: usize, rot: u32) -> Img {
     let (w, h) = (f.w as usize / step, f.h as usize / step);
     let px_at = |x: usize, y: usize| {
         let o = y * step * f.stride as usize + x * step * 4;

@@ -1,9 +1,9 @@
 // Speed 6: arm64 versions of the hottest pure libsystem_platform exports, run as guest code under the JIT instead of
-// an svc to Darling's x86 libsystem. An svc round trip costs ~40-60 ns (leaves the JIT's run loop, X86CODE_A64_SVCBENCH);
+// an svc to Darling's x86 libsystem. An svc round trip costs ~40-60 ns (leaves the JIT's run loop, X86SIM_A64_SVCBENCH);
 // these take ~10-15 ns for typical short strings. memmove/bzero hand sizes >= 256 bytes to the native function
 // (the `svc #0` in their code is patched to that thunk). Preferences calls these ~50M times in a Settings open.
-// Sources: tests/arm64/guestlibc/*.s (llvm-mc -triple=aarch64). X86CODE_A64_GUEST_LIBC=0 keeps every one native;
-// X86CODE_A64_GUESTLIB_TEST=1 runs a randomized comparison against glibc and exits.
+// Sources: tests/arm64/guestlibc/*.s (llvm-mc -triple=aarch64). X86SIM_A64_GUEST_LIBC=0 keeps every one native;
+// X86SIM_A64_GUESTLIB_TEST=1 runs a randomized comparison against glibc and exits.
 #include "a64.h"
 #include <cstdio>
 #include <cstdlib>
@@ -48,7 +48,7 @@ static const uint32_t kStrlen[] = {
 // (~2M lock/unlock calls): one exclusive pair on the lock word with the owner value libplatform uses (TSD slot 3, the
 // thread's mach port, shared by the guest and native TSD); contention, waiters or a foreign owner go native (svc #0).
 // Sources: tests/arm64/guestlibc/{strncmp,memchr,strchr,strnlen,unfair_lock,unfair_unlock}.s.
-// X86CODE_A64_GUEST_LOCKS=0 keeps the lock functions native.
+// X86SIM_A64_GUEST_LOCKS=0 keeps the lock functions native.
 static const uint32_t kStrncmp[] = {0xb4000102u, 0x38401403u, 0x38401424u, 0x6b040065u, 0x540000c1u, 0x34000063u,
                                     0xf1000442u, 0x54ffff41u, 0x52800000u, 0xd65f03c0u, 0x2a0503e0u, 0xd65f03c0u};
 static const uint32_t kMemchr[] = {0x12001c21u, 0xb4000182u, 0xd2800804u, 0x39400003u, 0x6b01007fu, 0x54000120u, 0x91000400u, 0xf1000442u, 0x540000a0u, 0xf1000484u, 0x54ffff21u, 0xd4000001u, 0xd65f03c0u, 0xd2800000u, 0xd65f03c0u};
@@ -74,9 +74,9 @@ static const GuestFn kFns[] = {
 };
 
 static const GuestFn *find(const std::string &n) {
-    static const bool on = !(getenv("X86CODE_A64_GUEST_LIBC") && atoi(getenv("X86CODE_A64_GUEST_LIBC")) == 0);
+    static const bool on = !(getenv("X86SIM_A64_GUEST_LIBC") && atoi(getenv("X86SIM_A64_GUEST_LIBC")) == 0);
     if (!on) return nullptr;
-    static const bool locks = !(getenv("X86CODE_A64_GUEST_LOCKS") && atoi(getenv("X86CODE_A64_GUEST_LOCKS")) == 0);
+    static const bool locks = !(getenv("X86SIM_A64_GUEST_LOCKS") && atoi(getenv("X86SIM_A64_GUEST_LOCKS")) == 0);
     if (!locks && n.rfind("_os_unfair_lock", 0) == 0) return nullptr;
     for (const auto &f : kFns) if (n == f.name) return &f;
     return nullptr;
@@ -91,11 +91,11 @@ size_t emit_guest_libc(const std::string &n, uint32_t *o, u32 slow) {
     return f->n;
 }
 
-// X86CODE_A64_SVCBENCH=n: time n calls of strlen through its svc thunk and as guest code, then exit.
-// X86CODE_A64_GUESTLIB_TEST=1: compare each guest function with glibc on random inputs, then exit.
+// X86SIM_A64_SVCBENCH=n: time n calls of strlen through its svc thunk and as guest code, then exit.
+// X86SIM_A64_GUESTLIB_TEST=1: compare each guest function with glibc on random inputs, then exit.
 void svc_bench(GuestThread &t) {
-    const char *e = getenv("X86CODE_A64_SVCBENCH");
-    const bool test = getenv("X86CODE_A64_GUESTLIB_TEST") != nullptr;
+    const char *e = getenv("X86SIM_A64_SVCBENCH");
+    const bool test = getenv("X86SIM_A64_GUESTLIB_TEST") != nullptr;
     if (!e && !test) return;
     // bench(fn, arg, n): call fn(arg) n times
     static const uint32_t kLoop[] = {0xa9be53f3u, 0xa9017bf5u, 0xaa0003f3u, 0xaa0103f4u, 0xaa0203f5u, 0xaa1403e0u,

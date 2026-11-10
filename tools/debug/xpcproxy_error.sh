@@ -1,6 +1,6 @@
 #!/bin/sh
 # Print why xpcproxy_sim fails to start a job (it exits 78 after formatting a message).
-# Needs a running launchd_sim whose job respawns (mksimdevice.py with X86CODE_KEEPALIVE=1).
+# Needs a running launchd_sim whose job respawns (mksimdevice.py with X86SIM_KEEPALIVE=1).
 # strace makes its exit_group fail, so it faults and leaves a core with the message.
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}; . "$X86SIM_ROOT/cli/lib/config.sh"
 X=$X86SIM_ROOT

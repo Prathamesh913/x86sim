@@ -1,4 +1,4 @@
-// x86Code: metalhostd -- the Metal simulator service of our iOS-simulator device (Darling side).
+// x86Sim: metalhostd -- the Metal simulator service of our iOS-simulator device (Darling side).
 //
 // Does what MTLSimDriverHost.xpc / CoreSimulator's SimMetalHost do on a Mac: loads the runtime's own
 // MTLSimImplementation and hands it a listener (init_with_xpc_connection). MTLSimImplementation then serves
@@ -7,8 +7,8 @@
 // (vkmtl.m), forwarding to mtlvk on Vulkan.
 //
 // Service names: the MTLSimDriver client looks up "com.apple.metal.simulator.<progname>" first and then
-// "com.apple.metal.simulator". The launchd job (cli/libexec/mksimdevice.py, X86CODE_METAL) lists the names it
-// owns as MachServices; X86CODE_METAL_NAMES (comma-separated) tells us which ones to listen on. Keeping the
+// "com.apple.metal.simulator". The launchd job (cli/libexec/mksimdevice.py, X86SIM_METAL) lists the names it
+// owns as MachServices; X86SIM_METAL_NAMES (comma-separated) tells us which ones to listen on. Keeping the
 // generic name unregistered keeps system processes (backboardd, SpringBoard: CoreAnimation) on their
 // software renderer while only opted-in processes get a device.
 #import <Foundation/Foundation.h>
@@ -31,7 +31,7 @@ extern int VKMTLRebind(const char* image_name_part, void* real, void* ours);
 #define RT_MTLSIMIMPL "/System/Library/PrivateFrameworks/MTLSimImplementation.framework/MTLSimImplementation"
 
 #if defined(__arm64__)
-// x86Code (Speed 9, arm64 runtime only; the frozen x86 path is not built with this): iOS 27's MTLSimImplementation
+// x86Sim (Speed 9, arm64 runtime only; the frozen x86 path is not built with this): iOS 27's MTLSimImplementation
 // keeps a per-connection context { u32; dispatch_queue_t; shared_ptr<MTLSimApplicationContext> } and sets the app
 // pointer (+0x10) only in the connection's init message ("connectionType"). A secondary connection's init names its
 // primary's "processRef"; when MTLSimGlobalContext has no application for it, the pointer stays NULL and the next
@@ -87,12 +87,12 @@ int main(int argc, char** argv) {
 
 		id<MTLDevice> dev = VKMTLCreateSystemDefaultDevice();
 		if (!dev) {
-			// x86Code: no mtlvk (not started, or it died): keep the service names but cancel every client connection
+			// x86Sim: no mtlvk (not started, or it died): keep the service names but cancel every client connection
 			// at once, so MTLSimDriver reports no device and CoreAnimation/apps use their software paths instead of
 			// waiting on a service that never answers. mtlvk is looked for again every 10 s; when it is back we exit
 			// and launchd starts a serving metalhostd on the next lookup (processes already running stay software).
 			fprintf(stderr, "metalhostd: no device (is mtlvk running?): refusing clients\n");
-			const char* names = getenv("X86CODE_METAL_NAMES");
+			const char* names = getenv("X86SIM_METAL_NAMES");
 			for (NSString* name in [@(names ?: "com.apple.metal.simulator") componentsSeparatedByString:@","]) {
 				if (!name.length) continue;
 				xpc_connection_t l = x86_xpc_connection_create_mach_service(name.UTF8String, dispatch_get_main_queue(), XPC_CONNECTION_MACH_SERVICE_LISTENER);
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
 			dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), 10 * NSEC_PER_SEC, NSEC_PER_SEC);
 			dispatch_source_set_event_handler(t, ^{
 				char path[256];
-				const char* sp = getenv("X86CODE_MTLVK_SOCKET");
+				const char* sp = getenv("X86SIM_MTLVK_SOCKET");
 				snprintf(path, sizeof(path), "/Volumes/SystemRoot%s", sp ? sp : VKMTL_SOCKET_DEFAULT);
 				int s = socket(AF_UNIX, SOCK_STREAM, 0);
 				struct sockaddr_un a = { 0 };
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
 		}
 		uint64_t registryID = dev.registryID;
 
-		const char* names = getenv("X86CODE_METAL_NAMES");
+		const char* names = getenv("X86SIM_METAL_NAMES");
 		NSArray* list = [@(names ?: "com.apple.metal.simulator") componentsSeparatedByString:@","];
 		for (NSString* name in list) {
 			if (!name.length) continue;
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
 			init_with_xpc_connection(l, registryID, 0);
 			fprintf(stderr, "metalhostd: serving %s (device \"%s\", registryID %#llx)\n", name.UTF8String, dev.name.UTF8String, registryID);
 		}
-		// x86Code: CFRunLoopRun keeps the main thread draining the main queue. dispatch_main's
+		// x86Sim: CFRunLoopRun keeps the main thread draining the main queue. dispatch_main's
 		// pthread_exit parks the A64 JIT main thread in a way that can leave XPC peer handlers
 		// unserved (mtlprobe hung in MTLCreateSystemDefaultDevice). Same for the refuse path above.
 		fprintf(stderr, "metalhostd: CFRunLoopRun\n");

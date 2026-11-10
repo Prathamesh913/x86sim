@@ -1,8 +1,8 @@
 #!/bin/bash
-# x86Code: boot a phone (iOS 27 arm64 runtime, every process under libarm64jit) for SECS seconds and summarise. Each
+# x86Sim: boot a phone (iOS 27 arm64 runtime, every process under libarm64jit) for SECS seconds and summarise. Each
 # phone has its own Darling prefix (A64_DPREFIX, default $X86SIM_SCRATCH/a64prefix: only that container is shut down and
-# restarted), device (var/device-a64), state dir (var/run-a64) and frame ring (/dev/shm/x86code-a64-simfb.ring).
-# DNS: own linux/mdnsd server per boot (Speed 26, below). mtlvk is started here only when X86CODE_METAL!=0, on this boot's own
+# restarted), device (var/device-a64), state dir (var/run-a64) and frame ring (/dev/shm/x86sim-a64-simfb.ring).
+# DNS: own linux/mdnsd server per boot (Speed 26, below). mtlvk is started here only when X86SIM_METAL!=0, on this boot's own
 # socket ($ST/mtlvk.sock) and pidfile — never pkill -x mtlvk (would hit a frozen x86 stack's mtlvk).
 # Runs in the systemd scope of cli/libexec/limited.sh (40 MB/s IO, memory cap X86SIM_MEM_MAX).
 #
@@ -11,7 +11,7 @@
 # Shared boot sum VmRSS at home is ~8.4–9.4 GB (PSS/cgroup ~4.6 GB). Default 12G so MemoryMax does not
 # OOM on the sum-RSS guests (6–8G is too low for that accounting). Override with X86SIM_MEM_MAX.
 # Usage: SECS=120 cli/libexec/arm64/boot-a64.sh [extra jobs...]   (A64_JOBS=min|std: the job list)
-#        X86CODE_METAL=0|1|backboardd|all  (default 0 = software; needs host/metalhostd/arm64/metalhostd)
+#        X86SIM_METAL=0|1|backboardd|all  (default 0 = software; needs host/metalhostd/arm64/metalhostd)
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}
 export X86SIM_ARCH=arm64
 # Safari 1: absolute, as the launcher passes it. launchd_sim gets "/Volumes/SystemRoot$D/data/var/run/launchd_bootstrap.plist"
@@ -26,12 +26,12 @@ export X86SIM_RUNTIME=${A64_RUNTIME:-$X86SIM_ROOT/runtimes/${A64_RT_DIR:-ios-27.
 A64_BUILD=$(basename "$(dirname "$X86SIM_RUNTIME")" | sed -n 's/^ios-[0-9.]*-\([0-9A-Za-z]*\)-arm64$/\1/p')
 export X86SIM_STATE=${A64_STATE:-$X86SIM_ROOT/var/run-a64}
 . "$X86SIM_ROOT/cli/lib/config.sh"
-if [ -z "${X86CODE_A64_JITCACHE_DIR:-}" ] && [ -n "$A64_BUILD" ] && [ "$A64_BUILD" != 24A434 ]; then
-	export X86CODE_A64_JITCACHE_DIR=$X86SIM_SCRATCH/jc-$A64_BUILD
+if [ -z "${X86SIM_A64_JITCACHE_DIR:-}" ] && [ -n "$A64_BUILD" ] && [ "$A64_BUILD" != 24A434 ]; then
+	export X86SIM_A64_JITCACHE_DIR=$X86SIM_SCRATCH/jc-$A64_BUILD
 fi
 export DPREFIX=${A64_DPREFIX:-$X86SIM_SCRATCH/a64prefix}
 export X86SIM_DPREFIX=$DPREFIX
-export X86CODE_METAL=${X86CODE_METAL-0}
+export X86SIM_METAL=${X86SIM_METAL-0}
 export X86SIM_MEM_MAX=${X86SIM_MEM_MAX-12G}
 X=$X86SIM_ROOT; cd "$X"
 D=$X86SIM_DEVICE; ST=$X86SIM_STATE; SECS=${SECS:-90}
@@ -43,12 +43,12 @@ rm -rf "$D"/data/var/log/*.log
 # Speed 8: A64_MTLVK_SOCKET=<path of a running mtlvk's socket> shares that mtlvk (one per host for several devices; it
 # keeps an object table per connection): this boot neither starts nor stops it.
 # Shared mtlvk: its lifetime is its clients'. Other phones' darlingservers whose environment names this boot's socket
-# (X86CODE_MTLVK_SOCKET; this prefix's own, possibly still running, is not counted). Killing an mtlvk another phone
+# (X86SIM_MTLVK_SOCKET; this prefix's own, possibly still running, is not counted). Killing an mtlvk another phone
 # renders through crashed that phone's metalhostd -> backboardd -> SpringBoard and every app (a black screen with a
 # spinner for ~30-60 s, open apps lost; software rendering if no mtlvk came back): a CLI boot, a launcher phone with
 # sharing off, and every non-KEEP boot's exit did it.
 a64_mtlvk_users() {
-	local want="X86CODE_MTLVK_SOCKET=$1" n=0 p
+	local want="X86SIM_MTLVK_SOCKET=$1" n=0 p
 	for p in /proc/[0-9]*; do
 		[ "$(cat "$p/comm" 2>/dev/null)" = darlingserver ] || continue
 		tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q "darlingserver $DPREFIX " && continue
@@ -79,7 +79,7 @@ stop_a64_mtlvk() {
 	fi
 	rm -f "$ST/mtlvk.pid" "$ST/mtlvk.sock"
 }
-if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ]; then
+if [ -n "$X86SIM_METAL" ] && [ "$X86SIM_METAL" != 0 ]; then
 	# On-disk Metal binary so xpc_bundle can find MTLCompilerService.xpc (see ensure-metal-framework.sh).
 	"$X/cli/libexec/arm64/ensure-metal-framework.sh" || {
 		echo "boot-a64: ensure-metal-framework failed; pipelines will not compile" >&2
@@ -87,16 +87,16 @@ if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ]; then
 	MTLVK_BIN=${MTLVK:-$X86SIM_MTLVK}
 	if [ -n "${A64_MTLVK_SOCKET:-}" ]; then
 		if [ -S "$A64_MTLVK_SOCKET" ]; then
-			export X86CODE_MTLVK_SOCKET=$A64_MTLVK_SOCKET
-			echo "boot-a64: sharing mtlvk at $A64_MTLVK_SOCKET, Metal for: $X86CODE_METAL" >&2
+			export X86SIM_MTLVK_SOCKET=$A64_MTLVK_SOCKET
+			echo "boot-a64: sharing mtlvk at $A64_MTLVK_SOCKET, Metal for: $X86SIM_METAL" >&2
 		else
 			echo "boot-a64: A64_MTLVK_SOCKET $A64_MTLVK_SOCKET is not a socket: software rendering" >&2
-			export X86CODE_METAL=0
+			export X86SIM_METAL=0
 		fi
 	fi
 fi
-if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ] && [ -z "${A64_MTLVK_SOCKET:-}" ]; then
-	export X86CODE_MTLVK_SOCKET=$ST/mtlvk.sock
+if [ -n "$X86SIM_METAL" ] && [ "$X86SIM_METAL" != 0 ] && [ -z "${A64_MTLVK_SOCKET:-}" ]; then
+	export X86SIM_MTLVK_SOCKET=$ST/mtlvk.sock
 	if a64_mtlvk_live && [ "$(a64_mtlvk_users "$ST/mtlvk.sock")" -gt 0 ]; then
 		# another phone renders through this boot's earlier mtlvk: use it too (a fresh one would take theirs down)
 		echo "boot-a64: reusing mtlvk (pid $(cat "$ST/mtlvk.pid")), other phones use it" >&2
@@ -107,10 +107,10 @@ if [ -n "$X86CODE_METAL" ] && [ "$X86CODE_METAL" != 0 ] && [ -z "${A64_MTLVK_SOC
 	fi
 	mpid=$(cat "$ST/mtlvk.pid" 2>/dev/null || true)
 	if [ -S "$ST/mtlvk.sock" ] && [ -n "$mpid" ] && [ -d "/proc/$mpid" ]; then
-		echo "boot-a64: mtlvk up (pid $mpid), Metal for: $X86CODE_METAL" >&2
+		echo "boot-a64: mtlvk up (pid $mpid), Metal for: $X86SIM_METAL" >&2
 	else
 		echo "boot-a64: mtlvk did not start ($MTLVK_BIN, see $ST/mtlvk.log): software rendering" >&2
-		export X86CODE_METAL=0
+		export X86SIM_METAL=0
 		stop_a64_mtlvk
 	fi
 fi
@@ -120,17 +120,17 @@ MIN="com.apple.cfprefsd.xpc.daemon com.apple.cfprefsd.xpc.daemon.system com.appl
 	com.apple.mobile.installd com.apple.systemstatusd com.apple.distnoted.xpc.daemon com.apple.tccd
 	com.apple.fontservicesd com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
 	com.apple.cloudd com.apple.diagnosticd com.apple.nsurlsessiond com.apple.appprotectiond"
-# x86Code: lean UI set (every arm64 process costs 150-450 MB under the JIT). No chronod (widget extensions, +~0.8 GB);
+# x86Sim: lean UI set (every arm64 process costs 150-450 MB under the JIT). No chronod (widget extensions, +~0.8 GB);
 # A64_JOBS=full adds it (A64_KEEP_WIDGETS=1 keeps the home widgets).
 # A64_JOBS=slim drops sleepd + usernotificationsd (~400-450 MB RSS each under the JIT); home + one app
 # does not need them. Default std keeps them for cold-boot stability (BKS XPC). A64_SLIM=1 (default)
-# parks Spotlight / WidgetRenderer before dyld (X86CODE_A64_SLIM_PARK). Without cloudd+diagnosticd
+# parks Spotlight / WidgetRenderer before dyld (X86SIM_A64_SLIM_PARK). Without cloudd+diagnosticd
 # in the job set, securityd busy-retries those Mach lookups (~1.9 cores idle). Those two stay
 # runnable (not parked): a parked MachServices daemon accepts the lookup then hangs clients forever.
 # nsurlsessiond: without it cloudd busy-retries getActiveSessionIdentifiers (~70% of a core + huge log).
 # appprotectiond (Speed 5): without it SpringBoard's ServerBackedClientPolicyStore retries com.apple.appprotectiond.read
 # ~5x/s for the whole boot (on-demand, EnablePressuredExit: idle cost only once looked up).
-# openurl: com.x86code.openurl (arm64 build) so simtouch.py app/openurl works on the a64 device.
+# openurl: com.x86sim.openurl (arm64 build) so simtouch.py app/openurl works on the a64 device.
 # InputUI (Speed 12): the keyboard service (LaunchAngel, on demand: started at SpringBoard's first osservice request).
 # Without the job SpringBoard's bootstrap of osservice<com.apple.InputUI> fails ~60 times per boot and text fields get no
 # keyboard. assistantd (Apple's plist since Speed 26) serves dictation and settings: without them each failed dictation availability
@@ -189,8 +189,8 @@ FULLUI="com.apple.chronod"
 # showed Recents. DesktopServicesHelper (Speed 17, on demand): Files lists On My iPhone (the LocalStorage domain, no
 # extension in iOS 27) through DesktopServices, whose com.apple.DesktopServicesHelper.FileService does the file
 # operations. Without it the folder stayed "Loading" and New Folder did nothing.
-OUR_JOBS="com.x86code.openurl=host/openurl/arm64/openurl
-	com.x86code.fpsim2host=host/fpsim2host/arm64/fpsim2host|mach:com.apple.FileProvider.sim2host"
+OUR_JOBS="com.x86sim.openurl=host/openurl/arm64/openurl
+	com.x86sim.fpsim2host=host/fpsim2host/arm64/fpsim2host|mach:com.apple.FileProvider.sim2host"
 case "${A64_JOBS:-std}" in
 	min) JOBS="$MIN $OUR_JOBS" ;;
 	slim) JOBS="$MIN $UI_SLIM $OUR_JOBS" ;;
@@ -198,7 +198,7 @@ case "${A64_JOBS:-std}" in
 	*) JOBS="$MIN $UI $OUR_JOBS" ;;
 esac
 # Speed 18: the device's feature toggles ($D/features.json; definitions, costs and presets in features-def.json, edited
-# by tools/launcher: x86code-aot features, the launcher GUI, x86code-mcp). A job is left out only when every feature
+# by tools/launcher: x86sim-aot features, the launcher GUI, x86sim-mcp). A job is left out only when every feature
 # listing it is off; boot-critical jobs are never listed. Applied at boot, so changes take effect at the next boot.
 eval "$(python3 - "$D/features.json" "$X/cli/libexec/arm64/features-def.json" "$D" <<'PY'
 import glob, json, os, plistlib, sys
@@ -263,16 +263,16 @@ if [ -n "${A64_CLONE_FROM:-}" ] && [ ! -d "$D/data" ] && [ -d "$A64_CLONE_FROM/d
 fi
 # Speed 21: os_log DT mode (formatted text of every log call on the job's stderr log, and a stream to diagnosticd) is
 # off by default: it was ~25% of SpringBoard's CPU per tap (0.84 -> 0.61 CPU-s; tap response 0.57 -> 0.45 s). Real iOS
-# never formats on the send path. X86CODE_NODT= (empty) brings the per-job os_log text back, X86CODE_NODT=all,-<label>
-# for one job; x86code-stderr-progs and X86CODE_OSLOG still work per process.
-X86CODE_NODT=${X86CODE_NODT-all} X86CODE_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
-# Speed 8: the container gets a private /dev/shm (X86CODE_PRIVATE_SHM, darlingserver): its remount no longer stacks a
+# never formats on the send path. X86SIM_NODT= (empty) brings the per-job os_log text back, X86SIM_NODT=all,-<label>
+# for one job; x86sim-stderr-progs and X86SIM_OSLOG still work per process.
+X86SIM_NODT=${X86SIM_NODT-all} X86SIM_JOBLOG=1 python3 cli/libexec/mksimdevice.py "$D" $JOBS "$@" > /dev/null || exit 1
+# Speed 8: the container gets a private /dev/shm (X86SIM_PRIVATE_SHM, darlingserver): its remount no longer stacks a
 # tmpfs over the host's /dev/shm, and two devices' shm objects stay apart. The frame ring is written to
-# /run/user/<uid> (sim.env SIMFB_RING); $SIMFB_RING_LINUX (default /dev/shm/x86code-a64-simfb.ring) links to it.
-export X86CODE_PRIVATE_SHM=1
-# Speed 28: the AOT image's huge-page copy (libarm64jit, /tmp/x86code-a64-img): a boot retries a copy the last one
+# /run/user/<uid> (sim.env SIMFB_RING); $SIMFB_RING_LINUX (default /dev/shm/x86sim-a64-simfb.ring) links to it.
+export X86SIM_PRIVATE_SHM=1
+# Speed 28: the AOT image's huge-page copy (libarm64jit, /tmp/x86sim-a64-img): a boot retries a copy the last one
 # dropped for lack of 2 MB pages.
-rm -f /tmp/x86code-a64-img/*.small 2>/dev/null
+rm -f /tmp/x86sim-a64-img/*.small 2>/dev/null
 RING=$(sed -n 's#^SIMFB_RING=/Volumes/SystemRoot##p' "$D/sim.env")
 # One /dev/shm link per phone, named after its ring (the launcher's SIMFB_RING_LINUX). A SIMFB_RING_LINUX naming another
 # phone's link (e.g. the generic default inherited from the environment) is left alone: re-pointing it made the main
@@ -357,19 +357,19 @@ R="/Volumes/SystemRoot$X86SIM_RUNTIME"
 PARK_LIST=${A64_PARK-WidgetRenderer}${A64_PARK_EXTRA:+,$A64_PARK_EXTRA}
 for u in $FEAT_UNPARK; do PARK_LIST=$(echo ",$PARK_LIST," | sed "s/,$u,/,/g; s/^,//; s/,$//"); done
 if [ "${A64_SLIM:-1}" = 1 ] && [ "${A64_JOBS:-std}" != full ]; then
-	if grep -q '^X86CODE_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null; then
-		sed -i "s|^X86CODE_A64_SLIM_PARK=.*|X86CODE_A64_SLIM_PARK=$PARK_LIST|" "$D/sim.env"
+	if grep -q '^X86SIM_A64_SLIM_PARK=' "$D/sim.env" 2>/dev/null; then
+		sed -i "s|^X86SIM_A64_SLIM_PARK=.*|X86SIM_A64_SLIM_PARK=$PARK_LIST|" "$D/sim.env"
 	else
-		echo "X86CODE_A64_SLIM_PARK=$PARK_LIST" >>"$D/sim.env"
+		echo "X86SIM_A64_SLIM_PARK=$PARK_LIST" >>"$D/sim.env"
 	fi
 	# File fallback: launchd does not pass sim.env into job environ; arm64host reads this path.
-	mkdir -p "${X86SIM_SCRATCH:-$HOME/scratch/x86code}"
-	echo "$PARK_LIST" > "${X86SIM_SCRATCH:-$HOME/scratch/x86code}/a64-slim-park"
+	mkdir -p "${X86SIM_SCRATCH:-$HOME/scratch/x86sim}"
+	echo "$PARK_LIST" > "${X86SIM_SCRATCH:-$HOME/scratch/x86sim}/a64-slim-park"
 else
-	rm -f "${X86SIM_SCRATCH:-$HOME/scratch/x86code}/a64-slim-park"
+	rm -f "${X86SIM_SCRATCH:-$HOME/scratch/x86sim}/a64-slim-park"
 fi
 ENVS=$(sed 's/^/"/; s/$/"/' "$D/sim.env" | tr '\n' ' ')
-ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86CODE_A64_TRACE=1)
+ENVS="$ENVS ${A64_ENV:-}"   # A64_ENV: extra K=V for launchd_sim (e.g. X86SIM_A64_TRACE=1)
 # stop only this prefix's container. Its launchers (darling shell, and the `timeout` that holds the mDNSResponder
 # link) are found by their command line (this device's path, this state dir, or tests/arm64/run.sh's a64home), so
 # the x86_64 container's are never touched. Then darling shutdown, then a sweep of what it misses: darling shutdown
@@ -451,8 +451,8 @@ if [ "${A64_STOP_ONLY:-0}" = 1 ]; then
 	exit 0
 fi
 # the marks of the last boot (Darling pids are reused)
-rm -rf "$DPREFIX/private/var/run/x86code-suspended" "$DPREFIX/private/var/run/x86code-jetsam" \
-	"$DPREFIX/private/var/run/x86code-unsupported.log"
+rm -rf "$DPREFIX/private/var/run/x86sim-suspended" "$DPREFIX/private/var/run/x86sim-jetsam" \
+	"$DPREFIX/private/var/run/x86sim-unsupported.log"
 # the Darling pieces our build fixed (libsystem_kernel ...), also into a recreated prefix: cli/libexec/arm64/prefix-heal.sh
 [ "${A64_PREFIX_HEAL:-1}" != 0 ] && sh "$X/cli/libexec/arm64/prefix-heal.sh" "$DPREFIX"
 # Speed 27: frameworks a Mac host has in /System/Library/Frameworks that the simulator opens there by absolute path (not
@@ -476,10 +476,10 @@ for d in GeoServicesData; do
 	fi
 done
 # Speed 27: the audio devices (what a Mac's CoreSimulator/coreaudiod provide): host/simaudio/arm64/libsimaudio.dylib in
-# each process (mksimdevice, X86CODE_AUDIO) streams PCM to cli/libexec/simaudio.py (PipeWire). Without an input device
+# each process (mksimdevice, X86SIM_AUDIO) streams PCM to cli/libexec/simaudio.py (PipeWire). Without an input device
 # Siri's recording failed at once (corespeechd: "siriInputSource 'sino'. No Input available", AudioQueue -66680 finding
 # Default-InputOutput, prepareRecordForStream -11790) and Siri never got further.
-if [ "${X86CODE_AUDIO:-0}" != 0 ]; then
+if [ "${X86SIM_AUDIO:-0}" != 0 ]; then
 	setsid python3 "$X/cli/libexec/simaudio.py" "$ST/simaudio.sock" > "$ST/simaudio.log" 2>&1 < /dev/null &
 	echo $! > "$ST/simaudio.pid"
 fi
@@ -500,9 +500,9 @@ CMDFILE=$ST/simhost.cmd
 # Speed 26: DNS. On a Mac the simulator's libsystem_dnssd talks to the host's mDNSResponder at /var/run/mDNSResponder;
 # linux/mdnsd/mdnsresponder.py plays it. Without one every lookup failed with -1003
 # (mobileassetd could not fetch Siri's assets, News/Spotlight/Settings search had no network). Own server per boot
-# ($ST/mDNSResponder), linked into this container's /var/run. X86CODE_MDNS=0: none.
+# ($ST/mDNSResponder), linked into this container's /var/run. X86SIM_MDNS=0: none.
 MDNS_LINK=
-if [ "${X86CODE_MDNS:-1}" != 0 ]; then
+if [ "${X86SIM_MDNS:-1}" != 0 ]; then
 	setsid python3 -I "$X/linux/mdnsd/mdnsresponder.py" "$ST/mDNSResponder" > "$ST/mdnsresponder.log" 2>&1 < /dev/null &
 	echo $! > "$ST/mdns.pid"
 	MDNS_LINK="ln -sf '/Volumes/SystemRoot$ST/mDNSResponder' /var/run/mDNSResponder;"
@@ -513,7 +513,7 @@ CMDEOF
 
 # Speed 14: fixed placement of non-cache Mach-Os (libarm64jit; mkplacement.py): the jitcache dir gets the committed
 # table when it has none (the table is part of the JIT cache key: the AOT image must be built with the same one)
-JCD=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
+JCD=${X86SIM_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
 mkdir -p "$JCD"
 [ -f "$JCD/placement.txt" ] || cp "$X/cli/libexec/arm64/placement-${A64_BUILD:-24A434}.txt" "$JCD/placement.txt" 2>/dev/null
 # Speed 14: the early set (pages in first-touch order up to ~home) is read in that order here, outside the IO-capped
@@ -532,21 +532,21 @@ fi
 	A64_CMDFILE="$CMDFILE" \
 	A64_PREFETCH_HOT="$([ "${A64_PREFETCH:-1}" != 0 ] && echo "$PF_INNER")" \
 	"$X/cli/libexec/arm64/boot-inner.sh" > "$ST/lsim.out" 2>&1 &)
-# Speed 18: 90 s in, check the chunked AOT image against this runtime / placement / codegen (tools/launcher x86code-aot
+# Speed 18: 90 s in, check the chunked AOT image against this runtime / placement / codegen (tools/launcher x86sim-aot
 # status, low priority) and note in $ST/aot-status.txt how many chunks need rebuilding: a translator rebuild with a new
 # CODEGEN_VERSION, a runtime update or a newly placed app no longer silently boots without an image. The launcher
-# offers the rebuild; X86CODE_AOT_AUTOUPDATE=1 runs `x86code-aot update` (2 builders, nice 19, idle IO) right away.
-AOTBIN=$X/tools/launcher/target/release/x86code-aot
+# offers the rebuild; X86SIM_AOT_AUTOUPDATE=1 runs `x86sim-aot update` (2 builders, nice 19, idle IO) right away.
+AOTBIN=$X/tools/launcher/target/release/x86sim-aot
 if [ -x "$AOTBIN" ]; then
-	(sleep 90; nice -n 19 ionice -c 3 "$AOTBIN" --jc "${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}" --device "$D" status > "$ST/aot-status.txt" 2>&1
-	 if [ "${X86CODE_AOT_AUTOUPDATE:-0}" = 1 ] && grep -q "need rebuilding" "$ST/aot-status.txt"; then
-		"$AOTBIN" --jc "${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}" --device "$D" update --workers 2 > "$ST/aot-update.log" 2>&1
+	(sleep 90; nice -n 19 ionice -c 3 "$AOTBIN" --jc "${X86SIM_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}" --device "$D" status > "$ST/aot-status.txt" 2>&1
+	 if [ "${X86SIM_AOT_AUTOUPDATE:-0}" = 1 ] && grep -q "need rebuilding" "$ST/aot-status.txt"; then
+		"$AOTBIN" --jc "${X86SIM_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}" --device "$D" update --workers 2 > "$ST/aot-update.log" 2>&1
 	 fi) < /dev/null > /dev/null 2>&1 &
 fi
 # Speed 11: 60 s in (home is up), record which ranges of the dyld cache and the AOT image this boot's processes
 # have mapped in; the next boot prefetches them (boot-inner.sh). A64_PREFETCH=0: neither.
 if [ "${A64_PREFETCH:-1}" != 0 ]; then
-	JC=${X86CODE_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
+	JC=${X86SIM_A64_JITCACHE_DIR:-$X86SIM_SCRATCH/jitcache}
 	# Speed 14: prefetch.early = the pages present up to A64_PREFETCH_EARLY_SECS (default 24, ~home), snapshotted
 	# every 3 s and saved by first-touch time; prefetch.hot = everything mapped 60 s in (read after, capped)
 	# (nullglob: before the image's first load there is no .map yet, and a literal "*.map" crashed the recording)
@@ -601,7 +601,7 @@ if [ -n "$SCOPE" ]; then
 	done
 	echo "guests IN=$in ($((in_rss/1024)) MB) OUT=$out ($((out_rss/1024)) MB)"
 fi
-# A64_SLIM=1 (default): report parked helpers (X86CODE_A64_SLIM_PARK). The old slim-reaper.sh
+# A64_SLIM=1 (default): report parked helpers (X86SIM_A64_SLIM_PARK). The old slim-reaper.sh
 # kill loop is gone — SpringBoard holds RunningBoard assertions and relaunches within ~1 s,
 # which burned a core in xpcproxy_sim and never saved memory.
 if [ "${A64_SLIM:-1}" = 1 ]; then

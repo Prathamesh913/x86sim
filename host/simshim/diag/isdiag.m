@@ -1,9 +1,9 @@
-// x86Code: diagnostic shim (Settings / any IconServices client): logs the in-process icon store lookup
+// x86Sim: diagnostic shim (Settings / any IconServices client): logs the in-process icon store lookup
 // (-[ISConcreteIcon _imageFromStoreForDescriptor:], assessValidationToken:), the LaunchServices database
 // sequence number/UUID it compares, and getImageForImageDescriptor:completion: deliveries.
 // Processes: ISDIAG_PROGS (comma list) or "Preferences". Log: data/var/log/isdiag.<prog>.<pid>.log
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <mach-o/dyld.h>
 #include <fcntl.h>
@@ -14,7 +14,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[220];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/isdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/isdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;

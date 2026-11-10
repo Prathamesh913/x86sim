@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: record the simulator's frame ring to video at real timing, with touches drawn like Xcode's "Show Touches",
+"""x86Sim: record the simulator's frame ring to video at real timing, with touches drawn like Xcode's "Show Touches",
 and measure app-open latency frame-accurately.
     simrecord.py capture OUT.frames SECS [SCALE]      copy every published ring frame (slot t_ns, CLOCK_REALTIME) to
                                                       OUT.frames, downscaled by SCALE (default 2); prints the wall

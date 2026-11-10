@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# x86Code: plutil for the Linux build (build/linux-env.sh): -lint <f>, -extract <key> raw <f>
+# x86Sim: plutil for the Linux build (build/linux-env.sh): -lint <f>, -extract <key> raw <f>
 import plistlib, sys
 a = sys.argv[1:]
 if a[:1] == ["-lint"]:

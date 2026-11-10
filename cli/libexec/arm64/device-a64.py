@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code (Speed 22): arm64 devices of other phone models.
+"""x86Sim (Speed 22): arm64 devices of other phone models.
 
     device-a64.py models                         the models (cli/lib/devicetypes-a64.json, from Xcode 27.2: tools/devicetypes/extract-devicetypes.py)
     device-a64.py list                           var/device-a64* with model and screen
@@ -141,7 +141,7 @@ def cmd_create(args):
         subprocess.run([sys.executable, os.path.join(ROOT, "cli/libexec/arm64/device-repath.py"), dev, BASE])
     env = dict(os.environ, X86SIM_ARCH="arm64", X86SIM_DEVICE=dev,
                X86SIM_RUNTIME=os.path.join(ROOT, "runtimes", rt, "RuntimeRoot"),
-               X86SIM_STATE=os.environ.get("A64_STATE", os.path.join(VAR, "run-a64")), X86CODE_JOBLOG="1")
+               X86SIM_STATE=os.environ.get("A64_STATE", os.path.join(VAR, "run-a64")), X86SIM_JOBLOG="1")
     subprocess.run([sys.executable, os.path.join(ROOT, "cli/libexec/mksimdevice.py"), dev], env=env, check=True,
                    stdout=subprocess.DEVNULL)
     print(dev)

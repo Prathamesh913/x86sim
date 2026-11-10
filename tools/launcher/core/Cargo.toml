@@ -1,20 +1,20 @@
 [package]
-name = "x86code-core"
+name = "x86sim-core"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-description = "x86Code launcher core: chunked AOT image (static discovery, incremental build), feature toggles, sim control"
+description = "x86Sim launcher core: chunked AOT image (static discovery, incremental build), feature toggles, sim control"
 
 [lib]
-name = "x86code_core"
+name = "x86sim_core"
 path = "src/lib.rs"
 
 [[bin]]
-name = "x86code-aot"
+name = "x86sim-aot"
 path = "src/bin/aot.rs"
 
 [[bin]]
-name = "x86code-mcp"
+name = "x86sim-mcp"
 path = "src/bin/mcp.rs"
 
 [dependencies]

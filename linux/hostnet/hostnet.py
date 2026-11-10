@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""x86Code: the host's network configuration, as macOS's configd would publish it in its dynamic store.
+"""x86Sim: the host's network configuration, as macOS's configd would publish it in its dynamic store.
 
 On a Mac, configd_sim's SimulatorSupport plugin mirrors the host configd's Setup:/Network/Global/*,
 Setup:+State:/Network/Service/*/* and Setup:+State:/Network/Interface/*/* keys into the simulator's store
 (configd's Plugins/SimulatorSupport/simulator_support.c); the simulator's IPMonitor then derives State:/Network/Global/
-IPv4, DNS, the nwi state (nw_path) and the DNS configuration (dnsinfo) from them. Here com.x86code.host-configd plays
+IPv4, DNS, the nwi state (nw_path) and the DNS configuration (dnsinfo) from them. Here com.x86sim.host-configd plays
 the host configd and host/netconfig/netconfig (a simulator tool) loads these keys into it.
 
 Usage: hostnet.py <out.plist>   Writes {key: value} for the Linux interface of the IPv4 default route (lowest metric).
@@ -53,7 +53,7 @@ def main():
                     search += p[1:]
         except OSError:
             pass
-        sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "x86code-net-" + ifname)).upper()
+        sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "x86sim-net-" + ifname)).upper()
         svc, st = "Setup:/Network/Service/" + sid, "State:/Network/Service/" + sid
         keys.update({
             "Setup:/Network/Global/IPv4": {"ServiceOrder": [sid]},

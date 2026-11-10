@@ -75,21 +75,21 @@ static void destroy_guest_thread(void *p) {
         t_self = nullptr; t_owner.t = nullptr; delete t;
     }
 }
-// X86CODE_A64_GSAMPLE=<exe name> (debug): a host thread samples the process's main guest thread (from dyld_sim start) every 5 ms (last
+// X86SIM_A64_GSAMPLE=<exe name> (debug): a host thread samples the process's main guest thread (from dyld_sim start) every 5 ms (last
 // block PC, LR and 6 frame-pointer frames, read with process_vm_readv) and logs the 15 most frequent stacks every 10 s.
 // For "busy but nothing visible" loops that perf cannot attribute (JIT frames have no host unwind info).
-// X86CODE_A64_GSAMPLE_ALL=1: every guest thread of the process is sampled, and only samples running guest code (not
+// X86SIM_A64_GSAMPLE_ALL=1: every guest thread of the process is sampled, and only samples running guest code (not
 // in a thunk) count: the busy worker thread instead of an idle main thread. =2: blocked threads too (lock holders).
 static std::mutex g_gs_mu;
 static std::vector<GuestThread *> g_gs_threads;
 static int g_gs_all;  // 1: threads in guest code; 2: every thread (also blocked in a thunk: lock holders)
-// Speed 33: sampled execution counts for AOT training (X86CODE_A64_COUNT=1). A host thread looks at every guest thread
+// Speed 33: sampled execution counts for AOT training (X86SIM_A64_COUNT=1). A host thread looks at every guest thread
 // of the process every 4 ms; one running guest code (not in a native thunk) adds a hit to its current block PC. The
 // totals go to <key>.<exe>.cnt next to the jitcache .bin every 20 s ("A64CNT1\0", u64 n, n x {u64 pc, u32 hits,
 // u32 0}; merged with what the file held when this process started). tools/launcher's hot set weighs blocks by these
 // hits (hot::load), so the image keeps the truly hot code first and hot_split_pct can separate hot from cold.
 static bool cnt_on() {
-    static const bool on = [] { const char *e = getenv("X86CODE_A64_COUNT"); return e && atoi(e) == 1; }();
+    static const bool on = [] { const char *e = getenv("X86SIM_A64_COUNT"); return e && atoi(e) == 1; }();
     return on;
 }
 std::string jitcache_path();
@@ -154,14 +154,14 @@ void gsample_forget(GuestThread *t) {
 }
 void gsample_start(GuestThread *t) {
     if (cnt_on()) { gsample_register(t); count_start(); }
-    const char *want = getenv("X86CODE_A64_GSAMPLE"), *exe = getenv("X86CODE_A64_EXE");
+    const char *want = getenv("X86SIM_A64_GSAMPLE"), *exe = getenv("X86SIM_A64_EXE");
     if (!want || !exe) return;
     const char *b = strrchr(exe, '/');
     if (strcmp(want, b ? b + 1 : exe) != 0) return;
     sigset_t all, old;
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &old);
-    g_gs_all = getenv("X86CODE_A64_GSAMPLE_ALL") ? atoi(getenv("X86CODE_A64_GSAMPLE_ALL")) : 0;
+    g_gs_all = getenv("X86SIM_A64_GSAMPLE_ALL") ? atoi(getenv("X86SIM_A64_GSAMPLE_ALL")) : 0;
     if (g_gs_all && !cnt_on()) gsample_register(t);
     std::thread([t]() mutable {
         g_non_darling_thread = true;
@@ -173,16 +173,16 @@ void gsample_start(GuestThread *t) {
         std::map<std::vector<u64>, u32> counts;
         std::map<u64, u32> incl;
         u32 n = 0;
-        const u32 period = getenv("X86CODE_A64_GSAMPLE_PERIOD") ? atoi(getenv("X86CODE_A64_GSAMPLE_PERIOD")) : 2000;
-        const char *sk = getenv("X86CODE_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
+        const u32 period = getenv("X86SIM_A64_GSAMPLE_PERIOD") ? atoi(getenv("X86SIM_A64_GSAMPLE_PERIOD")) : 2000;
+        const char *sk = getenv("X86SIM_A64_GSAMPLE_SKIP");  // a PC to leave out (the run loop's mach_msg wait)
         const bool skip_stubs = sk && !strcmp(sk, "stubs");  // Speed 33: every thread parked in the stub area
         const u64 skip = sk && !skip_stubs ? strtoull(sk, nullptr, 16) : 0;
-        const bool trace = getenv("X86CODE_A64_GSAMPLE_TRACE") != nullptr;
-        const int depth = getenv("X86CODE_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86CODE_A64_GSAMPLE_DEPTH")) : 6;
-        // logf skips the per-process log on this (non-Darling) thread: X86CODE_A64_GSAMPLE_OUT=<Linux path> writes
+        const bool trace = getenv("X86SIM_A64_GSAMPLE_TRACE") != nullptr;
+        const int depth = getenv("X86SIM_A64_GSAMPLE_DEPTH") ? atoi(getenv("X86SIM_A64_GSAMPLE_DEPTH")) : 6;
+        // logf skips the per-process log on this (non-Darling) thread: X86SIM_A64_GSAMPLE_OUT=<Linux path> writes
         // <path>.<pid> with glibc instead (a job's stderr is often gone)
         FILE *out = nullptr;
-        if (const char *o = getenv("X86CODE_A64_GSAMPLE_OUT"))
+        if (const char *o = getenv("X86SIM_A64_GSAMPLE_OUT"))
             out = fopen((std::string(o) + "." + std::to_string(getpid())).c_str(), "a");
         timespec ts0; clock_gettime(CLOCK_MONOTONIC, &ts0);
         auto emit = [out, ts0](const char *line) {
@@ -200,7 +200,7 @@ void gsample_start(GuestThread *t) {
                 const size_t m = g_gs_threads.size();
                 for (size_t k = 0, r = m ? (size_t)random() % m : 0; k < m && !pick; k++) {
                     GuestThread *c = g_gs_threads[(r + k) % m];
-                    // Speed 33: X86CODE_A64_GSAMPLE_SKIP also passes over a thread parked at that guest PC
+                    // Speed 33: X86SIM_A64_GSAMPLE_SKIP also passes over a thread parked at that guest PC
                     if (c->jit && (c->in_thunk < 0 || g_gs_all == 2) && !(skip && c->jit->GetPC() == skip) &&
                         !(skip_stubs && c->jit->GetPC() >= 0x7f0000000000ull)) pick = c;
                 }
@@ -219,7 +219,7 @@ void gsample_start(GuestThread *t) {
                 if (next <= fp) break;
                 fp = next;
             }
-            if (trace) {  // X86CODE_A64_GSAMPLE_TRACE=1: every sample with its CLOCK_REALTIME ns (lines up with simhid/ring)
+            if (trace) {  // X86SIM_A64_GSAMPLE_TRACE=1: every sample with its CLOCK_REALTIME ns (lines up with simhid/ring)
                 timespec tr; clock_gettime(CLOCK_REALTIME, &tr);
                 char line[1024];
                 int o = snprintf(line, sizeof line, "T %llu", (unsigned long long)tr.tv_sec * 1000000000ull + tr.tv_nsec);
@@ -263,14 +263,14 @@ void gsample_start(GuestThread *t) {
     pthread_sigmask(SIG_SETMASK, &old, nullptr);
 }
 
-// Input 3 (debug): X86CODE_A64_GBT=1: every guest thread of the process is registered, and a host thread dumps all of
+// Input 3 (debug): X86SIM_A64_GBT=1: every guest thread of the process is registered, and a host thread dumps all of
 // them on request: when <scratch>/gbt/req is newer than the last dump (tools/debug/gbt.sh touches it) or when gdb calls
 // a64_gbt_dump(). Per thread: Linux tid, the thunk it is in (host call in progress: its native wait), the kernel's
 // wchan and /proc syscall line, guest pc/lr/sp/fp, x0-x7, the mach message header at x0 for mach_msg thunks, and the
 // guest frame-pointer chain (40 frames). Output: <scratch>/gbt/<exe>.<pid>.txt (appended), addresses raw plus where()
 // for non-cache ones; tools/debug/gbt.sh symbolizes cache addresses with dscsym.py. Off: no registry, no thread.
 // read once at load (after the a64-penv constructor, priority 101): a plain load in CallSVC
-static const bool g_gbt_on = [] { const char *e = getenv("X86CODE_A64_GBT"); return e && atoi(e) == 1; }();
+static const bool g_gbt_on = [] { const char *e = getenv("X86SIM_A64_GBT"); return e && atoi(e) == 1; }();
 static bool gbt_on() { return g_gbt_on; }
 struct GbtEnt { GuestThread *t; int tid; std::string proc; };  // proc: /proc/<pid>/task/<tid> as /proc sees it
 static std::mutex g_gbt_mu;
@@ -304,7 +304,7 @@ static std::string gbt_procline(const std::string &proc, const char *what) {
 }
 static std::string gbt_dir() { return scratch_dir() + "/gbt"; }
 extern "C" __attribute__((visibility("default"), used)) int a64_gbt_dump() {
-    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *exe = getenv("X86SIM_A64_EXE");
     const char *b = exe ? strrchr(exe, '/') : nullptr;
     b = b ? b + 1 : exe ? exe : "?";
     mkdir(gbt_dir().c_str(), 0755);
@@ -365,7 +365,7 @@ static void gbt_ports_dump() {
     static auto *attrs = (kr_t (*)(unsigned, unsigned, int, int *, unsigned *))dsym("mach_port_get_attributes");
     static auto *vmdealloc = (kr_t (*)(unsigned, uint64_t, uint64_t))dsym("vm_deallocate");
     if (!task_self || !names || !attrs) return;
-    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *exe = getenv("X86SIM_A64_EXE");
     const char *b = exe ? strrchr(exe, '/') : nullptr;
     b = b ? b + 1 : exe ? exe : "?";
     FILE *o = fopen((gbt_dir() + "/" + b + "." + std::to_string(getpid()) + ".ports.txt").c_str(), "a");
@@ -454,7 +454,7 @@ GuestThread *GuestThread::current() { return t_self; }
 
 // Stage 3: one translation cache per process, shared by every guest thread (dynarmic's shared_translations: the
 // code reads tpidr/tpidrro and the exclusive-monitor slot from the running thread's JitState). The code calls these
-// process-wide callbacks, which forward to the calling thread's GuestThread. X86CODE_A64_SHARED=0: one cache per
+// process-wide callbacks, which forward to the calling thread's GuestThread. X86SIM_A64_SHARED=0: one cache per
 // thread (stage 2). Shared code is never freed while the process runs (threads blocked in native calls return
 // into it), so the cache is a large reservation: only the code actually emitted is resident.
 namespace {
@@ -464,12 +464,12 @@ namespace {
 // search-field task spun its main thread (~10k wakeups/s, ~90% of a core while idle) and its placeholder crossfade
 // never settled. The two words that pick the conversion branch read as "mov x21, x8; b <join>" (deadline unchanged).
 // Only when the original words are there (iOS 27.0 24A434 cache); guest memory is not written (MemoryReadCode, like
-// swiftconf), so the AOT builder sees the same code. X86CODE_A64_SWIFT_TIMEBASE=0 turns it off (rebuild the image).
+// swiftconf), so the AOT builder sees the same code. X86SIM_A64_SWIFT_TIMEBASE=0 turns it off (rebuild the image).
 constexpr u64 kSwiftDeadlineConv = 0x1c156d4ac;
 std::optional<uint32_t> swift_timebase_read_code(u64 a) {
     if (a != kSwiftDeadlineConv && a != kSwiftDeadlineConv + 4) return std::nullopt;
     static const bool ok = [] {
-        const char *e = getenv("X86CODE_A64_SWIFT_TIMEBASE");
+        const char *e = getenv("X86SIM_A64_SWIFT_TIMEBASE");
         if (e && atoi(e) == 0) return false;
         if (timebase_apple()) return false;  // the guest's timebase is 125/3: the inlined conversion is right
         // cmp x8, x9 ; b.lo (x*3 first) ; ... and the join branch both conversions take (b -> 0x1c156d3bc)
@@ -483,31 +483,31 @@ std::optional<uint32_t> swift_timebase_read_code(u64 a) {
     return a == kSwiftDeadlineConv ? 0xaa0803f5u /* mov x21, x8 */ : 0x17ffffc3u /* b 0x1c156d3bc */;
 }
 
-// Speed 30 debug: X86CODE_A64_AGDL=1 (27.2 24B8117 cache addresses; needs X86CODE_A64_LIVE_ONLY=1 for the process,
+// Speed 30 debug: X86SIM_A64_AGDL=1 (27.2 24B8117 cache addresses; needs X86SIM_A64_LIVE_ONLY=1 for the process,
 // the image holds these blocks translated): AG::Graph::Context::set_deadline(ctx, deadline) logs the deadline relative
 // to now; passed_deadline_slow's "passed" exit logs the overshoot. The replaced words are emulated in the handler.
 constexpr u64 kAgSetDeadline = 0x1c95106b4, kAgPassed = 0x1c95111f4, kAgPassed2 = 0x1c9511208;
 constexpr u64 kAgCancel = 0x1c950c654, kAgCancelApi = 0x1c952c850;  // UpdateStack::cancel, AGGraphCancelUpdate
 std::optional<uint32_t> agdl_read_code(u64 a) {
     if (a == kAgCancel || a == kAgCancelApi) {
-        static const bool on = getenv("X86CODE_A64_AGDL") && GuestThread::rd<uint32_t>(kAgCancel) == 0xa9bf7bfdu &&
+        static const bool on = getenv("X86SIM_A64_AGDL") && GuestThread::rd<uint32_t>(kAgCancel) == 0xa9bf7bfdu &&
                                GuestThread::rd<uint32_t>(kAgCancelApi) == 0xa9bf7bfdu;
         if (!on) return std::nullopt;
         return 0xD4000001u | (kAgDlCancelSvc << 5);
     }
     if (a == kAgPassed2) {
-        static const bool on = getenv("X86CODE_A64_AGDL") && GuestThread::rd<uint32_t>(kAgPassed2) == 0x52800020u;
+        static const bool on = getenv("X86SIM_A64_AGDL") && GuestThread::rd<uint32_t>(kAgPassed2) == 0x52800020u;
         if (!on) return std::nullopt;
         return 0xD4000001u | (kAgDlPassedSvc << 5);
     }
     if (a != kAgSetDeadline && a != kAgPassed) return std::nullopt;
-    static const bool on = getenv("X86CODE_A64_AGDL") && GuestThread::rd<uint32_t>(kAgSetDeadline) == 0xf9401c08u &&
+    static const bool on = getenv("X86SIM_A64_AGDL") && GuestThread::rd<uint32_t>(kAgSetDeadline) == 0xf9401c08u &&
                            GuestThread::rd<uint32_t>(kAgPassed) == 0x52800020u;
     if (!on) return std::nullopt;
     return 0xD4000001u | ((a == kAgSetDeadline ? kAgDlSetSvc : kAgDlPassedSvc) << 5);
 }
 
-// Speed 31 debug: X86CODE_A64_AGOUT=<attribute id, hex> (27.2 24B8117 addresses; with X86CODE_A64_LIVE_ONLY for the
+// Speed 31 debug: X86SIM_A64_AGOUT=<attribute id, hex> (27.2 24B8117 addresses; with X86SIM_A64_LIVE_ONLY for the
 // process): AGGraphSetOutputValue / AGGraphGetOutputValue log when AttributeGraph's current attribute (top frame of
 // the thread's UpdateStack: pthread key at 0x22e74c980, frames as in the Speed 30 abort dump) is that attribute
 // (0 = every call, first 2000). The replaced first instructions are emulated in the handlers.
@@ -536,7 +536,7 @@ void agout_ret_h(GuestThread &t, u32) {
         AgOutEv &e = g_agout_ring[r.ring & (kAgOutRing - 1)];
         e.ret = true; e.result = (uint8_t)t.x(0); e.f0 = r.before[0]; e.f1 = r.before[1]; e.v0 = r.before[2]; e.f1a = w[1]; e.v0a = w[2]; e.val = val[0];
     }
-    static const u64 want = strtoull(getenv("X86CODE_A64_AGOUT"), nullptr, 16);
+    static const u64 want = strtoull(getenv("X86SIM_A64_AGOUT"), nullptr, 16);
     if (want > 1) logf("agout: set returned %lu for attr %#x: node before %08x %08x %08x %08x %08x %08x, after %08x %08x %08x %08x %08x %08x"
          " (flags word +4: %#x -> %#x, value offset +8: %#x -> %#x), value %016lx %016lx, table %#lx",
          (unsigned long)(t.x(0) & 0xff), r.attr, r.before[0], r.before[1], r.before[2], r.before[3], r.before[4], r.before[5],
@@ -545,7 +545,7 @@ void agout_ret_h(GuestThread &t, u32) {
     t.set_x(30, r.lr);  // the thunk's "ret" goes back to the caller
 }
 void agout_arm_return(GuestThread &t, u32 attr, u64 ring) {
-    static const u32 thunk = add_thunk("x86code_agout_ret", agout_ret_h);
+    static const u32 thunk = add_thunk("x86sim_agout_ret", agout_ret_h);
     AgOutRet r{t.x(30), attr, {}, ring};
     agout_node(attr, r.before);
     t_agout_ret.push_back(r);
@@ -553,13 +553,13 @@ void agout_arm_return(GuestThread &t, u32 attr, u64 ring) {
 }
 std::optional<uint32_t> agout_read_code(u64 a) {
     if (a != kAgSetOut && a != kAgGetOut) return std::nullopt;
-    static const bool on = getenv("X86CODE_A64_AGOUT") && GuestThread::rd<uint32_t>(kAgSetOut) == 0xd10203ffu &&
+    static const bool on = getenv("X86SIM_A64_AGOUT") && GuestThread::rd<uint32_t>(kAgSetOut) == 0xd10203ffu &&
                            GuestThread::rd<uint32_t>(kAgGetOut) == 0xa9be4ff4u;
     if (!on) return std::nullopt;
     return 0xD4000001u | ((a == kAgSetOut ? kAgOutSetSvc : kAgOutGetSvc) << 5);
 }
 
-// Speed 35 debug: X86CODE_A64_AGCHK=1 (27.2 24B8117; with X86CODE_A64_LIVE_ONLY for the process). After the rule runs,
+// Speed 35 debug: X86SIM_A64_AGCHK=1 (27.2 24B8117; with X86SIM_A64_LIVE_ONLY for the process). After the rule runs,
 // AG::Graph::UpdateStack::update reloads the node's flags through x28 (= [table base 0x22e74c908] + attribute id,
 // computed before the rule; 0x1c950bf90) and aborts "failed to set an initial value" when bit 4 is clear and the value
 // type is not empty (0x1c950c138 -> 0x1c950c4b8 -> 0x1c950c628). The SVC replaces that load (ldr w8, [x28, #4]) and
@@ -567,7 +567,7 @@ std::optional<uint32_t> agout_read_code(u64 a) {
 constexpr u64 kAgChkPc = 0x1c950c134;
 std::optional<uint32_t> agchk_read_code(u64 a) {
     if (a != kAgChkPc) return std::nullopt;
-    static const bool on = getenv("X86CODE_A64_AGCHK") && atoi(getenv("X86CODE_A64_AGCHK")) == 1 && GuestThread::rd<uint32_t>(kAgChkPc) == 0xb9400788u;
+    static const bool on = getenv("X86SIM_A64_AGCHK") && atoi(getenv("X86SIM_A64_AGCHK")) == 1 && GuestThread::rd<uint32_t>(kAgChkPc) == 0xb9400788u;
     if (!on) return std::nullopt;
     return 0xD4000001u | (kAgChkSvc << 5);
 }
@@ -626,7 +626,7 @@ struct Forward final : Dynarmic::A64::UserCallbacks {
 }
 
 static bool shared_translations() {
-    static const bool on = !(getenv("X86CODE_A64_SHARED") && atoi(getenv("X86CODE_A64_SHARED")) == 0);
+    static const bool on = !(getenv("X86SIM_A64_SHARED") && atoi(getenv("X86SIM_A64_SHARED")) == 0);
     return on;
 }
 
@@ -639,11 +639,11 @@ constexpr u64 kNoAslrCodeBase = 0x7fffa0000000ull;
 // Speed 18: the shared code cache holds the AOT image plus room for this process's own translations. Default 768 MB;
 // with a larger image, image + 384 MB. RAM 13: up to 2000 MB (was 1344: rel32 reach of libarm64jit and glibc for the
 // prelude's near host calls). Every host call now goes through a stub page 4 MB below the cache (host_call_stubs), so
-// the cache needs reach only to that page and FixedData. X86CODE_A64_CODECACHE_MB overrides.
+// the cache needs reach only to that page and FixedData. X86SIM_A64_CODECACHE_MB overrides.
 constexpr u64 kMaxCodeCacheMb = 2000;
 static u64 code_cache_mb() {
     static const u64 mb = []() -> u64 {
-        if (const char *e = getenv("X86CODE_A64_CODECACHE_MB")) { const int v = atoi(e); if (v >= 64) return std::min<u64>(v, kMaxCodeCacheMb); }
+        if (const char *e = getenv("X86SIM_A64_CODECACHE_MB")) { const int v = atoi(e); if (v >= 64) return std::min<u64>(v, kMaxCodeCacheMb); }
         const u64 img = jitcache_image_code_bytes() >> 20;
         return std::clamp<u64>(img + 384, 768, kMaxCodeCacheMb);
     }();
@@ -676,7 +676,7 @@ FixedData &fixed_data() {
 static void host_call_stubs() {
     constexpr size_t kBytes = 1u << 20;
     const u64 b = code_cache_base();
-    if (!b || (getenv("X86CODE_A64_HOSTSTUBS") && atoi(getenv("X86CODE_A64_HOSTSTUBS")) == 0)) return;
+    if (!b || (getenv("X86SIM_A64_HOSTSTUBS") && atoi(getenv("X86SIM_A64_HOSTSTUBS")) == 0)) return;
     void *p = mmap((void *)(b - 0x400000), kBytes, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == MAP_FAILED) { logf("hoststubs: %#llx taken", (unsigned long long)(b - 0x400000)); return; }
     prctl(0x53564d41 /* PR_SET_VMA */, 0 /* ANON_NAME */, (unsigned long)p, kBytes, (unsigned long)"a64:hoststubs");
@@ -693,36 +693,36 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
         c.tpidr_el0 = nullptr; c.tpidrro_el0 = nullptr;
         // Shared BlockLinking uses atomic 8-byte patch heads (see EmitSharedPatchSite). Required for
         // boot-to-home: with linking off, SpringBoard livelocks in the dispatcher (billions of
-        // lookups, idle black). X86CODE_A64_LINK=0 disables linking for experiments.
+        // lookups, idle black). X86SIM_A64_LINK=0 disables linking for experiments.
         // Fastmem fault "recompile" Invalidates/Unpatches from the SIGSEGV handler — even with
         // shared_mutex held that still patches live code; redirect the fault via FakeCall only
         // (recompile_on_*_failure = false). FastDispatch stays (16-byte atomic data). RSB: see below.
-        if (getenv("X86CODE_A64_LINK") && atoi(getenv("X86CODE_A64_LINK")) == 0) {
+        if (getenv("X86SIM_A64_LINK") && atoi(getenv("X86SIM_A64_LINK")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::BlockLinking;
         }
         // Speed 25: a pop checks the shared invalidate generation (A64JitState::rsb_gen): after another thread's
         // Invalidate/ClearCache this thread's entries are dropped and the return goes through FastDispatch. On by default
-        // (X86CODE_A64_RSB=0: off, experiments only; code-shaping: PushRSB and the pop terminal are in the image).
-        if (getenv("X86CODE_A64_RSB") && atoi(getenv("X86CODE_A64_RSB")) == 0) {
+        // (X86SIM_A64_RSB=0: off, experiments only; code-shaping: PushRSB and the pop terminal are in the image).
+        if (getenv("X86SIM_A64_RSB") && atoi(getenv("X86SIM_A64_RSB")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
         }
-        // Speed 29 (experiments): X86CODE_A64_OPT_KEEP=<hex mask> keeps only these Dynarmic::OptimizationFlag bits (with
-        // X86CODE_A64_LIVE_ONLY for the process: image code was translated with the defaults).
-        if (const char *e = getenv("X86CODE_A64_OPT_KEEP"))
+        // Speed 29 (experiments): X86SIM_A64_OPT_KEEP=<hex mask> keeps only these Dynarmic::OptimizationFlag bits (with
+        // X86SIM_A64_LIVE_ONLY for the process: image code was translated with the defaults).
+        if (const char *e = getenv("X86SIM_A64_OPT_KEEP"))
             c.optimizations = Dynarmic::OptimizationFlag((u32)c.optimizations & (u32)strtoul(e, nullptr, 16));
-        // X86CODE_A64_SAFE=1: also drop FastDispatch (narrows shared races further for experiments).
-        if (getenv("X86CODE_A64_SAFE") && atoi(getenv("X86CODE_A64_SAFE")) == 1) {
+        // X86SIM_A64_SAFE=1: also drop FastDispatch (narrows shared races further for experiments).
+        if (getenv("X86SIM_A64_SAFE") && atoi(getenv("X86SIM_A64_SAFE")) == 1) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
             c.optimizations &= ~Dynarmic::OptimizationFlag::ReturnStackBuffer;
         }
-        // X86CODE_A64_FASTDISPATCH=0: drop FastDispatch only (keep other SAFE-independent opts).
-        if (getenv("X86CODE_A64_FASTDISPATCH") && atoi(getenv("X86CODE_A64_FASTDISPATCH")) == 0) {
+        // X86SIM_A64_FASTDISPATCH=0: drop FastDispatch only (keep other SAFE-independent opts).
+        if (getenv("X86SIM_A64_FASTDISPATCH") && atoi(getenv("X86SIM_A64_FASTDISPATCH")) == 0) {
             c.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
         }
         // Speed 20: LDXR/STXR without the process-wide monitor: STXR is a lock cmpxchg against the value its LDXR
         // read, with a reservation private to the thread (QEMU user-mode semantics; only ABA differs from real LL/SC).
         // The global monitor took a spinlock and scanned all 64 slots on every STXR: objc retain/release were ~1/3 of
-        // SpringBoard's CPU on a tap. X86CODE_A64_STRICT_MONITOR=1 restores it (a code-shaping flag: key bit 19).
+        // SpringBoard's CPU on a tap. X86SIM_A64_STRICT_MONITOR=1 restores it (a code-shaping flag: key bit 19).
         if (!strict_monitor()) {
             c.unsafe_optimizations = true;
             c.optimizations |= Dynarmic::OptimizationFlag::Unsafe_IgnoreGlobalMonitor;
@@ -747,7 +747,7 @@ static std::shared_ptr<Dynarmic::A64::Jit::SharedCode> shared_code(const Dynarmi
 }
 
 bool memcheck() {
-    static const bool v = getenv("X86CODE_A64_MEMCHECK") && atoi(getenv("X86CODE_A64_MEMCHECK")) == 1;
+    static const bool v = getenv("X86SIM_A64_MEMCHECK") && atoi(getenv("X86SIM_A64_MEMCHECK")) == 1;
     return v;
 }
 
@@ -776,7 +776,7 @@ GuestThread::GuestThread() {
     c.silently_mirror_fastmem = false;
     c.fastmem_exclusive_access = true;
     // RAM 3: no inline address check: an address above 47 bits (a top-byte tag) is non-canonical and faults into the
-    // fastmem handler, which calls the callback (drops the tag). X86CODE_A64_MEMCHECK=1: the old mov/shr 47/jnz +
+    // fastmem handler, which calls the callback (drops the tag). X86SIM_A64_MEMCHECK=1: the old mov/shr 47/jnz +
     // stub per access (code-shaping: key bit 20).
     c.fastmem_unchecked = !memcheck();
     c.enable_cycle_counting = false;
@@ -786,15 +786,15 @@ GuestThread::GuestThread() {
     c.tpidrro_el0 = &tpidrro;
     // Hybrid svc;ret (frontend): a thunk block ends in FastDispatchHint instead of PopRSBHint. With RSB off
     // (shared translations) PopRSBHint is ReturnFromRunCode, so every libsystem call left Run(). Opt-in for now.
-    c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;
-    // Speed 17: guarded direct links for import stubs (X86CODE_A64_STUBLINK=0: off)
-    c.link_import_stubs = !(getenv("X86CODE_A64_STUBLINK") && atoi(getenv("X86CODE_A64_STUBLINK")) == 0);
-    // Perf 9: forward block links skip the halt check (X86CODE_A64_HALT_ALL=1: every link checks; code-shaping, debug only)
-    c.halt_check_all_links = getenv("X86CODE_A64_HALT_ALL") && atoi(getenv("X86CODE_A64_HALT_ALL")) == 1;
-    // Perf 14: guest registers kept in r12/r13/r14/rbp across blocks (X86CODE_A64_PIN="32,0,8": NZCV, x0, x8; up to 4;
+    c.fuse_svc_ret = getenv("X86SIM_A64_FUSE_SVC") && atoi(getenv("X86SIM_A64_FUSE_SVC")) == 1;
+    // Speed 17: guarded direct links for import stubs (X86SIM_A64_STUBLINK=0: off)
+    c.link_import_stubs = !(getenv("X86SIM_A64_STUBLINK") && atoi(getenv("X86SIM_A64_STUBLINK")) == 0);
+    // Perf 9: forward block links skip the halt check (X86SIM_A64_HALT_ALL=1: every link checks; code-shaping, debug only)
+    c.halt_check_all_links = getenv("X86SIM_A64_HALT_ALL") && atoi(getenv("X86SIM_A64_HALT_ALL")) == 1;
+    // Perf 14: guest registers kept in r12/r13/r14/rbp across blocks (X86SIM_A64_PIN="32,0,8": NZCV, x0, x8; up to 4;
     // "-1": none; code-shaping, so the image builder must use the same)
     {
-        const char *pin = getenv("X86CODE_A64_PIN");
+        const char *pin = getenv("X86SIM_A64_PIN");
         if (!pin) pin = "32,0,8";  // NZCV (32), then the most loaded/stored guest registers in a cold Settings launch
         int i = 0;
         for (const char *q = pin; *q && i < 4;) {
@@ -809,10 +809,10 @@ GuestThread::GuestThread() {
         c.persist_svc_hi = kStubBase + 3 * kStubSlot;
     }
     native_objc_configure_jit(c);
-    // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
+    // Per-thread caches (X86SIM_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
     // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.
-    c.code_cache_size = (getenv("X86CODE_A64_CODECACHE_MB") ? atoi(getenv("X86CODE_A64_CODECACHE_MB")) : 16) << 20;
-    static const bool rss_debug = getenv("X86CODE_A64_RSS") != nullptr;
+    c.code_cache_size = (getenv("X86SIM_A64_CODECACHE_MB") ? atoi(getenv("X86SIM_A64_CODECACHE_MB")) : 16) << 20;
+    static const bool rss_debug = getenv("X86SIM_A64_RSS") != nullptr;
     auto rss = [] { long v = 0; if (FILE *f = fopen("/proc/self/statm", "r")) { long a, b, c2; if (fscanf(f, "%ld %ld %ld", &a, &b, &c2) == 3) v = (b - c2) * 4; fclose(f); } return v; };
     long before = rss_debug ? rss() : 0;
     jit = make_jit(c);
@@ -856,10 +856,10 @@ NRet GuestThread::call(u64 pc, const u64 *ints, int nints, const u64 *fps, int n
     depth++;
     const bool outer_native = native;
     native = false;
-    // X86CODE_A64_EXEC_LOCK=1: one process-wide mutex around every Run (bisect: cache/linking race vs
+    // X86SIM_A64_EXEC_LOCK=1: one process-wide mutex around every Run (bisect: cache/linking race vs
     // per-thread state leak). Shared-mode only; huge slowdown, for experiments.
     static std::mutex *exec_lock = []() -> std::mutex * {
-        if (!(getenv("X86CODE_A64_EXEC_LOCK") && atoi(getenv("X86CODE_A64_EXEC_LOCK")) == 1)) return nullptr;
+        if (!(getenv("X86SIM_A64_EXEC_LOCK") && atoi(getenv("X86SIM_A64_EXEC_LOCK")) == 1)) return nullptr;
         return new std::mutex;
     }();
     if (g_step && depth == 1) while (!finished) jit->Step();
@@ -889,12 +889,12 @@ bool GuestThread::MemoryWriteExclusive128(u64 a, Dynarmic::A64::Vector v, Dynarm
     return __atomic_compare_exchange_n((unsigned __int128 *)(a & kTbi), &ev, nv, false, 5, 5);
 }
 
-bool g_count_thunks = getenv("X86CODE_A64_STATS") != nullptr;
+bool g_count_thunks = getenv("X86SIM_A64_STATS") != nullptr;
 u64 g_thunk_counts[0x10000];
 
-// X86CODE_A64_PROFILE=1: every 10 s a line in the process log: wall and process CPU time since start, time spent
+// X86SIM_A64_PROFILE=1: every 10 s a line in the process log: wall and process CPU time since start, time spent
 // translating (shared cache), blocks, guest instructions and x86 bytes emitted, dispatcher lookups, live threads.
-static const bool g_profile = getenv("X86CODE_A64_PROFILE") != nullptr;
+static const bool g_profile = getenv("X86SIM_A64_PROFILE") != nullptr;
 static void profile_tick() {
     static const u64 start = [] { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (u64)t.tv_sec * 1000000000ull + t.tv_nsec; }();
     static std::atomic<u64> last{0};
@@ -989,7 +989,7 @@ void GuestThread::CallSVC(uint32_t swi) {
         return;
     }
     if (swi == kAgOutSetSvc || swi == kAgOutGetSvc) {
-        static const u64 want = strtoull(getenv("X86CODE_A64_AGOUT"), nullptr, 16);
+        static const u64 want = strtoull(getenv("X86SIM_A64_AGOUT"), nullptr, 16);
         auto rdv = [](u64 a, void *buf, size_t n) {
             iovec l{buf, n}, r{(void *)a, n};
             return process_vm_readv(getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
@@ -1080,14 +1080,14 @@ void GuestThread::CallSVC(uint32_t swi) {
             else if (path && x(0) > 0x10000) logf("-> %s(\"%.200s\", %#lx, %#lx)", nm.c_str(), (const char *)x(0), (unsigned long)x(1), (unsigned long)x(2));
             else logf("-> %s(%#lx, %#lx, %#lx)", nm.c_str(), (unsigned long)x(0), (unsigned long)x(1), (unsigned long)x(2));
         }
-        // X86CODE_A64_SVC_TIME=1: accumulate rdtsc around the handler body (excludes dispatcher).
-        static const bool svc_time = getenv("X86CODE_A64_SVC_TIME") != nullptr;
+        // X86SIM_A64_SVC_TIME=1: accumulate rdtsc around the handler body (excludes dispatcher).
+        static const bool svc_time = getenv("X86SIM_A64_SVC_TIME") != nullptr;
         static std::atomic<u64> svc_cycles{0}, svc_timed{0};
         u64 t0 = 0;
         if (svc_time) t0 = __builtin_ia32_rdtsc();
-        // Speed 30 debug: X86CODE_A64_THUNK_HIST=sub1,sub2: calls of thunks whose name contains one of the substrings,
+        // Speed 30 debug: X86SIM_A64_THUNK_HIST=sub1,sub2: calls of thunks whose name contains one of the substrings,
         // by (name, lr, caller's lr, x0 low bits for timer arms), the top 20 every 4096 calls
-        static const char *th = getenv("X86CODE_A64_THUNK_HIST");
+        static const char *th = getenv("X86SIM_A64_THUNK_HIST");
         if (th) {
             const std::string &nm = g_thunks[swi].name;
             bool hit = false;
@@ -1122,9 +1122,9 @@ void GuestThread::CallSVC(uint32_t swi) {
         int32_t outer_thunk = in_thunk; in_thunk = (int32_t)swi;
         native = true;
         tsd_to_native();
-        // Speed 29: X86CODE_A64_MSG_STATS=1: mach_msg* thunk calls and wall time inside them (blocking receives
+        // Speed 29: X86SIM_A64_MSG_STATS=1: mach_msg* thunk calls and wall time inside them (blocking receives
         // included), logged cumulatively every 512 calls with a CLOCK_MONOTONIC stamp (diff lines around a tap)
-        static const bool msg_stats = getenv("X86CODE_A64_MSG_STATS") != nullptr;
+        static const bool msg_stats = getenv("X86SIM_A64_MSG_STATS") != nullptr;
         const bool is_msg = msg_stats && g_thunks[swi].name.find("mach_msg") != std::string::npos;
         timespec m0{};
         u64 mh = 0, mopt = 0, mlr = 0; u32 msid = ~0u;
@@ -1180,10 +1180,10 @@ void GuestThread::CallSVC(uint32_t swi) {
         if (g_trace) logf("<- %s = %#lx", g_thunks[swi].name.c_str(), (unsigned long)x(0));
     }
 
-    // X86CODE_A64_SKIP_RET=1: when the handler did not redirect and the thunk is "svc; ret", return to X30 here
+    // X86SIM_A64_SKIP_RET=1: when the handler did not redirect and the thunk is "svc; ret", return to X30 here
     // and skip the ret block. Outermost CallSVC only (a nested one runs inside call(), which restores the PC).
     // Reads X30 after the handler. Off by default.
-    static const bool skip_ret = getenv("X86CODE_A64_SKIP_RET") && atoi(getenv("X86CODE_A64_SKIP_RET")) == 1;
+    static const bool skip_ret = getenv("X86SIM_A64_SKIP_RET") && atoi(getenv("X86SIM_A64_SKIP_RET")) == 1;
     if (skip_ret && in_thunk < 0 && jit->GetPC() == pc0 && rd<u32>(pc0) == 0xD65F03C0u) jit->SetPC(x(30));
 }
 
@@ -1263,8 +1263,8 @@ void GuestThread::InstructionCacheOperationRaised(Dynarmic::A64::InstructionCach
     // no-op; per-thread 8 MB caches masked that by evacuating on full, but the shared cache never frees.
     using Op = Dynarmic::A64::InstructionCacheOperation;
     if (!jit) return;
-    static const bool iclog = getenv("X86CODE_A64_ICLOG") != nullptr;
-    static const bool ivau_clear = getenv("X86CODE_A64_IVAU_CLEAR") && atoi(getenv("X86CODE_A64_IVAU_CLEAR")) == 1;
+    static const bool iclog = getenv("X86SIM_A64_ICLOG") != nullptr;
+    static const bool ivau_clear = getenv("X86SIM_A64_IVAU_CLEAR") && atoi(getenv("X86SIM_A64_IVAU_CLEAR")) == 1;
     if (iclog) {
         const char *name = "?";
         switch (op) {
@@ -1276,7 +1276,7 @@ void GuestThread::InstructionCacheOperationRaised(Dynarmic::A64::InstructionCach
     }
     switch (op) {
     case Op::InvalidateByVAToPoU:
-        // X86CODE_A64_IVAU_CLEAR=1: treat every line invalidate as a full ClearCache (bisect SMC races).
+        // X86SIM_A64_IVAU_CLEAR=1: treat every line invalidate as a full ClearCache (bisect SMC races).
         if (ivau_clear) {
             jit->ClearCache();
         } else {
@@ -1336,7 +1336,7 @@ void logf(const char *fmt, ...) {
     if (n > (int)sizeof buf - 2) n = sizeof buf - 2;
     buf[n++] = '\n';
     if (write(2, "arm64host: ", 11) < 0 || write(2, buf, n) < 0) {}
-    // X86CODE_A64_LOG=<Darwin dir>: also append to <dir>/<exe>.<pid>.log (simulator jobs' stderr is often gone)
+    // X86SIM_A64_LOG=<Darwin dir>: also append to <dir>/<exe>.<pid>.log (simulator jobs' stderr is often gone)
     // (opened for every line: daemons close all fds at start, a kept fd would end up in another file)
     // a char array, not std::string: lines logged during exit (after static destructors) went to a file named by
     // the freed string's bytes in the cwd
@@ -1344,9 +1344,9 @@ void logf(const char *fmt, ...) {
     static bool init;
     if (!init) {
         init = true;
-        if (const char *dir = getenv("X86CODE_A64_LOG")) {
+        if (const char *dir = getenv("X86SIM_A64_LOG")) {
             static auto *dmkdir = (int (*)(const char *, int))dsym("mkdir");
-            const char *exe = getenv("X86CODE_A64_EXE");
+            const char *exe = getenv("X86SIM_A64_EXE");
             const char *b = exe ? strrchr(exe, '/') : nullptr;
             if (dmkdir) dmkdir(dir, 0777);
             snprintf(path, sizeof path, "%s/%s.%d.log", dir, b ? b + 1 : "guest", (int)getpid());
@@ -1373,7 +1373,7 @@ extern "C" void a64_enter_guest(u64 pc, u64 *frame) {
 }  // namespace a64
 
 namespace a64 {
-// Speed 31 debug (X86CODE_A64_AGOUT): the recorded output-value gets/sets of one attribute (abort dump, handlers.cpp)
+// Speed 31 debug (X86SIM_A64_AGOUT): the recorded output-value gets/sets of one attribute (abort dump, handlers.cpp)
 void agout_dump(u32 attr) {
     const u64 n = g_agout_n.load(), lo = n > kAgOutRing ? n - kAgOutRing : 0;
     int shown = 0;

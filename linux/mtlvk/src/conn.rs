@@ -126,11 +126,11 @@ pub struct State {
     helper: CommandQueue,
     out: Sink,
     pub log: bool,
-    /// x86Code: library bytes (by library id) and (library id, name) by function id, kept so that a refused
+    /// x86Sim: library bytes (by library id) and (library id, name) by function id, kept so that a refused
     /// render pipeline can be written to var/metal/failed/ and replayed with the metal2vulkan CLI.
     lib_bytes: HashMap<u64, Vec<u8>>,
     func_src: HashMap<u64, (u64, String)>,
-    /// x86Code: VRAM render targets (default; MTLVK_VRAM_TARGETS=0 turns them off). A render-target texture over an IOSurface's host pages
+    /// x86Sim: VRAM render targets (default; MTLVK_VRAM_TARGETS=0 turns them off). A render-target texture over an IOSurface's host pages
     /// is drawn through a device-local texture (`proxies`: texture id -> the host texture), and the texels its
     /// command buffer wrote are copied to the host pages once, at the end of that command buffer. Drawing straight
     /// into host pages makes every blended layer cross PCIe twice (8-12 ms of GPU time for a home-screen frame).
@@ -140,18 +140,18 @@ pub struct State {
     proxies: HashMap<u64, Texture>,
     proxy_views: HashMap<u64, u64>,
     shared_vram: HashMap<(u64, u64, u64, u64, u64, u64, u32), Texture>,
-    /// x86Code RAM 2: the `shared_vram` key of each proxied texture: the VRAM texture goes with the last proxy of its
+    /// x86Sim RAM 2: the `shared_vram` key of each proxied texture: the VRAM texture goes with the last proxy of its
     /// surface (it was kept for good: 8 full-screen surfaces, ~100 MB of VRAM, after Settings and Maps).
     proxy_keys: HashMap<u64, (u64, u64, u64, u64, u64, u64, u32)>,
     buf_keys: HashMap<u64, (u64, u64, u64)>,
     written: std::cell::RefCell<std::collections::BTreeSet<u64>>,
     stats_seen: u32,
-    /// x86Code RAM 2: what each buffer/texture id is and roughly how many bytes of its own memory it holds
+    /// x86Sim RAM 2: what each buffer/texture id is and roughly how many bytes of its own memory it holds
     /// ([`Kind`]), for the `mtlvk stats:` line.
     kinds: HashMap<u64, (Kind, u64)>,
 }
 
-/// x86Code RAM 2: where a buffer's or texture's bytes live.
+/// x86Sim RAM 2: where a buffer's or texture's bytes live.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     /// a buffer the runtime allocated (no fd): host-visible system memory
@@ -179,7 +179,7 @@ fn tex_bytes(d: &TextureDescriptor) -> u64 {
     if d.mipmap_level_count > 1 { base * 4 / 3 } else { base }
 }
 
-/// x86Code Speed 7: SIGUSR1 bumps this; each connection prints its object counts on its next request.
+/// x86Sim Speed 7: SIGUSR1 bumps this; each connection prints its object counts on its next request.
 pub static STATS_REQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 impl State {
@@ -226,14 +226,14 @@ impl State {
 
 const PAGE: u64 = 4096;
 static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// x86Code: smallest render target (in pixels) drawn in VRAM (MTLVK_VRAM_MIN_PIXELS, default 1,000,000: the screen
+/// x86Sim: smallest render target (in pixels) drawn in VRAM (MTLVK_VRAM_MIN_PIXELS, default 1,000,000: the screen
 /// and the compositor's full-size passes). Smaller surfaces stay in their host pages: iconservicesagent's icons
 /// (CPU-written surfaces it later draws into) came out gray when proxied, as the proxy missed the CPU's writes.
 static VRAM_MIN_PIXELS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
     std::env::var("MTLVK_VRAM_MIN_PIXELS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000_000)
 });
 
-/// x86Code: MTLVK_TIMING=1: per command buffer, the time to encode it (CB_COMMIT received -> committed), from commit
+/// x86Sim: MTLVK_TIMING=1: per command buffer, the time to encode it (CB_COMMIT received -> committed), from commit
 /// to the completed handler, and the GPU's own time; a summary (avg/p50/p95/max in ms) every 300 command buffers.
 static TIMING: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("MTLVK_TIMING").is_some());
 static TIMES: Mutex<Vec<(f64, f64, f64)>> = Mutex::new(Vec::new());
@@ -265,7 +265,7 @@ impl State {
             written: Default::default(), stats_seen: 0, kinds: HashMap::new() })
     }
 
-    /// x86Code: note that a command writes texture `id` (a proxied one is copied back at the end of the command
+    /// x86Sim: note that a command writes texture `id` (a proxied one is copied back at the end of the command
     /// buffer).
     fn mark(&self, id: u64) {
         let id = *self.proxy_views.get(&id).unwrap_or(&id);
@@ -340,7 +340,7 @@ impl State {
         match op {
             HELLO => {
                 let props = self.device.properties();
-                let name = format!("{} (Vulkan, x86Code)", self.device.name());
+                let name = format!("{} (Vulkan, x86Sim)", self.device.name());
                 w.u64(self.device.registry_id())
                     .u64(4 << 30)
                     .u64(props.max_buffer_length)
@@ -369,7 +369,7 @@ impl State {
                 self.proxies.remove(&id);
                 self.proxy_views.remove(&id);
                 self.buf_keys.remove(&id);
-                // x86Code Speed 7: these were never dropped (a released library kept its bytes for good)
+                // x86Sim Speed 7: these were never dropped (a released library kept its bytes for good)
                 self.lib_bytes.remove(&id);
                 self.func_src.remove(&id);
                 self.kinds.remove(&id);
@@ -810,7 +810,7 @@ impl State {
         Ok(0)
     }
 
-    /// x86Code: newTextureViewWithPixelFormat:[textureType:levels:slices:[swizzle:]]
+    /// x86Sim: newTextureViewWithPixelFormat:[textureType:levels:slices:[swizzle:]]
     fn tex_view(&mut self, id: u64, parent: u64, r: &mut Rd) -> Res<()> {
         let (pf, ttype) = (r.u32(), r.u32());
         let (l0, ln, s0, sn) = (r.u64(), r.u64(), r.u64(), r.u64());
@@ -865,7 +865,7 @@ impl State {
         Ok(desc)
     }
 
-    /// x86Code: write a refused pipeline's libraries and descriptor to var/metal/failed/<id>-*.
+    /// x86Sim: write a refused pipeline's libraries and descriptor to var/metal/failed/<id>-*.
     fn dump_failed(&self, id: u64, funcs: &[(&str, u64)], text: &str) {
         let dir = std::env::var("MTLVK_FAILED_DIR").unwrap_or_else(|_| "var/metal/failed".into());
         let _ = std::fs::create_dir_all(&dir);
@@ -1002,7 +1002,7 @@ impl State {
         let data = r.bytes(len as usize);
         self.mark(id);
         let t = self.tex(id)?.clone();
-        // x86Code: diagnostics, MTLVK_DUMP_REPLACE=<dir> saves every replaceRegion's bytes
+        // x86Sim: diagnostics, MTLVK_DUMP_REPLACE=<dir> saves every replaceRegion's bytes
         if let Some(dir) = std::env::var_os("MTLVK_DUMP_REPLACE") {
             let n = format!("{}/{id:x}-f{}-{}x{}-bpr{bpr}-l{level}.raw", dir.to_string_lossy(), t.pixel_format().as_raw(),
                 region.size.width, region.size.height);
@@ -1059,7 +1059,7 @@ impl State {
         r.u32();
         let cb: CommandBuffer = q.command_buffer().map_err(err("command buffer"))?;
         let mut enc = Enc::None;
-        // x86Code: diagnostics, MTLVK_DUMP_PASSES=<dir>: every render pass's colour attachments are copied out
+        // x86Sim: diagnostics, MTLVK_DUMP_PASSES=<dir>: every render pass's colour attachments are copied out
         // after the pass (in this command buffer) and written to <dir> when it completes (MTLVK_DUMP_MAX command
         // buffers with render passes, default 60)
         let dump_dir = std::env::var("MTLVK_DUMP_PASSES").ok();
@@ -1094,7 +1094,7 @@ impl State {
                 C_CS_END => {
                     enc.end()?;
                     enc = Enc::None;
-                    // x86Code: MTLVK_DUMP_PASSES also dumps the textures a compute encoder bound (every level)
+                    // x86Sim: MTLVK_DUMP_PASSES also dumps the textures a compute encoder bound (every level)
                     if dump_dir.is_some() && !dump_targets.is_empty() && DUMPED.load(std::sync::atomic::Ordering::Relaxed) < 400 {
                         let ts: Vec<Texture> = dump_targets.drain(..).map(|(t, _)| t).collect();
                         for t in ts {
@@ -1248,7 +1248,7 @@ impl State {
     }
 
 
-    /// x86Code: MTLVK_DUMP_PASSES: copy `targets` (texture, level) into new buffers at this point of `cb`.
+    /// x86Sim: MTLVK_DUMP_PASSES: copy `targets` (texture, level) into new buffers at this point of `cb`.
     #[allow(clippy::too_many_arguments)]
     fn dump_now(&self, cb: &CommandBuffer, targets: &mut Vec<(Texture, u64)>, dumps: &mut Vec<(String, Buffer)>, dir: &str, id: u64, npass: u32, tag: &str) -> Res<()> {
         let n = DUMPED.load(std::sync::atomic::Ordering::Relaxed);
@@ -1761,7 +1761,7 @@ pub fn selftest(device: &Device) -> Res<()> {
     }
     println!("replaceRegion/getBytes round trip ok");
 
-    // x86Code Speed 1c: IOSurface row pitch must survive VRAM copy-back.
+    // x86Sim Speed 1c: IOSurface row pitch must survive VRAM copy-back.
     // Arm64 home is 1206 wide: tight rows are 4824 bytes, IOSurface/ring stride is 4864 (64-byte
     // aligned). A write that uses width*4 into that buffer shows as thin diagonal lines when the
     // ring is read with the real stride (pad/4 = 10 px of shift per row). The x86 device is 1179

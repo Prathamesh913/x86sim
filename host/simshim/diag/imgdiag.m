@@ -1,10 +1,10 @@
-// x86Code: diagnostic shim (SpringBoard): logs the icon image update path (data source "did generate image"
+// x86Sim: diagnostic shim (SpringBoard): logs the icon image update path (data source "did generate image"
 // notifications, SBIcon image-did-update callbacks), to find why the first SpringBoard keeps placeholder icons.
 // Log: var/log/imgdiag.<pid>.log
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreGraphics/CoreGraphics.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <mach-o/dyld.h>
 #include <fcntl.h>
@@ -16,7 +16,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[200];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/imgdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/imgdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;
@@ -84,7 +84,7 @@ static void d_load(id self, SEL s, info_t info, id traits, id reason, id ctx, un
 		done(layer); } : nil;
 	((void(*)(id, SEL, info_t, id, id, id, unsigned long, long, id))o_load)(self, s, info, traits, reason, ctx, opts, prio, w);
 }
-// x86Code: return values along -[SBIcon makeIconLayerNativelyOrFromImageIfNecessaryWithInfo:...]
+// x86Sim: return values along -[SBIcon makeIconLayerNativelyOrFromImageIfNecessaryWithInfo:...]
 #define MK(name) static IMP o_##name; static id d_##name(id self, SEL s, info_t info, id tc, id ctx, unsigned long opts) { \
 	id r = ((id(*)(id, SEL, info_t, id, id, unsigned long))o_##name)(self, s, info, tc, ctx, opts); \
 	static int n; if (n++ < 60) dprintf(logfd(), "%.3f [%p] -[%s %s] %s opts %lx -> %s\n", CFAbsoluteTimeGetCurrent(), (void*)pthread_self(), object_getClassName(self), sel_getName(s), [[self description] UTF8String], opts, [[r description] UTF8String]); return r; }
@@ -145,7 +145,7 @@ __attribute__((constructor)) static void init(void) {
 	});
 	_dyld_register_func_for_add_image(added);
 }
-// x86Code: who creates CGImages with a NULL colour space ("verify_image_parameters: invalid image colorspace: NULL")?
+// x86Sim: who creates CGImages with a NULL colour space ("verify_image_parameters: invalid image colorspace: NULL")?
 static CGImageRef my_CGImageCreate(size_t w, size_t h, size_t bpc, size_t bpp, size_t bpr, CGColorSpaceRef cs, CGBitmapInfo bi, CGDataProviderRef dp, const CGFloat* dec, bool interp, CGColorRenderingIntent ri) {
 	if (!cs) {
 		static int n;

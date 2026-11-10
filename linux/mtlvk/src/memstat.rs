@@ -1,4 +1,4 @@
-//! x86Code RAM 2: where mtlvk's memory goes. `MTLVK_MEMSTATS=<seconds>` prints, every that many seconds, one
+//! x86Sim RAM 2: where mtlvk's memory goes. `MTLVK_MEMSTATS=<seconds>` prints, every that many seconds, one
 //! `mtlvk mem:` line: this process's PSS by mapping kind (from /proc/self/smaps), glibc malloc's own figures
 //! (mallinfo2) and the GPU's memory heaps as VK_EXT_memory_budget reports them (this process's usage per heap). It
 //! also asks every connection for its object counts (`mtlvk stats:`, the SIGUSR1 line) on its next request.
@@ -108,7 +108,7 @@ pub fn start(device: metal2vulkan_runtime::Device) {
     });
 }
 
-/// x86Code RAM 10: with jemalloc preloaded with prof:true, a heap profile now (jemalloc's `prof.dump`) when the file
+/// x86Sim RAM 10: with jemalloc preloaded with prof:true, a heap profile now (jemalloc's `prof.dump`) when the file
 /// MTLVK_PROF_TRIGGER names exists (removed); checked at each memstats line.
 fn prof_dump_on_request() {
     let Some(trigger) = std::env::var_os("MTLVK_PROF_TRIGGER") else { return };
@@ -129,7 +129,7 @@ fn prof_dump_on_request() {
     }
 }
 
-/// x86Code RAM 14: clean file pages of read-only private mappings (NVIDIA's shader compiler libnvidia-gpucomp ~45 MB,
+/// x86Sim RAM 14: clean file pages of read-only private mappings (NVIDIA's shader compiler libnvidia-gpucomp ~45 MB,
 /// glvkspirv, rtcore, glcore, mtlvk's own text, the other ICDs the loader opened) stay mapped after the burst that
 /// touched them, and how much a boot touched varied with what it compiled (fresh home 230-300 MB PSS). After a quiet
 /// trim tick (under 3% CPU) with the file RSS grown >= MTLVK_FILETRIM MB (default 8: the ~2 MB an idle frame

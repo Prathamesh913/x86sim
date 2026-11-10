@@ -6,7 +6,7 @@
 // linkedit) and calls Header::installName (another load-command walk through blocks). Under the JIT that was ~54% of
 // SpringBoard's dyld_sim prepare (~19 s). The two calls are replaced by one call to a short arm64 routine that reads
 // LC_ID_DYLIB from the loader's mach header; the rest of matchesPath (strlen/memcmp, PseudoDylib) is Apple's code.
-// X86CODE_A64_DYLD_NATIVE=0 leaves dyld_sim alone.
+// X86SIM_A64_DYLD_NATIVE=0 leaves dyld_sim alone.
 #include "a64.h"
 #include "macho.h"
 #include <cstdlib>
@@ -60,7 +60,7 @@ constexpr u64 kTextPad = 0x5b000;          // __unwind_info ends at 0x5914c, __T
 // memory is not written). The handler runs the same walk natively: the same order, the same matchesPath for a
 // JustInTimeLoader (path strcmp; dylibs: LC_ID_DYLIB name, as the Speed 6 routine). A loader with a PseudoDylib, one
 // that is not a JustInTimeLoader, or an invalidated vector resumes the guest's own instructions for that iteration.
-// X86CODE_A64_DYLD_SCAN=0 turns it off (the image keeps the old blocks of the loops until dyld_sim's chunk is rebuilt).
+// X86SIM_A64_DYLD_SCAN=0 turns it off (the image keeps the old blocks of the loops until dyld_sim's chunk is rebuilt).
 namespace {
 // loop A (loadDependents block): head .. "b head"; loop B (getLoader block): head .. "b.ne head; b done"
 constexpr uint32_t kLoopA[] = {0xb9404328u, 0x6b1b011fu, 0x54000141u, 0xf8408757u, 0xf9401e61u, 0xaa1703e0u, 0xaa1503e2u,
@@ -115,7 +115,7 @@ struct LdInfo {
 };
 std::mutex g_ld_mu;  // held for a whole dyld_scan_step
 std::unordered_map<u64, LdInfo> g_ld;
-const bool g_ld_cache = !(getenv("X86CODE_A64_DYLD_SCAN_CACHE") && atoi(getenv("X86CODE_A64_DYLD_SCAN_CACHE")) == 0);
+const bool g_ld_cache = !(getenv("X86SIM_A64_DYLD_SCAN_CACHE") && atoi(getenv("X86SIM_A64_DYLD_SCAN_CACHE")) == 0);
 const LdInfo &ld_info(u64 ld, u64 f) {
     const u64 mh = *(const u64 *)(ld + 0x20);
     LdInfo &e = g_ld[ld];
@@ -215,12 +215,12 @@ void dyld_scan_step(GuestThread &t, bool b) {
 // round trips in a cold Settings launch. The stubs carry no Swift conformances and no ObjC classes, so the cache's
 // Swift and ObjC tables stay exact for them; every other on-disk copy of a cached image is hidden from dyld_sim
 // (host.cpp dyld_hides), so these stubs are the only overrides left. Its "ldr w19, [x0, #0x418]" (the count) reads
-// "mov w19, #0". X86CODE_A64_DYLD_OVERRIDES=1 keeps dyld's answer.
+// "mov w19, #0". X86SIM_A64_DYLD_OVERRIDES=1 keeps dyld's answer.
 // Applied by the AOT builder too (jitcache.cpp), so the image's dyld_sim chunk is translated from the same words.
 constexpr uint32_t kOverriddenCount[] = {0xb9441813u /* ldr w19, [x0, #0x418] */, 0xf9400408u /* ldr x8, [x0, #8] */};
 
 static void patch_overridden(u64 slide) {
-    if (const char *e = getenv("X86CODE_A64_DYLD_OVERRIDES"); e && atoi(e) == 1) return;
+    if (const char *e = getenv("X86SIM_A64_DYLD_OVERRIDES"); e && atoi(e) == 1) return;
     for (u64 a = kSearchLo; a + 8 < kSearchHi; a += 4) {
         auto *q = (uint32_t *)(slide + a);
         if (q[0] == kOverriddenCount[0] && q[1] == kOverriddenCount[1]) {
@@ -232,13 +232,13 @@ static void patch_overridden(u64 slide) {
 }
 
 void dyld_sim_patches(u64 slide) {
-    if (const char *e = getenv("X86CODE_A64_DYLD_SCAN"); !e || atoi(e) != 0) {
+    if (const char *e = getenv("X86SIM_A64_DYLD_SCAN"); !e || atoi(e) != 0) {
         g_loop_a = find_loop(slide, kLoopA, sizeof kLoopA / 4);
         g_loop_b = find_loop(slide, kLoopB, sizeof kLoopB / 4);
         if (!g_loop_a || !g_loop_b) logf("dyld_sim loader scan: loops not found (%#llx %#llx)", (unsigned long long)g_loop_a, (unsigned long long)g_loop_b);
     }
     patch_overridden(slide);
-    if (const char *e = getenv("X86CODE_A64_DYLD_NATIVE"); e && atoi(e) == 0) return;
+    if (const char *e = getenv("X86SIM_A64_DYLD_NATIVE"); e && atoi(e) == 0) return;
     // bl Loader::image; add x0, sp, #8; bl Header::installName  ->  bl kInstallName; nop; nop
     uint32_t *p = nullptr;
     for (u64 a = kSearchLo; a < kSearchHi && !p; a += 4) {

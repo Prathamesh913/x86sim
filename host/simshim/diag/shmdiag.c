@@ -1,6 +1,6 @@
-// x86Code: diagnostic shim: logs xpc_shmem_create(_readonly) (region info, checksum) and xpc_shmem_map
+// x86Sim: diagnostic shim: logs xpc_shmem_create(_readonly) (region info, checksum) and xpc_shmem_map
 // (checksum of what the receiver sees), to compare sender and receiver bytes (gray icons).
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <mach/mach.h>
 kern_return_t mach_vm_region(vm_map_t, mach_vm_address_t*, mach_vm_size_t*, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t*, mach_port_t*);
 #include <xpc/xpc.h>
@@ -14,7 +14,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[200];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/shmdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/shmdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;

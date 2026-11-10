@@ -1,5 +1,5 @@
 #!/bin/sh
-# x86Code: xcrun for the Linux build (build/linux-env.sh). Maps `xcrun [-sdk iphonesimulator|macosx] <tool> args` to
+# x86Sim: xcrun for the Linux build (build/linux-env.sh). Maps `xcrun [-sdk iphonesimulator|macosx] <tool> args` to
 #   clang    Linux clang + ld64.lld with -isysroot sdks/<sdk>; without -target, one is made from -arch and
 #            -mios-simulator-version-min / -mmacosx-version-min (defaults x86_64, iOS 17.0 / macOS 10.15)
 #   swiftc   build/linux-swiftc.sh -sdk sdks/<sdk> args

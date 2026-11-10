@@ -130,7 +130,7 @@
  *    display or NULL.
  *  - Display (portrait, the model's size @3x, 60 Hz):
  *        name        = CFSTR("iPhone")            (any CFString)
- *        uid         = CFSTR("com.x86code.simfb.display.0")  (MUST be non-NULL)
+ *        uid         = CFSTR("com.x86sim.simfb.display.0")  (MUST be non-NULL)
  *        deviceName  = CFSTR("iPhone")
  *        type        = 0 (main)
  *        display_id  = 1 (any non-zero uint32 is probably fine)

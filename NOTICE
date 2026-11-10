@@ -1,21 +1,21 @@
-x86Code
-Copyright (C) 2025-2026 the x86Code authors
+x86Sim
+Copyright (C) 2025-2026 the x86Sim authors
 
-x86Code's own code (everything in this repository outside external/ and third_party/ directories, unless a file says
+x86Sim's own code (everything in this repository outside external/ and third_party/ directories, unless a file says
 otherwise) is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License
 as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 See LICENSE. Exceptions: linux/mtlvk is GPL-2.0-or-later OR LGPL-3.0-or-later, as metal2vulkan, which it links.
 
-x86Code includes or bundles the following components under their own licenses. Release AppImages carry each license
+x86Sim includes or bundles the following components under their own licenses. Release AppImages carry each license
 text in licenses/ (and bin/ for the pinned tools); sources are at the links given.
 
 Component            License                                   Source
 -------------------  ----------------------------------------  -----------------------------------------------
-Darling              GPL-3.0 (parts APSL-2.0, BSD, MIT: see    https://github.com/x86code/darling (branch x86code)
+Darling              GPL-3.0 (parts APSL-2.0, BSD, MIT: see    https://github.com/x86sim/darling (branch x86sim)
                      its files; includes XNU, libkqueue,
                      darlingserver, launchd)
-dynarmic             0BSD                                      https://github.com/x86code/dynarmic (branch x86code)
-metal2vulkan         GPL-2.0-or-later OR LGPL-3.0-or-later     https://github.com/x86code/metal2vulkan (branch x86code)
+dynarmic             0BSD                                      https://github.com/x86sim/dynarmic (branch x86sim)
+metal2vulkan         GPL-2.0-or-later OR LGPL-3.0-or-later     https://github.com/x86sim/metal2vulkan (branch x86sim)
 astcenc              Apache-2.0                                linux/arm64jit/third_party/astcenc
 lzfse                BSD-3-Clause (Apple Inc.)                 linux/arm64jit/third_party/lzfse
 ipsw (tool)          MIT                                       https://github.com/blacktop/ipsw
@@ -24,8 +24,8 @@ dnspython            ISC                                       https://github.co
 Rust crates          MIT / Apache-2.0 and others: see each     tools/launcher/Cargo.lock, linux/mtlvk/Cargo.lock
                      crate (crates.io)
 
-Not included, never redistributed: Apple's iOS simulator runtimes, Xcode SDKs and macOS host data. x86Code downloads
+Not included, never redistributed: Apple's iOS simulator runtimes, Xcode SDKs and macOS host data. x86Sim downloads
 the iOS runtime from Apple on the user's machine; pre-translated (AOT) images and caches made from it stay there.
 
-Apple, iPhone, iPad, iOS, Xcode and Metal are trademarks of Apple Inc. x86Code is not affiliated with or endorsed by
+Apple, iPhone, iPad, iOS, Xcode and Metal are trademarks of Apple Inc. x86Sim is not affiliated with or endorsed by
 Apple Inc.

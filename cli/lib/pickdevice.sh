@@ -1,4 +1,4 @@
-# x86Code: pick_device ARG — simctl-style <device> argument: a device dir, var/<folder>, an arm64 phone's
+# x86Sim: pick_device ARG — simctl-style <device> argument: a device dir, var/<folder>, an arm64 phone's
 # suffix (var/device-a64-<ARG>) or its name; "booted" = the configured one. Sets X86SIM_DEVICE; returns 1 otherwise.
 pick_device() {  # pick_device ARG: sets X86SIM_DEVICE when ARG names a device
 	local a=$1 c

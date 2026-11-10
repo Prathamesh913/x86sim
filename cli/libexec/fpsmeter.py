@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: measure how often simfb publishes frames (delivered fps), polling every 2 ms.
+"""x86Sim: measure how often simfb publishes frames (delivered fps), polling every 2 ms.
     cli/libexec/fpsmeter.py <seconds> [label]   prints per-0.5 s-window fps, the peak 1 s fps and frame-gap stats
 Source: the shm ring's seq if there is one, else framebuffer.bgra's header seq (the pre-3.13 dump)."""
 import os, struct, sys, time

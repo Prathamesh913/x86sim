@@ -22,19 +22,19 @@ import x86config  # noqa: E402  (cli/lib/config.sh: repo root, Darling prefix, r
 
 PROJECT = x86config.ROOT
 RUNTIME = x86config.get("X86SIM_RUNTIME")
-# x86Code: jobs that stay eager (RunAtLoad/KeepAlive as Apple ships them); the rest start on first lookup (see below).
+# x86Sim: jobs that stay eager (RunAtLoad/KeepAlive as Apple ships them); the rest start on first lookup (see below).
 # sleepd: Apple ships RunAtLoad; boot-a64 std keeps it for cold-boot BKS/XPC stability. Without EAGER the
 # slim-by-default pass below strips RunAtLoad and sleepd never starts under on-demand-only launchd_sim.
 EAGER = {"com.apple.SpringBoard", "com.apple.backboardd", "com.apple.runningboardd", "com.apple.configd_sim",
          "com.apple.syslogd", "com.apple.UserEventAgent-System", "com.apple.distnoted.xpc.daemon",
          "com.apple.sleepd"}
 PREFIX = x86config.get("X86SIM_PREFIX")
-MTLVK_SOCKET = os.environ.get("X86CODE_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
-# x86Code: the host side of the simulator's audio (cli/libexec/simaudio.py, started by cli/libexec/arm64/boot-a64.sh)
-AUDIO_SOCKET = os.environ.get("X86CODE_AUDIO_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "simaudio.sock")
-AUDIO = os.environ.get("X86CODE_AUDIO", "0") != "0"  # opt-in until playback works
+MTLVK_SOCKET = os.environ.get("X86SIM_MTLVK_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "mtlvk.sock")
+# x86Sim: the host side of the simulator's audio (cli/libexec/simaudio.py, started by cli/libexec/arm64/boot-a64.sh)
+AUDIO_SOCKET = os.environ.get("X86SIM_AUDIO_SOCKET") or os.path.join(x86config.get("X86SIM_STATE"), "simaudio.sock")
+AUDIO = os.environ.get("X86SIM_AUDIO", "0") != "0"  # opt-in until playback works
 DARLING_VIEW = "/Volumes/SystemRoot"  # Linux / as seen inside Darling
-# x86Code: a device for the arm64 runtime (iOS 27, run under libarm64jit): arm64 device types, arm64 builds of our
+# x86Sim: a device for the arm64 runtime (iOS 27, run under libarm64jit): arm64 device types, arm64 builds of our
 # in-simulator binaries (host/<name>/arm64/...; jobs and shims without one are left out), no libkqueue_sim (the arm64
 # process's libsystem_kernel is Darling's own, behind the svc thunks).
 # RAM 3: launchd plist XPC activities no code registers any more (see the job loop): label -> activity identifiers
@@ -65,7 +65,7 @@ def device_type(device):
     except (OSError, KeyError, plistlib.InvalidFileException):
         pass
     try:
-        dt["name"] = open(os.path.join(device, "name")).read().strip() or "x86code"
+        dt["name"] = open(os.path.join(device, "name")).read().strip() or "x86sim"
     except OSError:
         pass
     return dt
@@ -84,7 +84,7 @@ def darling(path):
 
 
 def feature_enabled(name):
-    """x86Code (Speed 25): a FeatureFlags flag "Domain/flag" as the runtime's own code sees it
+    """x86Sim (Speed 25): a FeatureFlags flag "Domain/flag" as the runtime's own code sees it
     (<runtime>/System/Library/FeatureFlags/Domain/<Domain>.plist): its Enabled key, else on when FeatureComplete."""
     dom, _, flag = name.partition("/")
     # a device's own override (<device>/data/Library/Preferences/FeatureFlags/Domain/<Domain>.plist) wins
@@ -109,7 +109,7 @@ def feature_enabled(name):
 
 
 def resolve_feature_flags(v):
-    """x86Code (Speed 25): resolve launchd's {"#IfFeatureFlagEnabled": flag, "#Then": a, "#Else": b} values with the
+    """x86Sim (Speed 25): resolve launchd's {"#IfFeatureFlagEnabled": flag, "#Then": a, "#Else": b} values with the
     runtime's FeatureFlags. launchd_sim judged them by the host side's flags (no such domain: off), while the code in
     the simulator reads the runtime's: on 27.2 InputUI's com.apple.UIKit.KeyboardManagement.hosted (UIKit/
     kbarbiter_in_inputui, FeatureComplete) was never registered, UIKit looked for the keyboard arbiter in InputUI and
@@ -151,7 +151,7 @@ def main():
         os.makedirs(os.path.join(data, d), exist_ok=True)
     open(data + "/var/run/memory_warning_simulation", "a").close()
 
-    # x86Code: Siri's session language, as a Mac's simulator device has it (assistantd sets it there; it doesn't run
+    # x86Sim: Siri's session language, as a Mac's simulator device has it (assistantd sets it there; it doesn't run
     # here). Without it AFPreferences logs "No language code saved, but Assistant is enabled" and recomputes the
     # language in a loop on the main thread: Spotlight and Safari spun at 100% CPU and Safari's typing stalled.
     ap = os.path.join(data, "Library/Preferences/com.apple.assistant.backedup.plist")
@@ -168,7 +168,7 @@ def main():
     daemons = device + "/LaunchDaemons"
     shutil.rmtree(daemons, ignore_errors=True)
     os.makedirs(daemons)
-    # x86Code: LaunchAngels (UI services launched on demand, e.g. PosterBoard, which draws the wallpaper) live
+    # x86Sim: LaunchAngels (UI services launched on demand, e.g. PosterBoard, which draws the wallpaper) live
     # in their own directory; CoreSimulator hands launchd_sim that path too. arm64 (Speed 16): if
     # launchd_sim does not see them as angels, RunningBoard says osservice<com.apple.campo> is no angel, FrontBoard gives
     # Campo a plain FBProcess and SpringBoard's Siri scene transaction asserts ("process was nil").
@@ -179,16 +179,16 @@ def main():
     # is the canonical runtime path, as the cryptex mount is on a Mac.
     shutil.rmtree(angels, ignore_errors=True)
     angels = os.path.join(os.path.realpath(os.path.join(RUNTIME, "System/Library/LaunchAngels")),
-                          ".x86code-" + os.path.basename(os.path.abspath(device)))
+                          ".x86sim-" + os.path.basename(os.path.abspath(device)))
     shutil.rmtree(angels, ignore_errors=True)
     os.makedirs(angels)
     for job in jobs:
         if "=" in job:
-            # x86Code: label=program[|arg|...|mach:<service name>|env:K=V]: extra arguments; mach: entries become MachServices
+            # x86Sim: label=program[|arg|...|mach:<service name>|env:K=V]: extra arguments; mach: entries become MachServices
             label, program = job.split("=", 1)
             parts = program.split("|")
             program, extra = parts[0], parts[1:]
-            # x86Code: env:K=V entries become EnvironmentVariables
+            # x86Sim: env:K=V entries become EnvironmentVariables
             envs = dict(a[4:].split("=", 1) for a in extra if a.startswith("env:"))
             args = [a for a in extra if not a.startswith("mach:") and not a.startswith("env:")]
             mach = {a[5:]: True for a in extra if a.startswith("mach:")}
@@ -198,8 +198,8 @@ def main():
             program = "/.." * depth + darling(os.path.abspath(program))
             job_plist = {"Label": label, "ProgramArguments": [program] + args,
                          "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log,
-                         # X86CODE_KEEPALIVE=1: respawn every 10 s (to attach debuggers)
-                         "KeepAlive": os.environ.get("X86CODE_KEEPALIVE") == "1", "ThrottleInterval": 10}
+                         # X86SIM_KEEPALIVE=1: respawn every 10 s (to attach debuggers)
+                         "KeepAlive": os.environ.get("X86SIM_KEEPALIVE") == "1", "ThrottleInterval": 10}
             if mach:
                 job_plist["MachServices"] = mach
             if envs:
@@ -212,15 +212,15 @@ def main():
             src, dst = os.path.join(RUNTIME, "System/Library/LaunchAngels", job + ".plist"), angels
         with open(src, "rb") as f:
             plist = plistlib.load(f)
-            # X86CODE_FF_SKIP=label,...: leave these jobs' feature-flag conditionals to launchd_sim (experiments)
-            if job not in os.environ.get("X86CODE_FF_SKIP", "").split(","):
+            # X86SIM_FF_SKIP=label,...: leave these jobs' feature-flag conditionals to launchd_sim (experiments)
+            if job not in os.environ.get("X86SIM_FF_SKIP", "").split(","):
                 plist = resolve_feature_flags(plist)
         # launchd_sim's system domain never leaves bootstrap mode here (on a Mac something,
         # presumably CoreSimulator, ends it), so system-only jobs are loaded into the user
         # domain instead, where all lookups from the device's jobs resolve.
         if plist.get("LimitLoadToSessionType") == "System":
             del plist["LimitLoadToSessionType"]
-        # x86Code: slim by default. launchd_sim starts a job with MachServices at the first lookup of one of them; what
+        # x86Sim: slim by default. launchd_sim starts a job with MachServices at the first lookup of one of them; what
         # RunAtLoad / KeepAlive (true, or SuccessfulExit) starts eagerly at boot runs whether anything uses it or not
         # (assistantd, locationd, identityservicesd, ids_simd, navd, revisiond, amsaccountsd: ~100 MB each
         # here). Those become on-demand, except what the home screen itself needs (EAGER). X86SIM_EAGER=1: Apple's.
@@ -233,23 +233,23 @@ def main():
         # immediately while backboardd stays pending then speculative. If launchd_sim later aborts, SB's
         # late BKSHIDEventDeliveryManager init sees a nil connection and brk#0. Keep RunAtLoad for now
         # (home needs SB); sleepd EAGER above is the cold-boot BKS stabilizer. Optional delay: set
-        # X86CODE_DELAY_SB=1 to drop SpringBoard RunAtLoad (caller must kickstart after backboardd).
-        if job == "com.apple.SpringBoard" and os.environ.get("X86CODE_DELAY_SB") == "1":
+        # X86SIM_DELAY_SB=1 to drop SpringBoard RunAtLoad (caller must kickstart after backboardd).
+        if job == "com.apple.SpringBoard" and os.environ.get("X86SIM_DELAY_SB") == "1":
             plist.pop("RunAtLoad", None)
-        if os.environ.get("X86CODE_JOBLOG") == "1":
-            # X86CODE_JOBLOG=1: job output and os_log (OS_ACTIVITY_DT_MODE) to data/var/log/<label>.log
+        if os.environ.get("X86SIM_JOBLOG") == "1":
+            # X86SIM_JOBLOG=1: job output and os_log (OS_ACTIVITY_DT_MODE) to data/var/log/<label>.log
             log = darling(data + "/var/log/" + job + ".log")
             plist.update({"StandardOutPath": log, "StandardErrorPath": log})
-            # X86CODE_NODT=label,...|all: not for these (DT mode also streams every log line to
+            # X86SIM_NODT=label,...|all: not for these (DT mode also streams every log line to
             # diagnosticd, and a sender blocks when diagnosticd stops draining)
-            nodt = os.environ.get("X86CODE_NODT", "").split(",")
-            # x86Code: "all,-label" keeps DT mode (os_log in the job's log) for that label only
+            nodt = os.environ.get("X86SIM_NODT", "").split(",")
+            # x86Sim: "all,-label" keeps DT mode (os_log in the job's log) for that label only
             if ("-" + job) in nodt or (job not in nodt and "all" not in nodt):
                 plist.setdefault("EnvironmentVariables", {})["OS_ACTIVITY_DT_MODE"] = "1"
             else:
                 # no logd here either: without this libtrace streams to diagnosticd anyway
                 plist.setdefault("EnvironmentVariables", {})["OS_ACTIVITY_MODE"] = "disable"
-        # x86Code arm64: assistantd is Apple's plist (Speed 26). Speed 13 kept only com.apple.assistant.dictation; on
+        # x86Sim arm64: assistantd is Apple's plist (Speed 26). Speed 13 kept only com.apple.assistant.dictation; on
         # iOS 27.2 the keyboard's dictation availability check also asks com.apple.assistant.settings, and each failed
         # lookup posted "availability changed": the keyboard dock re-checked, the app's main thread spun (~75% CPU),
         # hardware keys never reached the text field, and Siri had no assistant. X86SIM_ASSISTANTD=dictation: the old
@@ -258,14 +258,14 @@ def main():
             plist.pop("LaunchEvents", None)
             keep = os.environ.get("X86SIM_ASSISTANTD_MACH", "com.apple.assistant.dictation").split(",")
             plist["MachServices"] = {k: True for k in plist.get("MachServices", {}) if k in keep}
-        # x86Code RAM 3: XPC activities the plist declares but the daemon's code no longer registers (no
+        # x86Sim RAM 3: XPC activities the plist declares but the daemon's code no longer registers (no
         # xpc_activity_register of that identifier anywhere in iOS 27.2). launchd_sim runs one once its Delay has passed
         # (searchd's loadtrial: at every launch after the first hour of a device), libxpc holds a transaction for it
         # until the process checks it in, which never happens: searchd stayed dirty for good and was never
         # reclaimed (~100 MB). On a device dasd expires an activity nobody checks in.
         for act in STALE_ACTIVITIES.get(job, ()):
             plist.get("LaunchEvents", {}).get("com.apple.xpc.activity", {}).pop(act, None)
-        # x86Code: X86SIM_JOBENV="label:K=V;label:K=V": extra environment for runtime jobs (experiments)
+        # x86Sim: X86SIM_JOBENV="label:K=V;label:K=V": extra environment for runtime jobs (experiments)
         for kv in filter(None, os.environ.get("X86SIM_JOBENV", "").split(";")):
             lab, _, ev = kv.partition(":")
             if lab == job and "=" in ev:
@@ -274,13 +274,13 @@ def main():
         with open(os.path.join(dst, job + ".plist"), "wb") as f:
             plistlib.dump(plist, f)
 
-    # x86Code arm64 (Speed 26): the canonical runtime path (runtimes/<rt>/RuntimeRoot is a symlink into extracted/...), as a
+    # x86Sim arm64 (Speed 26): the canonical runtime path (runtimes/<rt>/RuntimeRoot is a symlink into extracted/...), as a
     # Mac's mounted runtime has none. dyld_sim takes its simulator root as the realpath and strips only that prefix, so
     # with the symlinked root _dyld_shared_cache_contains_path("<root>/System/Library/Frameworks/WebKit.framework/WebKit")
     # was false: CFBundle found no executable for cache-only frameworks and WebKit's WebContent/Networking/GPU services
     # exited at once ("Unable to find entry point in WebKit.framework"): Safari never loaded a page.
     rt, home = darling(os.path.realpath(RUNTIME)), darling(data)
-    # x86Code: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
+    # x86Sim: iPhone 16 (iPhone17,3) device type capabilities, as JSON in cli/lib, written as a plist for MobileGestalt
     capabilities = device + "/capabilities.plist"
     dt = device_type(device)
     with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", dt["json"])) as f:
@@ -290,64 +290,64 @@ def main():
     # Stand-in for the host's configd: configd_sim's SimulatorSupport plugin opens the
     # Mac's dynamic store (com.apple.SystemConfiguration.configd) to mirror network
     # state. A second configd_sim without plugins, registered under that name, serves it.
-    hostcfg = {"Label": "com.x86code.host-configd",
+    hostcfg = {"Label": "com.x86sim.host-configd",
                "ProgramArguments": ["/usr/libexec/configd_sim", "-b"],
                "EnvironmentVariables": {"SCD_SERVER": "com.apple.SystemConfiguration.configd"},
                "MachServices": {"com.apple.SystemConfiguration.configd": True}}
-    if os.environ.get("X86CODE_JOBLOG") == "1":
-        log = darling(data + "/var/log/com.x86code.host-configd.log")
+    if os.environ.get("X86SIM_JOBLOG") == "1":
+        log = darling(data + "/var/log/com.x86sim.host-configd.log")
         hostcfg.update({"StandardOutPath": log, "StandardErrorPath": log})
         hostcfg["EnvironmentVariables"]["OS_ACTIVITY_DT_MODE"] = "1"
-    with open(os.path.join(daemons, "com.x86code.host-configd.plist"), "wb") as f:
+    with open(os.path.join(daemons, "com.x86sim.host-configd.plist"), "wb") as f:
         plistlib.dump(hostcfg, f)
 
-    # x86Code: the host's network configuration in that store (what a Mac's configd publishes: Setup:/State: service
+    # x86Sim: the host's network configuration in that store (what a Mac's configd publishes: Setup:/State: service
     # and interface keys of the primary interface), from Linux (linux/hostnet/hostnet.py), loaded by netconfig.
     # configd_sim's SimulatorSupport mirrors it into the simulator, whose IPMonitor derives State:/Network/Global/IPv4,
-    # DNS and the nw_path/reachability state from it. X86CODE_NETCONFIG=0 leaves it out.
-    if os.environ.get("X86CODE_NETCONFIG", "1") != "0" and host_path("host/netconfig/netconfig"):
+    # DNS and the nw_path/reachability state from it. X86SIM_NETCONFIG=0 leaves it out.
+    if os.environ.get("X86SIM_NETCONFIG", "1") != "0" and host_path("host/netconfig/netconfig"):
         import subprocess
-        hostnet = data + "/var/run/x86code-hostnet.plist"
+        hostnet = data + "/var/run/x86sim-hostnet.plist"
         subprocess.run([sys.executable, PROJECT + "/linux/hostnet/hostnet.py", hostnet], check=False)
         depth = runtime_climb_depth()
-        log = darling(data + "/var/log/com.x86code.netconfig.log")
-        with open(os.path.join(daemons, "com.x86code.netconfig.plist"), "wb") as f:
-            plistlib.dump({"Label": "com.x86code.netconfig",
+        log = darling(data + "/var/log/com.x86sim.netconfig.log")
+        with open(os.path.join(daemons, "com.x86sim.netconfig.plist"), "wb") as f:
+            plistlib.dump({"Label": "com.x86sim.netconfig",
                            "ProgramArguments": ["/.." * depth + darling(host_path("host/netconfig/netconfig")),
                                                 darling(hostnet)],
-                           "EnvironmentVariables": {"X86CODE_HOST_STORE": "1",
+                           "EnvironmentVariables": {"X86SIM_HOST_STORE": "1",
                                                     "OS_ACTIVITY_MODE": "disable"},
                            "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
 
-    # x86Code: the Metal stand-in (host/metalhostd): metalhostd serves the simulator's Metal transport on mtlvk
-    # (Vulkan, a Linux process; cli/libexec/arm64/boot-a64.sh starts it and sets X86CODE_METAL=all unless told otherwise).
-    # Here (mksimdevice alone) it is opt-in: X86CODE_METAL=1 registers
-    # it for the test client (process "mtlprobe"), X86CODE_METAL=name,name for those processes,
-    # X86CODE_METAL=all also under the generic com.apple.metal.simulator, which hands a device to every process
+    # x86Sim: the Metal stand-in (host/metalhostd): metalhostd serves the simulator's Metal transport on mtlvk
+    # (Vulkan, a Linux process; cli/libexec/arm64/boot-a64.sh starts it and sets X86SIM_METAL=all unless told otherwise).
+    # Here (mksimdevice alone) it is opt-in: X86SIM_METAL=1 registers
+    # it for the test client (process "mtlprobe"), X86SIM_METAL=name,name for those processes,
+    # X86SIM_METAL=all also under the generic com.apple.metal.simulator, which hands a device to every process
     # (CoreAnimation, the wallpaper poster, apps).
-    metal = os.environ.get("X86CODE_METAL", "")
+    metal = os.environ.get("X86SIM_METAL", "")
     if metal and metal != "0" and host_path("host/metalhostd/metalhostd"):
         procs = ["mtlprobe"] if metal == "1" else [p for p in metal.split(",") if p and p != "all"]
         names = ["com.apple.metal.simulator." + p for p in procs]
         if "all" in metal.split(","):
             names.append("com.apple.metal.simulator")
-        log = darling(data + "/var/log/com.x86code.metalhostd.log")
+        log = darling(data + "/var/log/com.x86sim.metalhostd.log")
         depth = runtime_climb_depth()
-        menv = {"X86CODE_METAL_NAMES": ",".join(names), "OS_ACTIVITY_MODE": "disable",
-                # x86Code: mtlvk's socket (Linux path; metalhostd prefixes /Volumes/SystemRoot)
-                "X86CODE_MTLVK_SOCKET": MTLVK_SOCKET}
-        for k in ("X86CODE_VKMTL_LOG", "X86CODE_VKMTL_DUMP", "X86CODE_METAL_PROFILE"):
+        menv = {"X86SIM_METAL_NAMES": ",".join(names), "OS_ACTIVITY_MODE": "disable",
+                # x86Sim: mtlvk's socket (Linux path; metalhostd prefixes /Volumes/SystemRoot)
+                "X86SIM_MTLVK_SOCKET": MTLVK_SOCKET}
+        for k in ("X86SIM_VKMTL_LOG", "X86SIM_VKMTL_DUMP", "X86SIM_METAL_PROFILE"):
             if os.environ.get(k):
                 menv[k] = os.environ[k]
-        with open(os.path.join(daemons, "com.x86code.metalhostd.plist"), "wb") as f:
+        with open(os.path.join(daemons, "com.x86sim.metalhostd.plist"), "wb") as f:
             # RunAtLoad: under the A64 JIT, on-demand spawn+warmup of metalhostd is slow enough that
             # CoreAnimation can time out waiting for com.apple.metal.simulator.*; start it at boot.
-            plistlib.dump({"Label": "com.x86code.metalhostd",
+            plistlib.dump({"Label": "com.x86sim.metalhostd",
                            "ProgramArguments": ["/.." * depth + darling(host_path("host/metalhostd/metalhostd"))],
                            "MachServices": {n: True for n in names}, "EnvironmentVariables": menv,
                            "RunAtLoad": True, "KeepAlive": True,
                            "StandardOutPath": log, "StandardErrorPath": log}, f)
-        # x86Code: iOS 27 MTLCompiler lives on disk as Metal.framework/XPCServices/MTLCompilerService.xpc
+        # x86Sim: iOS 27 MTLCompiler lives on disk as Metal.framework/XPCServices/MTLCompilerService.xpc
         # (moved out of the dyld cache). launchd_sim discovers it as a multi-instance Application XPC
         # service. Do NOT install a single-instance LaunchDaemon for the
         # same label: that makes "create copy of service" fail with error 137 and every pipeline dies.
@@ -356,39 +356,39 @@ def main():
         # cli/libexec/arm64/ensure-metal-framework.sh extracts Metal from the dyld cache into the
         # framework (runtimes/ is gitignored; never commit the binary).
 
-    # x86Code: cross-process IOSurfaces (host/iosurfaced): iosurfaced serves com.apple.IOSurface.Remote (what
+    # x86Sim: cross-process IOSurfaces (host/iosurfaced): iosurfaced serves com.apple.IOSurface.Remote (what
     # CoreSimulator's SimRenderServer does on a Mac) and IOSURFACE_REMOTE_EMULATED is not set, so every process's
-    # IOSurface.framework uses it. X86CODE_IOSURFACE=0 goes back to per-process emulation.
-    iosurface = os.environ.get("X86CODE_IOSURFACE", "1") not in ("", "0") and bool(host_path("host/iosurfaced/iosurfaced"))
+    # IOSurface.framework uses it. X86SIM_IOSURFACE=0 goes back to per-process emulation.
+    iosurface = os.environ.get("X86SIM_IOSURFACE", "1") not in ("", "0") and bool(host_path("host/iosurfaced/iosurfaced"))
     if iosurface:
-        log = darling(data + "/var/log/com.x86code.iosurfaced.log")
+        log = darling(data + "/var/log/com.x86sim.iosurfaced.log")
         depth = runtime_climb_depth()
         ienv = {"OS_ACTIVITY_MODE": "disable"}
-        if os.environ.get("X86CODE_IOSURFACE_LOG"):
-            ienv["X86CODE_IOSURFACE_LOG"] = "1"
-        with open(os.path.join(daemons, "com.x86code.iosurfaced.plist"), "wb") as f:
-            plistlib.dump({"Label": "com.x86code.iosurfaced",
+        if os.environ.get("X86SIM_IOSURFACE_LOG"):
+            ienv["X86SIM_IOSURFACE_LOG"] = "1"
+        with open(os.path.join(daemons, "com.x86sim.iosurfaced.plist"), "wb") as f:
+            plistlib.dump({"Label": "com.x86sim.iosurfaced",
                            "ProgramArguments": ["/.." * depth + darling(host_path("host/iosurfaced/iosurfaced"))],
                            "MachServices": {"com.apple.IOSurface.Remote": True}, "EnvironmentVariables": ienv,
                            "KeepAlive": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
 
-    if os.environ.get("X86CODE_BOOTSTRAP_SYSTEM") == "1":
-        # X86CODE_BOOTSTRAP_SYSTEM=1: experimental job asking launchd_sim to bootstrap the
+    if os.environ.get("X86SIM_BOOTSTRAP_SYSTEM") == "1":
+        # X86SIM_BOOTSTRAP_SYSTEM=1: experimental job asking launchd_sim to bootstrap the
         # system domain (on a Mac it leaves bootstrap mode; here it never does)
-        log = darling(data + "/var/log/com.x86code.bootstrap-system.log")
-        with open(os.path.join(daemons, "com.x86code.bootstrap-system.plist"), "wb") as f:
-            plistlib.dump({"Label": "com.x86code.bootstrap-system",
+        log = darling(data + "/var/log/com.x86sim.bootstrap-system.log")
+        with open(os.path.join(daemons, "com.x86sim.bootstrap-system.plist"), "wb") as f:
+            plistlib.dump({"Label": "com.x86sim.bootstrap-system",
                            "ProgramArguments": ["/bin/launchctl", "bootstrap", "system", darling(daemons)],
                            "RunAtLoad": True, "StandardOutPath": log, "StandardErrorPath": log}, f)
     # Darling's libkqueue for processes on the runtime's libSystem
     child_defaults = {
-        # X86CODE_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
+        # X86SIM_INSERT: extra ':'-separated dylibs (host paths) for diagnostics
         # simshim: stand-ins for host services (host/simshim/compat/simshim.c)
-        # simaudio: the audio devices (host/simaudio, opt-in: X86CODE_AUDIO=1)
+        # simaudio: the audio devices (host/simaudio, opt-in: X86SIM_AUDIO=1)
         "DYLD_INSERT_LIBRARIES": ":".join(
                                           [darling(p) for p in [host_path("host/simshim/compat/libsimshim.dylib")] if p] +
                                           [darling(p) for p in [host_path("host/simaudio/libsimaudio.dylib")] if p and AUDIO] + [darling(os.path.abspath(p))
-                                          for p in os.environ.get("X86CODE_INSERT", "").split(":") if p]),
+                                          for p in os.environ.get("X86SIM_INSERT", "").split(":") if p]),
         "CFFIXED_USER_HOME": home,
         "HOME": home,
         "TMPDIR": home + "/tmp/",
@@ -404,29 +404,29 @@ def main():
         "SIMULATOR_SHARED_RESOURCES_DIRECTORY": home,
         "PATH": ":".join(rt + p for p in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
         "SIMULATOR_ARCHS": DEVTYPE["arch"],
-        # x86Code: libarm64jit's log (guest crashes, unimplemented thunks) per process, inside the container
-        **({"X86CODE_A64_LOG": "/private/var/tmp/x86code-a64"}),
-        # x86Code: glibc malloc of libarm64jit/dynarmic (the ELF side): one arena per thread kept tens of MB of freed
+        # x86Sim: libarm64jit's log (guest crashes, unimplemented thunks) per process, inside the container
+        **({"X86SIM_A64_LOG": "/private/var/tmp/x86sim-a64"}),
+        # x86Sim: glibc malloc of libarm64jit/dynarmic (the ELF side): one arena per thread kept tens of MB of freed
         # JIT metadata resident per thread; two arenas for the process
         # RAM 1: A64_GLIBC_TUNABLES_EXTRA appends tunables (e.g. glibc.mem.decorate_maps=1 names arenas/stacks in smaps)
         **({"GLIBC_TUNABLES": ":".join(filter(None, ["glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=1048576",
                                                      os.environ.get("A64_GLIBC_TUNABLES_EXTRA", "")]))}),
-        # Speed 8: in /run/user/<uid> (the arm64 container's /dev/shm is private, X86CODE_PRIVATE_SHM); boot-a64.sh links
-        # /dev/shm/x86code-a64-simfb.ring to it for the host's viewers
-        # one ring per phone, named like the launcher's ring_for (instance.rs): device-a64 -> x86code-a64-simfb.ring,
-        # device-a64-<name> -> x86code-a64-<name>-simfb.ring. A shared default let a second phone's boot recreate the
+        # Speed 8: in /run/user/<uid> (the arm64 container's /dev/shm is private, X86SIM_PRIVATE_SHM); boot-a64.sh links
+        # /dev/shm/x86sim-a64-simfb.ring to it for the host's viewers
+        # one ring per phone, named like the launcher's ring_for (instance.rs): device-a64 -> x86sim-a64-simfb.ring,
+        # device-a64-<name> -> x86sim-a64-<name>-simfb.ring. A shared default let a second phone's boot recreate the
         # main phone's ring, freezing its screen while its apps ran on.
-        **({"SIMFB_RING": os.environ.get("SIMFB_RING") or "/Volumes/SystemRoot/run/user/%d/x86code-%s-simfb.ring" % (
+        **({"SIMFB_RING": os.environ.get("SIMFB_RING") or "/Volumes/SystemRoot/run/user/%d/x86sim-%s-simfb.ring" % (
             os.getuid(), os.path.basename(device.rstrip("/")).removeprefix("device-"))}),
         # Speed 3: launchd jobs only see Bootstrap.Child, so the JIT flags must be copied here to reach backboardd and
-        # SpringBoard. Speed 6: every X86CODE_A64_* flag (was a list that missed new ones, e.g. PERFMAP). X86SIM_SCRATCH: the
+        # SpringBoard. Speed 6: every X86SIM_A64_* flag (was a list that missed new ones, e.g. PERFMAP). X86SIM_SCRATCH: the
         # JIT's scratch dir (a64-penv, a64-slim-park, gbt, crash dumps); without it the JIT falls back to the home of its
         # uid, which in a user-namespace phone (the AppImage's) is 0: /root/scratch, unreadable, and all of those were off.
         **({k: v for k, v in os.environ.items()
-            if (k.startswith("X86CODE_A64_") and k not in ("X86CODE_A64_EXE", "X86CODE_A64_LOG")) or k in ("SIMFB_HZ", "X86SIM_SCRATCH")}
+            if (k.startswith("X86SIM_A64_") and k not in ("X86SIM_A64_EXE", "X86SIM_A64_LOG")) or k in ("SIMFB_HZ", "X86SIM_SCRATCH")}
           ),
         "SIMULATOR_UDID": udid,
-        "SIMULATOR_DEVICE_NAME": dt.get("name", "x86code"),
+        "SIMULATOR_DEVICE_NAME": dt.get("name", "x86sim"),
         "SIMULATOR_RUNTIME_VERSION": dt["version"],
         "SIMULATOR_RUNTIME_BUILD_VERSION": dt["build"],
         "SIMULATOR_MODEL_IDENTIFIER": dt["model"],
@@ -436,40 +436,40 @@ def main():
         "SIMULATOR_MAINSCREEN_SCALE": dt["scale"],
         "SIMULATOR_MAINSCREEN_PITCH": dt["pitch"],
         "SIMULATOR_LEGACY_ASSET_SUFFIX": dt["suffix"],
-        # x86Code: the device type's capabilities (CoreSimulator: <device type>.simdevicetype/Contents/Resources/
+        # x86Sim: the device type's capabilities (CoreSimulator: <device type>.simdevicetype/Contents/Resources/
         # capabilities.plist), which libMobileGestalt answers from (ArtworkTraits, displays, DeviceCornerRadius, ...).
         # Without it the runtime's apps got by, but an installed app aborted in UIKit's
         # -[_UIScreenComplexBoundingPathUtilities _loadBitmapForScreen:type:] (no kMGArtworkDeviceIdiom).
         "SIMULATOR_CAPABILITIES": darling(capabilities),
         "SIMULATOR_HOST_HOME": home,
         "SIMULATOR_LOG_ROOT": home + "/Library/Logs",
-        # x86Code: the simulator's libdispatch implements DISPATCH_SOURCE_TYPE_MEMORYPRESSURE as an EVFILT_VNODE watch
+        # x86Sim: the simulator's libdispatch implements DISPATCH_SOURCE_TYPE_MEMORYPRESSURE as an EVFILT_VNODE watch
         # (NOTE_ATTRIB) on this file (CoreSimulator touches it for "Simulate Memory Warning"); without it the source
         # is registered on fd -1 and libdispatch crashes the process (fileproviderd in LaunchServices' memory warning
         # listener). A Mac's device has the same empty file and variable.
         "SIMULATOR_MEMORY_WARNINGS": home + "/var/run/memory_warning_simulation",
         "SIMULATOR_BOOT_TIME": str(int(os.path.getmtime(data))),
-        "SIMULATOR_VERSION_INFO": "x86Code - Device: x86code (%s) - Runtime: iOS %s (%s)" % (udid, dt["version"], dt["build"]),
+        "SIMULATOR_VERSION_INFO": "x86Sim - Device: x86sim (%s) - Runtime: iOS %s (%s)" % (udid, dt["version"], dt["build"]),
         "XPC_SIMULATOR_LAUNCHD_NAME": "com.apple.CoreSimulator.SimDevice." + udid,
-        # x86Code: no XPC_SERVICE_NAME here. launchd_sim gives each job XPC_SERVICE_NAME=<label> only when its own
+        # x86Sim: no XPC_SERVICE_NAME here. launchd_sim gives each job XPC_SERVICE_NAME=<label> only when its own
         # environment has none, so every job inherited the device's name: lsd's [NSProcessInfo bs_jobLabel] wasn't
         # com.apple.lsd and FrontBoardServices' "LaunchServices-only" assertion aborted lsd on every openURL.
         "LS_ENABLE_BUNDLE_LOCALIZATION_CACHING": "1",
-        # x86Code: no CoreSimulator host; IOSurface allocates in-process, our SimFramebuffer fakes the display
+        # x86Sim: no CoreSimulator host; IOSurface allocates in-process, our SimFramebuffer fakes the display
         **({} if iosurface else {"IOSURFACE_REMOTE_EMULATED": "1"}),
-        # x86Code: metalhostd is in-sim (not Mac SimMetalHost). simshim skips sim2host framing for
+        # x86Sim: metalhostd is in-sim (not Mac SimMetalHost). simshim skips sim2host framing for
         # com.apple.metal.simulator* and, when this is set, for enable_sim2host calls before set_name (iOS 27).
-        **({"X86CODE_METAL_IN_SIM": "1"} if metal else {}),
-        **({"X86CODE_SIMSHIM_XPC_LOG": "1"} if os.environ.get("X86CODE_SIMSHIM_XPC_LOG") else {}),
-        # X86CODE_SHIMLOG=1: simshim logs what it intercepts
-        **({"X86CODE_SHIMLOG": "1"} if os.environ.get("X86CODE_SHIMLOG") else {}),
-        **({"X86CODE_AUDIO_SOCKET": darling(AUDIO_SOCKET)} if AUDIO else {}),
-        **({"X86CODE_AUDIO_LOG": "1"} if os.environ.get("X86CODE_AUDIO_LOG") else {}),
+        **({"X86SIM_METAL_IN_SIM": "1"} if metal else {}),
+        **({"X86SIM_SIMSHIM_XPC_LOG": "1"} if os.environ.get("X86SIM_SIMSHIM_XPC_LOG") else {}),
+        # X86SIM_SHIMLOG=1: simshim logs what it intercepts
+        **({"X86SIM_SHIMLOG": "1"} if os.environ.get("X86SIM_SHIMLOG") else {}),
+        **({"X86SIM_AUDIO_SOCKET": darling(AUDIO_SOCKET)} if AUDIO else {}),
+        **({"X86SIM_AUDIO_LOG": "1"} if os.environ.get("X86SIM_AUDIO_LOG") else {}),
         **({"SIMULATOR_FRAMEBUFFER_FRAMEWORK": darling(host_path("host/simfb/SimFramebuffer.framework/SimFramebuffer"))}
            if host_path("host/simfb/SimFramebuffer.framework/SimFramebuffer") else {}),
-        # x86Code: our SimulatorHID stand-in (host/simhid): backboardd's virtual touchscreen/buttons/keyboard,
-        # fed through <data>/simhid.sock by cli/libexec/simview.py / cli/libexec/simtouch.py. X86CODE_HID=0 leaves it out.
-        **({} if os.environ.get("X86CODE_HID") == "0" or not host_path("host/simhid/SimulatorHID.framework") else
+        # x86Sim: our SimulatorHID stand-in (host/simhid): backboardd's virtual touchscreen/buttons/keyboard,
+        # fed through <data>/simhid.sock by cli/libexec/simview.py / cli/libexec/simtouch.py. X86SIM_HID=0 leaves it out.
+        **({} if os.environ.get("X86SIM_HID") == "0" or not host_path("host/simhid/SimulatorHID.framework") else
            {"SIMULATOR_HID_SYSTEM_MANAGER": darling(host_path("host/simhid/SimulatorHID.framework"))}),
     })
 

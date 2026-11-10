@@ -1,8 +1,8 @@
-// x86Code: diagnostic shim (MobileSafari / any WebKit client): logs WebKit's BrowserEngineKit process launches
+// x86Sim: diagnostic shim (MobileSafari / any WebKit client): logs WebKit's BrowserEngineKit process launches
 // (+[BEWebContentProcess/BENetworkingProcess/BERenderingProcess ...ProcessWith...:completion:]) and what their
 // completions deliver. Log: data/var/log/extdiag.<prog>.<pid>.log
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -13,7 +13,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[220];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/extdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/extdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;

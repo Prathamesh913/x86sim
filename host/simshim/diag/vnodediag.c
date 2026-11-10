@@ -1,7 +1,7 @@
-// x86Code: diagnostic shim: logs every dispatch vnode source (fd, mask, the thread's last failed open()/openat()),
+// x86Sim: diagnostic shim: logs every dispatch vnode source (fd, mask, the thread's last failed open()/openat()),
 // and the caller's backtrace for one on a bad descriptor (fd < 0); and every EVFILT_VNODE EV_ADD that reaches
 // kevent_qos/kevent_id with a bad ident, with a backtrace. Log: <device data>/var/log/vnodediag.<pid>.log
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -24,7 +24,7 @@ static int logfd(void)
 	static int fd = -1;
 	if (fd < 0) {
 		char p[1024];
-		snprintf(p, sizeof p, X86CODE_DATA_DIR "/var/log/vnodediag.%d.log", getpid());
+		snprintf(p, sizeof p, X86SIM_DATA_DIR "/var/log/vnodediag.%d.log", getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;
@@ -54,7 +54,7 @@ static dispatch_source_t my_dispatch_source_create(dispatch_source_type_t t, uin
 	}
 	return dispatch_source_create(t, h, m, q);
 }
-// x86Code: libdispatch registers a source's knote synchronously from dispatch_resume/dispatch_activate on the calling
+// x86Sim: libdispatch registers a source's knote synchronously from dispatch_resume/dispatch_activate on the calling
 // thread, so a backtrace here shows who resumed a vnode source on a bad descriptor
 static void check(const char* fn, const struct kevent_qos_s* c, int n)
 {

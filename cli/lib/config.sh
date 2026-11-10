@@ -1,9 +1,9 @@
-# x86Code: configuration for every script (sourced, POSIX sh). The caller sets X86SIM_ROOT (the repo root).
+# x86Sim: configuration for every script (sourced, POSIX sh). The caller sets X86SIM_ROOT (the repo root).
 # Order: environment > config file ($X86SIM_CONFIG, default $X86SIM_ROOT/x86sim.env) > defaults below.
 # The sudo password is never configured here: scripts that need root read SUDO_PASS from the environment
 # (or use a cached sudo).
 : "${X86SIM_ROOT:?X86SIM_ROOT must be set}"
-_x86sim_keys="X86SIM_ARCH X86SIM_PREFIX X86SIM_RUNTIME X86SIM_DEVICE X86SIM_STATE X86SIM_SCRATCH X86SIM_MTLVK X86SIM_MAC X86SIM_SCREENS X86SIM_BOOT_SECS X86SIM_DPREFIX X86SIM_DARLING_BUILD X86CODE_METAL MTLVK_DEVICE VK_ICD_FILENAMES MESA_VK_DEVICE_SELECT DISPLAY"
+_x86sim_keys="X86SIM_ARCH X86SIM_PREFIX X86SIM_RUNTIME X86SIM_DEVICE X86SIM_STATE X86SIM_SCRATCH X86SIM_MTLVK X86SIM_MAC X86SIM_SCREENS X86SIM_BOOT_SECS X86SIM_DPREFIX X86SIM_DARLING_BUILD X86SIM_METAL MTLVK_DEVICE VK_ICD_FILENAMES MESA_VK_DEVICE_SELECT DISPLAY"
 _x86sim_saved=""
 for _k in $_x86sim_keys; do
 	eval "_v=\${$_k+set}"
@@ -17,7 +17,7 @@ for _k in $_x86sim_saved; do eval "$_k=\$_x86sim_env_$_k"; done
 : "${X86SIM_RUNTIME:=$X86SIM_ROOT/runtimes/ios-27.2-24B8117-arm64/RuntimeRoot}"
 : "${X86SIM_DEVICE:=$X86SIM_ROOT/var/device-a64}"
 : "${X86SIM_STATE:=$X86SIM_ROOT/var/run}"
-: "${X86SIM_SCRATCH:=$HOME/scratch/x86code}"
+: "${X86SIM_SCRATCH:=$HOME/scratch/x86sim}"
 : "${X86SIM_MTLVK:=$X86SIM_ROOT/linux/mtlvk/target/release/mtlvk}"
 : "${X86SIM_MAC:=}"
 : "${X86SIM_SCREENS:=$X86SIM_ROOT/docs/screens}"
@@ -27,9 +27,9 @@ for _k in $_x86sim_saved; do eval "$_k=\$_x86sim_env_$_k"; done
 : "${X86SIM_DPREFIX:=${DPREFIX:-$HOME/.darling}}"   # the Darling container prefix (DPREFIX)
 export X86SIM_ARCH X86SIM_ROOT X86SIM_PREFIX X86SIM_RUNTIME X86SIM_DEVICE X86SIM_STATE X86SIM_SCRATCH X86SIM_MTLVK X86SIM_MAC \
 	X86SIM_SCREENS X86SIM_BOOT_SECS X86SIM_DPREFIX X86SIM_DARLING_BUILD
-for _k in X86CODE_METAL MTLVK_DEVICE VK_ICD_FILENAMES MESA_VK_DEVICE_SELECT; do eval "if [ -n \"\${$_k+x}\" ]; then export $_k; fi"; done
+for _k in X86SIM_METAL MTLVK_DEVICE VK_ICD_FILENAMES MESA_VK_DEVICE_SELECT; do eval "if [ -n \"\${$_k+x}\" ]; then export $_k; fi"; done
 # the phone's frame ring unless the caller chose one
-if [ -z "${SIMFB_RING_LINUX+x}" ]; then export SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring; fi
+if [ -z "${SIMFB_RING_LINUX+x}" ]; then export SIMFB_RING_LINUX=/dev/shm/x86sim-a64-simfb.ring; fi
 # derived
 X86SIM_DARLING="$X86SIM_PREFIX/bin/darling"
 X86SIM_DVIEW=/Volumes/SystemRoot   # Linux / as seen inside Darling

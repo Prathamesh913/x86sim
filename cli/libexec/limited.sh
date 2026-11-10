@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86Code: run a command (the simulator stack) in a systemd user scope with a disk read/write cap and low IO/CPU
+# x86Sim: run a command (the simulator stack) in a systemd user scope with a disk read/write cap and low IO/CPU
 # weight (and optionally a memory cap: X86SIM_MEM_MAX, e.g. 6G; unset = none). A cold boot re-reads the runtime from disk whenever the page cache was evicted (~185 MB/s uncapped), which
 # stalls the rest of the desktop; every process the stack spawns (apps, mtlvk, darlingserver) stays in the scope.
 # X86SIM_IO_MAX bytes/s (default 40M; 0 = no scope), X86SIM_IO_IOPS (default 4000), X86SIM_IO_DEV (default: the

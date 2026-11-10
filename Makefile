@@ -1,4 +1,4 @@
-# x86Code: build everything that can be built on Linux. Paths come from cli/lib/config.sh (x86sim.env).
+# x86Sim: build everything that can be built on Linux. Paths come from cli/lib/config.sh (x86sim.env).
 # The simulator-side binaries in host/ are Mach-O and are built on a Mac (make mac, see docs/DEVELOPMENT.md).
 
 ROOT := $(CURDIR)
@@ -42,7 +42,7 @@ darling-install: darling-configure
 
 mac:
 	build/mac-build-simhost.sh
-	build/mac-build-arm64-shims.sh simshim simaudio simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig
+	build/mac-build-arm64-shims.sh simshim simaudio simfb simhid metalhostd iosurfaced mtlprobe openurl netconfig fpsim2host
 
 mac-diag:
 	build/mac-build-diag.sh

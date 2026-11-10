@@ -1,11 +1,11 @@
-// x86Code: diagnostic shim: os_log messages to a file, without logd/diagnosticd.
-// With X86CODE_NODT (OS_ACTIVITY_MODE=disable) os_log is off; DT mode streams to diagnosticd and blocks
+// x86Sim: diagnostic shim: os_log messages to a file, without logd/diagnosticd.
+// With X86SIM_NODT (OS_ACTIVITY_MODE=disable) os_log is off; DT mode streams to diagnosticd and blocks
 // senders when it stalls. This interposes os_log_type_enabled (true) and _os_log_impl & co. and formats
 // the message itself (scalars, strings, objects via -description; privacy annotations ignored).
-// Only in processes named in X86CODE_OSLOG or data/oslog.filter (comma-separated program names, or "all").
+// Only in processes named in X86SIM_OSLOG or data/oslog.filter (comma-separated program names, or "all").
 // Log: data/var/log/oslog.<prog>.<pid>.log
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <os/log.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -29,13 +29,13 @@ static __thread int busy;
 static int on(void)
 {
 	if (enabled < 0) {
-		const char* e = getenv("X86CODE_OSLOG");
+		const char* e = getenv("X86SIM_OSLOG");
 		static char fbuf[1024];
 #ifdef SIMSHIM_OSLOG
-		// x86Code: built into libsimshim (build/mac-build-simshim.sh) for `x86sim launch --oslog` / `x86sim log
-		// stream --app`: only the environment (X86CODE_OSLOG, set for one app through FrontBoard's debug options;
-		// DYLD_INSERT_LIBRARIES given that way is replaced by launchd's), log directory X86CODE_OSLOG_DIR
-		const char* dir = getenv("X86CODE_OSLOG_DIR");
+		// x86Sim: built into libsimshim (build/mac-build-simshim.sh) for `x86sim launch --oslog` / `x86sim log
+		// stream --app`: only the environment (X86SIM_OSLOG, set for one app through FrontBoard's debug options;
+		// DYLD_INSERT_LIBRARIES given that way is replaced by launchd's), log directory X86SIM_OSLOG_DIR
+		const char* dir = getenv("X86SIM_OSLOG_DIR");
 		if (!dir) e = NULL;
 #else
 		static char dirbuf[1100]; snprintf(dirbuf, sizeof(dirbuf), "%s/var/log", diag_data_dir());
@@ -156,7 +156,7 @@ static void emit(os_log_t log, os_log_type_t type, const char* fmt, uint8_t* buf
 				(unsigned) pthread_mach_thread_np(pthread_self()),
 				type == OS_LOG_TYPE_ERROR ? "E: " : type == OS_LOG_TYPE_FAULT ? "F: " : "", out);
 			write(fd, line, n < 8400 ? n : 8399);
-			// x86Code: call stack for messages containing the first line of data/oslog.bt (max 8 per process)
+			// x86Sim: call stack for messages containing the first line of data/oslog.bt (max 8 per process)
 			static char bt[256]; static int btinit, btn;
 #ifndef SIMSHIM_OSLOG
 			if (!btinit) { btinit = 1; char bp[1100]; snprintf(bp, sizeof(bp), "%s/oslog.bt", diag_data_dir()); int bfd = open(bp, O_RDONLY);

@@ -1,5 +1,5 @@
 #!/bin/sh
-# x86Code: make the Darling pieces a boot uses match our build, so a recreated prefix can't lose fixes again.
+# x86Sim: make the Darling pieces a boot uses match our build, so a recreated prefix can't lose fixes again.
 # (2026-11-01: $X86SIM_SCRATCH/a64prefix was recreated and lost the libsystem_kernel installed there in Speed 12, whose
 # dserver RPC fix stops "Bad S2C call: no FD, but expected one" aborts; backboardd then died on Photos/Maps launches.)
 #
@@ -29,7 +29,7 @@ src/external/libkqueue/libkqueue_sim.dylib usr/lib/darling/libkqueue_sim.dylib p
 install1() {  # <src> <dst>
 	mkdir -p "$(dirname "$2")" && cp "$1" "$2.heal.$$" && mv -f "$2.heal.$$" "$2" && echo "  prefix-heal: installed $2"
 }
-TMPD=$(mktemp -d /tmp/x86code-heal.XXXXXX) || exit 0
+TMPD=$(mktemp -d /tmp/x86sim-heal.XXXXXX) || exit 0
 echo "$MANIFEST" | while read -r src dst opt; do
 	[ -n "$src" ] || continue
 	if [ ! -f "$B/$src" ]; then echo "  prefix-heal: no build output $src (not built?)"; continue; fi

@@ -1,5 +1,5 @@
 // Speed 4: fuse_svc_ret stress — many svc;ret thunks (libsystem) + nested work that
-// exercises return-to-LR after CallSVC. Compare X86CODE_A64_FUSE_SVC=0 vs =1.
+// exercises return-to-LR after CallSVC. Compare X86SIM_A64_FUSE_SVC=0 vs =1.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +49,7 @@ static void *worker(void *arg) {
 }
 
 int main(void) {
-    const char *fuse = getenv("X86CODE_A64_FUSE_SVC");
+    const char *fuse = getenv("X86SIM_A64_FUSE_SVC");
     printf("fusestress: FUSE_SVC=%s\n", fuse ? fuse : "(unset)");
     uint64_t t0 = now_ns();
     uint64_t solo = hammer(99, 20000);

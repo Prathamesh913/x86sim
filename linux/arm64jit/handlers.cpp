@@ -291,10 +291,10 @@ static void h_vm_deallocate(GuestThread &t, u32 i) {
 // memory: a range with a file, shared or memfd mapping in it fails with EINVAL, which is the XNU behaviour for those:
 // vm_map_reusable_pages skips them), then MADV_DONTNEED so the pages go at once (MADV_FREE alone waits for host
 // pressure and stays in PSS). Whole pages inside the range only. MADV_FREE_REUSE (8) / MADV_CAN_REUSE (9) are
-// accounting on XNU: 0. X86CODE_A64_MADV_FREE=0: the old pass-through (no-op); X86CODE_A64_MADVLOG=1: census in the log.
+// accounting on XNU: 0. X86SIM_A64_MADV_FREE=0: the old pass-through (no-op); X86SIM_A64_MADVLOG=1: census in the log.
 static void h_madvise(GuestThread &t, u32 i) {
-    static const bool off = getenv("X86CODE_A64_MADV_FREE") && atoi(getenv("X86CODE_A64_MADV_FREE")) == 0;
-    static const bool census = getenv("X86CODE_A64_MADVLOG") != nullptr;
+    static const bool off = getenv("X86SIM_A64_MADV_FREE") && atoi(getenv("X86SIM_A64_MADV_FREE")) == 0;
+    static const bool census = getenv("X86SIM_A64_MADVLOG") != nullptr;
     const int adv = (int)t.x(2);
     if (off || (adv != 5 && adv != 7)) {
         if (census) logf("madvise %#lx +%#lx advice %d (pass-through)", (unsigned long)t.x(0), (unsigned long)t.x(1), adv);
@@ -346,9 +346,9 @@ static void h_mincore(GuestThread &t, u32 i) {
         vec[p] = ((v[4 * p] | v[4 * p + 1] | v[4 * p + 2] | v[4 * p + 3]) & 1) ? 1 /* MINCORE_INCORE */ : 0;
     t.set_x(0, 0);
 }
-// RAM 12 census only (X86CODE_A64_MADVLOG): (mach_)vm_behavior_set(task, addr, size, behavior)
+// RAM 12 census only (X86SIM_A64_MADVLOG): (mach_)vm_behavior_set(task, addr, size, behavior)
 static void h_behavior_set(GuestThread &t, u32 i) {
-    static const bool census = getenv("X86CODE_A64_MADVLOG") != nullptr;
+    static const bool census = getenv("X86SIM_A64_MADVLOG") != nullptr;
     if (census) logf("vm_behavior_set %#lx +%#lx behavior %d", (unsigned long)t.x(1), (unsigned long)t.x(2), (int)t.x(3));
     h_generic(t, i);
 }
@@ -368,7 +368,7 @@ static void h_vm_map(GuestThread &t, u32 i) {
 // its flags) vanished: Maps' route card aborted with "attribute failed to set an initial value" (varying
 // attributes). Now the source is made read-only first; a thread that writes to it meanwhile faults, waits in
 // remap_fault_wait (host.cpp on_fault) until the protection is back, and retries its store on the shared pages.
-// Opt-in (X86CODE_A64_REMAP_FREEZE=1): it did not fix the Maps abort (one 1 MB remap there, still aborted), and nothing
+// Opt-in (X86SIM_A64_REMAP_FREEZE=1): it did not fix the Maps abort (one 1 MB remap there, still aborted), and nothing
 // becomes default without three clean gate boots.
 std::atomic<u64> g_remap_lo{0}, g_remap_hi{0};
 // Speed 36: the whole range [a, a + len) (several mappings after darlingserver's piecewise remap): *prot is the common
@@ -395,7 +395,7 @@ static void h_vm_remap(GuestThread &t, u32 i) {
     u64 ints[16]; load_regs(t, ints);
     u64 sp = t.sp();
     ints[8] = GuestThread::rd<u64>(sp); ints[9] = GuestThread::rd<u64>(sp + 8); ints[10] = GuestThread::rd<uint32_t>(sp + 16);
-    static const bool freeze = [] { const char *e = getenv("X86CODE_A64_REMAP_FREEZE"); return e && *e == '1'; }();
+    static const bool freeze = [] { const char *e = getenv("X86SIM_A64_REMAP_FREEZE"); return e && *e == '1'; }();
     const u64 src = ints[6] & ~0x3fffull, len = ((ints[6] + ints[2] + 0x3fff) & ~0x3fffull) - src;
     int prot = 0; bool priv = false;
     if (!freeze || (u32)ints[7] != 0 || ints[0] != ints[5] || !ints[2] || !remap_prot_of(src, len, &prot, &priv) || !priv ||
@@ -521,14 +521,14 @@ static void h_pthread_exit(GuestThread &t, u32 i) {
         }
         t.set_x(0, exit_value);
     }
-    if (main_thread && !getenv("X86CODE_A64_MAIN_EXIT_NOTSD")) {
+    if (main_thread && !getenv("X86SIM_A64_MAIN_EXIT_NOTSD")) {
         logf("pthread_exit on the main thread (linux tid %ld, pid %d): TSD destructors, then parking it",
              (long)syscall(SYS_gettid), (int)getpid());
         // libdispatch's _dispatch_queue_cleanup2 ends in _dispatch_sig_thread (sigsuspend forever on this thread)
         t.run_guest_tsd_destructors();
     }
     if (main_thread) {
-        if (getenv("X86CODE_A64_MAIN_EXIT_NOTSD")) logf("pthread_exit on the main thread (pid %d): parking it", (int)getpid());
+        if (getenv("X86SIM_A64_MAIN_EXIT_NOTSD")) logf("pthread_exit on the main thread (pid %d): parking it", (int)getpid());
         static auto *dsleep = (unsigned (*)(unsigned))dsym("sleep");
         for (;;) dsleep(100000);
     }
@@ -558,9 +558,9 @@ static void h_kill_like(GuestThread &t, u32 i) {
     if (t.x(1) == 6) {
         logf("%s(SIGABRT): guest backtrace", g_thunks[i].name.c_str());
         guest_backtrace(t);
-        // Speed 29 debug: X86CODE_A64_ABORT_MSG=<hex addr>[,...]: guest char* globals holding the abort message (e.g.
+        // Speed 29 debug: X86SIM_A64_ABORT_MSG=<hex addr>[,...]: guest char* globals holding the abort message (e.g.
         // AttributeGraph's precondition text), printed if set
-        if (const char *e = getenv("X86CODE_A64_ABORT_MSG"))
+        if (const char *e = getenv("X86SIM_A64_ABORT_MSG"))
             for (const char *q = e; *q;) {
                 char *end;
                 const u64 a = strtoull(q, &end, 16);
@@ -568,10 +568,10 @@ static void h_kill_like(GuestThread &t, u32 i) {
                 if (const char *m = *(const char *const *)a) logf("abort message at %#llx: %.2000s", (unsigned long long)a, m);
                 q = *end == ',' ? end + 1 : end;
             }
-        // Speed 30 debug: X86CODE_A64_ABORT_TSD=<hex address of a pthread key variable>: that key's value on the
+        // Speed 30 debug: X86SIM_A64_ABORT_TSD=<hex address of a pthread key variable>: that key's value on the
         // aborting thread (guest TSD) and the 0x80 bytes it points to (low bit cleared), plus the frame words of an
         // AttributeGraph UpdateStack chain (count +104, buffer +96 or inline +32, previous link scanned from the dump)
-        if (const char *e = getenv("X86CODE_A64_ABORT_TSD")) {
+        if (const char *e = getenv("X86SIM_A64_ABORT_TSD")) {
             auto rdv = [](u64 a, void *buf, size_t n) {
                 iovec l{buf, n}, r{(void *)a, n};
                 return process_vm_readv(getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
@@ -594,16 +594,16 @@ static void h_kill_like(GuestThread &t, u32 i) {
                     n += snprintf(line + n, sizeof line - n, " %x/%x", (unsigned)fr, (unsigned)(fr >> 32));
                 }
                 logf("abort tsd: stack %d frames(%llu):%s", depth, (unsigned long long)cnt, line);
-                if (depth == 0 && cnt && getenv("X86CODE_A64_AGOUT")) {  // Speed 31: the top frame's output-value trace
+                if (depth == 0 && cnt && getenv("X86SIM_A64_AGOUT")) {  // Speed 31: the top frame's output-value trace
                     u64 fr = 0; rdv(buf + 8 * (cnt - 1), &fr, 8);
                     agout_dump((u32)fr);
                 }
                 v = w[1];  // guess: previous UpdateStack (checked by the dump shape)
             }
         }
-        // X86CODE_A64_ABORT_STRINGS=1: C strings pointed to from the aborting thread's stack (the formatted abort
+        // X86SIM_A64_ABORT_STRINGS=1: C strings pointed to from the aborting thread's stack (the formatted abort
         // message usually sits in a caller's frame); memory is read with process_vm_readv, so bad pointers are skipped
-        if (getenv("X86CODE_A64_ABORT_STRINGS")) {
+        if (getenv("X86SIM_A64_ABORT_STRINGS")) {
             auto rd = [](u64 a, void *buf, size_t n) {
                 iovec l{buf, n}, r{(void *)a, n};
                 return process_vm_readv(getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
@@ -627,32 +627,32 @@ static void h_kill_like(GuestThread &t, u32 i) {
 
 void print_stats();
 static void h_exit(GuestThread &t, u32 i) {  // __exit: the guest process ends here
-    if (getenv("X86CODE_A64_AOT_BUILD")) jitcache_aot_build(t);
+    if (getenv("X86SIM_A64_AOT_BUILD")) jitcache_aot_build(t);
     print_stats();
     jitcache_save_on_exit();
     ((void (*)(int))g_thunks[i].native)((int)t.x(0));
 }
 
 // ---- guest timebase (Speed 10) ---------------------------------------------------------------------------------------
-// X86CODE_A64_TIMEBASE=apple: the guest sees Apple silicon's timebase (125/3, a 24 MHz counter) instead of Darling's
+// X86SIM_A64_TIMEBASE=apple: the guest sees Apple silicon's timebase (125/3, a 24 MHz counter) instead of Darling's
 // 1/1 (mach time in ns). Code compiled for arm64 inlines 125/3 in places (libswift_Concurrency's deadline conversion,
 // libdispatch's dispatch_time_to_nsecs/_from_nsec), so with 1/1 those deadlines were ~41x off. Values cross at the
 // thunks: returned mach times are scaled down (ns * 3 / 125), mach-time arguments up (ticks * 125 / 3) before Darling
 // sees them (mach_wait_until, mk_timer_arm*, EVFILT_TIMER with NOTE_MACHTIME, and the changes workqueue threads hand
-// back). CNTVCT_EL0 counts at 24 MHz (jit.cpp). Default since Speed 11; X86CODE_A64_TIMEBASE=1to1 gives the guest
+// back). CNTVCT_EL0 counts at 24 MHz (jit.cpp). Default since Speed 11; X86SIM_A64_TIMEBASE=1to1 gives the guest
 // Darling's 1/1 again (with the Swift deadline patch, jit.cpp; rebuild the image).
 bool strict_monitor() {
-    static const bool on = getenv("X86CODE_A64_STRICT_MONITOR") && atoi(getenv("X86CODE_A64_STRICT_MONITOR")) == 1;
+    static const bool on = getenv("X86SIM_A64_STRICT_MONITOR") && atoi(getenv("X86SIM_A64_STRICT_MONITOR")) == 1;
     return on;
 }
 bool timebase_apple() {
-    static const bool on = [] { const char *e = getenv("X86CODE_A64_TIMEBASE"); return !e || strcmp(e, "1to1") != 0; }();
+    static const bool on = [] { const char *e = getenv("X86SIM_A64_TIMEBASE"); return !e || strcmp(e, "1to1") != 0; }();
     return on;
 }
 u64 tb_ns_to_ticks(u64 ns) { return (u64)((unsigned __int128)ns * 3 / 125); }
-static bool tb_debug() {  // X86CODE_A64_TB_DEBUG=1: log the first 40 converted values per process
+static bool tb_debug() {  // X86SIM_A64_TB_DEBUG=1: log the first 40 converted values per process
     static std::atomic<int> n{0};
-    static const bool on = getenv("X86CODE_A64_TB_DEBUG") != nullptr;
+    static const bool on = getenv("X86SIM_A64_TB_DEBUG") != nullptr;
     return on && n.fetch_add(1) < 40;
 }
 static u64 tb_ticks_to_ns(u64 t) {
@@ -762,13 +762,13 @@ static Handler timebase_handler(const std::string &n) {
 // root; then it asks the AX server in backboardd over IPC with a 1 s timeout. backboardd is "root" too, so it blocked on
 // its own server, and every app's AX preference read (a dozen at Settings' launch: button shapes, reduce motion, ...)
 // waited out the timeout: Settings showed a black screen for ~17 s. Only calls from libAccessibility's code: launchd_sim's
-// domain is uid 0, and a non-root launchd refused to bootstrap any job. X86CODE_A64_AX_EUID overrides (0: as before).
+// domain is uid 0, and a non-root launchd refused to bootstrap any job. X86SIM_A64_AX_EUID overrides (0: as before).
 static u64 g_ax_lo, g_ax_hi;
 void ax_euid_prepare(const std::string &cache) {
     cache_exports(cache, "/usr/lib/libAccessibility.dylib", nullptr, &g_ax_lo, &g_ax_hi);
 }
 static void h_geteuid(GuestThread &t, u32) {
-    static const u64 ax = [] { const char *e = getenv("X86CODE_A64_AX_EUID"); return e ? strtoull(e, nullptr, 10) : 501ull; }();
+    static const u64 ax = [] { const char *e = getenv("X86SIM_A64_AX_EUID"); return e ? strtoull(e, nullptr, 10) : 501ull; }();
     static auto *dgeteuid = (uid_t (*)())dsym("geteuid");
     const u64 lr = t.x(30);
     if (ax && lr >= g_ax_lo && lr < g_ax_hi) { t.set_x(0, ax); return; }
@@ -788,12 +788,12 @@ bool special_needs_native(const std::string &n) {
 // at an address it ran before (JavaScriptCore's JIT reusing freed executable memory) kept its stale translation.
 // WebContent then ran old code over new data (NULL reads in JIT code on en.wikipedia.org; with the AOT image JSC is
 // fast enough to tier up and recycle code). They now invalidate the range in the JIT, as an arm64 IC IVAU loop would.
-// X86CODE_A64_ICACHE_NATIVE=0: the old no-op (debug).
+// X86SIM_A64_ICACHE_NATIVE=0: the old no-op (debug).
 static void icache_invalidate(GuestThread &t, u64 a, u64 n) {
-    static const bool off = getenv("X86CODE_A64_ICACHE_NATIVE") && atoi(getenv("X86CODE_A64_ICACHE_NATIVE")) == 0;
+    static const bool off = getenv("X86SIM_A64_ICACHE_NATIVE") && atoi(getenv("X86SIM_A64_ICACHE_NATIVE")) == 0;
     if (!n || !t.jit || off) return;
     const u64 lo = a & ~u64(63), hi = (a + n + 63) & ~u64(63);
-    if (getenv("X86CODE_A64_ICLOG")) logf("sys_icache_invalidate %#lx +%#lx", (unsigned long)a, (unsigned long)n);
+    if (getenv("X86SIM_A64_ICLOG")) logf("sys_icache_invalidate %#lx +%#lx", (unsigned long)a, (unsigned long)n);
     t.jit->InvalidateCacheRange(lo, hi - lo);
 }
 static void h_icache_invalidate(GuestThread &t, u32) { icache_invalidate(t, t.x(0), t.x(1)); }

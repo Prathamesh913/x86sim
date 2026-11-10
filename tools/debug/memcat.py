@@ -2,15 +2,15 @@
 """RAM 1: PSS of the running arm64 sim by mapping category and by process, from /proc/<pid>/smaps.
 
 The sim = the darlingserver of A64_DPREFIX (default $X86SIM_SCRATCH/a64prefix) and all its descendants, plus mtlvk
-(the same set as `x86code-aot sim status`). Categories:
+(the same set as `x86sim-aot sim status`). Categories:
   runtime-files   the runtime's files, mostly the dyld shared cache (clean, shared page cache)
   aot.map/.idx    the AOT image and its index (clean, shared; COW'd link patches show under pd)
-  aot.map(huge)   the image's 2 MB-page copy on tmpfs (X86CODE_A64_AOT_HUGE_DIR); its whole size is RAM
+  aot.map(huge)   the image's 2 MB-page copy on tmpfs (X86SIM_A64_AOT_HUGE_DIR); its whole size is RAM
   anon/<perm>     anonymous memory (guest heaps, Darling, libarm64jit/dynarmic); rwxp = JIT code
   heap            glibc's brk heap (libarm64jit/dynarmic/mldr; mtlvk)
   nvidia-*        the NVIDIA driver (mtlvk)
   memfd:*         Darling memory entries (IOSurfaces), frozen vm_remap copies, libsystem stubs
-  a64:*           the JIT's own anonymous memory (named by default since RAM 2; X86CODE_A64_VMANAME=0 off):
+  a64:*           the JIT's own anonymous memory (named by default since RAM 2; X86SIM_A64_VMANAME=0 off):
                   a64:codecache = code each process translated itself (the part of the code cache the image does not
                   cover), a64:fastdispatch / lfmap / slmap = dispatch tables, a64:meta:blocks / links / fastmem /
                   relocs / ranges = the emitter's per-block metadata
@@ -26,9 +26,9 @@ import os
 import re
 import sys
 
-SCR = os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86code"))
+SCR = os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86sim"))
 PREFIX = os.environ.get("A64_DPREFIX", os.path.join(SCR, "a64prefix"))
-HUGE_DIR = os.environ.get("X86CODE_A64_AOT_HUGE_DIR", "/tmp/x86code-a64-img")
+HUGE_DIR = os.environ.get("X86SIM_A64_AOT_HUGE_DIR", "/tmp/x86sim-a64-img")
 
 
 def rd(p):

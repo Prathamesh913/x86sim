@@ -10,7 +10,7 @@
 #define VKMTL_PROTO_H
 #include <stdint.h>
 
-#define VKMTL_SOCKET_DEFAULT "/tmp/x86code-mtlvk.sock"
+#define VKMTL_SOCKET_DEFAULT "/tmp/x86sim-mtlvk.sock"
 #define VKMTL_VERSION 1
 
 typedef struct { uint32_t op, size; uint64_t seq; } vkmtl_hdr;
@@ -68,7 +68,7 @@ enum {
 	// a texture over a buffer's bytes (IOSurface plane, or newTextureWithDescriptor:offset:bytesPerRow:):
 	// {u64 id, u64 buffer, vkmtl_texdesc, u64 offset, u64 bytesPerRow, u32 iosurface, u32 planar} -> as TEX_NEW
 	VKMTL_TEX_NEW_BUF = 21,
-	// x86Code: a texture view: {u64 id, u64 parent, u32 pixelFormat, u32 textureType, u64 levelStart, u64 levelCount,
+	// x86Sim: a texture view: {u64 id, u64 parent, u32 pixelFormat, u32 textureType, u64 levelStart, u64 levelCount,
 	//  u64 sliceStart, u64 sliceCount, u32 hasSwizzle, u32 swizzle (r,g,b,a bytes)} -> {i32 status, u32 pad, u64 0}
 	VKMTL_TEX_VIEW = 22,
 

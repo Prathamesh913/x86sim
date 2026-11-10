@@ -1,4 +1,4 @@
-// x86Code: diagnostic shim (Speed 27, arm64): AttributeGraph update deadlines. Logs AGGraphSetDeadline (the deadline
+// x86Sim: diagnostic shim (Speed 27, arm64): AttributeGraph update deadlines. Logs AGGraphSetDeadline (the deadline
 // relative to now, in ms), every AGGraphCancelUpdateIfNeeded / AGGraphHasDeadlinePassed that returns true, with the
 // overshoot. Why: Maps' route card aborted with "precondition failure: attribute failed to set an initial value"
 // after AG::Graph::UpdateStack::cancel. Processes named in data/oslog.filter. Log: data/var/log/agdiag.<prog>.<pid>.log
@@ -28,7 +28,7 @@ static int on(void)
 {
 	if (en < 0) {
 		char buf[1024] = {0};
-		int f = open(X86CODE_DATA_DIR "/oslog.filter", O_RDONLY);
+		int f = open(X86SIM_DATA_DIR "/oslog.filter", O_RDONLY);
 		en = 0;
 		if (f >= 0) {
 			ssize_t n = read(f, buf, sizeof(buf) - 1); close(f);
@@ -39,7 +39,7 @@ static int on(void)
 		}
 		if (en) {
 			char p[512];
-			snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/agdiag.%s.%d.log", getprogname(), getpid());
+			snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/agdiag.%s.%d.log", getprogname(), getpid());
 			lfd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 			if (lfd < 0) en = 0;
 			mach_timebase_info_data_t tb; mach_timebase_info(&tb);

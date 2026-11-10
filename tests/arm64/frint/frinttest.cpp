@@ -1,4 +1,4 @@
-// x86Code Speed 34: inline FRINT* (x64 backend) vs dynarmic's software FPRoundInt, edge cases + random.
+// x86Sim Speed 34: inline FRINT* (x64 backend) vs dynarmic's software FPRoundInt, edge cases + random.
 // Build/run: tests/arm64/frint/run.sh
 #include <cstdio>
 #include <cstring>

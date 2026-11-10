@@ -1,4 +1,4 @@
-// x86Code: tiny icon generator, compiled and run on the Mac host (not part of any app).
+// x86Sim: tiny icon generator, compiled and run on the Mac host (not part of any app).
 // usage: mkicon <out.png> <size> <letter> <rrggbb>
 import Foundation
 import CoreGraphics

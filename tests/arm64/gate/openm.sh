@@ -10,7 +10,7 @@
 . "$(dirname "$0")/lib.sh"
 O=${GATE_OUT:-$SCR/gate}/$1; shift; mkdir -p "$O"; HL=$SCR/simhid.log
 declare -A XY=([Settings]="1020 967" [Messages]="744 2444" [Health]="188 967" [Wallet]="464 967" [Maps]="744 668"
-	[x86ui]="id com.x86code.test.x86ui" [Cadence]="id com.designgears.alarm" [Calendar]="744 368" [Photos]="1020 368" [News]="1020 668" [Safari]="468 2444")
+	[x86ui]="id com.x86sim.test.x86ui" [Cadence]="id com.designgears.alarm" [Calendar]="744 368" [Photos]="1020 368" [News]="1020 668" [Safari]="468 2444")
 declare -A PROC=([Settings]=Preferences [Messages]=MobileSMS [Health]=Health [Wallet]=Passbook [Maps]=Maps
 	[Calendar]=MobileCal [Photos]=MobileSlideShow [News]=News [Safari]=MobileSafari [x86ui]=x86ui [Cadence]=Cadence)
 APPS=("$@"); [ ${#APPS[@]} = 0 ] && APPS=(Settings Messages Health Wallet Maps)

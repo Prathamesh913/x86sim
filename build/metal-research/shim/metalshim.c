@@ -1,4 +1,4 @@
-// x86Code research: symbols Apple's Metal toolchain (macOS 14+) imports that Darling's libSystem/libc++ lack.
+// x86Sim research: symbols Apple's Metal toolchain (macOS 14+) imports that Darling's libSystem/libc++ lack.
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>

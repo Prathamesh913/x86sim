@@ -1,13 +1,13 @@
 <div align="center">
 
-# x86Code
+# x86Sim
 
 **Apple's iOS simulator on Linux.**
 
 Run the real iOS 27 simulator on an ordinary x86-64 Linux PC, with GPU graphics, touch and keyboard input. No Mac
 required.
 
-[Download](https://github.com/x86code/x86code/releases) · [Architecture](docs/ARCHITECTURE.md) · [Developing](docs/DEVELOPMENT.md) · [Releasing](docs/RELEASE.md)
+[Download](https://github.com/x86sim/x86sim/releases) · [Architecture](docs/ARCHITECTURE.md) · [Developing](docs/DEVELOPMENT.md) · [Releasing](docs/RELEASE.md)
 
 <img src="docs/screens/arm64/32-speed1c-gpu-home.png" width="220" alt="iOS 27 home screen">&nbsp;&nbsp;
 <img src="docs/screens/arm64/33-speed2-settings-gpu.png" width="220" alt="iOS 27 Settings">
@@ -15,7 +15,7 @@ required.
 </div>
 
 > [!NOTE]
-> x86Code is in early pre-release. It works, but expect rough edges.
+> x86Sim is in early pre-release. It works, but expect rough edges.
 
 ## Features
 
@@ -29,11 +29,11 @@ required.
 
 ## Getting started
 
-1. Download the latest `x86code-*-x86_64.AppImage` from [Releases](https://github.com/x86code/x86code/releases).
+1. Download the latest `x86sim-*-x86_64.AppImage` from [Releases](https://github.com/x86sim/x86sim/releases).
 2. Make it executable and run it:
    ```sh
-   chmod +x x86code-*-x86_64.AppImage
-   ./x86code-*-x86_64.AppImage
+   chmod +x x86sim-*-x86_64.AppImage
+   ./x86sim-*-x86_64.AppImage
    ```
 3. Follow the Setup page. It checks your system, prepares the simulator host, downloads iOS from Apple (about 8 GB),
    pre-translates it and creates your first phone.
@@ -52,7 +52,7 @@ once.
 
 ## How it works
 
-Apple ships the iOS 27 simulator only for Apple-silicon Macs. x86Code makes it run on a PC:
+Apple ships the iOS 27 simulator only for Apple-silicon Macs. x86Sim makes it run on a PC:
 
 - **[Darling](https://github.com/darlinghq/darling)** provides the macOS-compatible system layer: processes, Mach IPC
   and the file system, extended for the iOS simulator.
@@ -61,7 +61,7 @@ Apple ships the iOS 27 simulator only for Apple-silicon Macs. x86Code makes it r
 - **System calls go native.** iOS reaches the kernel through a few system libraries, whose calls are handed straight
   to x86 code.
 - **Graphics, input and networking** are served by small native Linux services; Metal runs on Vulkan through
-  [metal2vulkan](https://github.com/x86code/metal2vulkan).
+  [metal2vulkan](https://github.com/x86sim/metal2vulkan).
 
 See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture and [WORKAROUNDS.md](docs/WORKAROUNDS.md) for what is
 approximated.
@@ -69,8 +69,8 @@ approximated.
 ## Building from source
 
 ```sh
-git clone --recursive https://github.com/x86code/x86code.git
-cd x86code
+git clone --recursive https://github.com/x86sim/x86sim.git
+cd x86sim
 ```
 
 Then follow [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Release AppImages are built by `build/release/` and GitHub
@@ -78,8 +78,8 @@ Actions.
 
 ## License
 
-x86Code is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE). Bundled components
+x86Sim is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE). Bundled components
 keep their own licenses; see [NOTICE](NOTICE).
 
 Apple's iOS runtimes, SDKs and Xcode are not included and are never redistributed. Apple, iPhone, iPad, iOS, Xcode and
-Metal are trademarks of Apple Inc. x86Code is not affiliated with or endorsed by Apple.
+Metal are trademarks of Apple Inc. x86Sim is not affiliated with or endorsed by Apple.

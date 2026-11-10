@@ -1,4 +1,4 @@
-// x86Code RAM 3: guest loads/stores/exclusives/atomics through fastmem, with the inline address check (checked) and
+// x86Sim RAM 3: guest loads/stores/exclusives/atomics through fastmem, with the inline address check (checked) and
 // without it (unchecked: a tagged address faults into the fastmem handler). Both must give the same registers and
 // memory, for untagged and top-byte-tagged pointers. Guest code: guest.s. Build/run: tests/arm64/fastmem/run.sh
 #include <cstdio>

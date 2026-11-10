@@ -26,7 +26,7 @@ def main(a):
     for i, x in enumerate(a):
         if x == "--crop": crop = tuple(map(int, a[i + 1].split(",")))
         if x == "--clear": clear = int(a[i + 1])
-    ring = fbring.Ring(os.environ.get("SIMFB_RING_LINUX", "/dev/shm/x86code-a64-simfb.ring"))
+    ring = fbring.Ring(os.environ.get("SIMFB_RING_LINUX", "/dev/shm/x86sim-a64-simfb.ring"))
     frames, stop = [], [False]
     x0, y0, x1, y1 = crop
 

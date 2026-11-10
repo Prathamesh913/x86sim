@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code (Speed 22): extract an uncompressed Apple Archive ("AA01" headers, what a decrypted simulator-runtime AEA
+"""x86Sim (Speed 22): extract an uncompressed Apple Archive ("AA01" headers, what a decrypted simulator-runtime AEA
 holds) on Linux: regular files and directories only (enough for the runtime's cryptex disk image).
 
     aaextract.py ARCHIVE list

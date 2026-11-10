@@ -38,7 +38,7 @@ static xpc_object_t d_sync(xpc_connection_t c, xpc_object_t m)
 }
 DYLD_INTERPOSE(d_sync, xpc_connection_send_message_with_reply_sync)
 
-// x86Code: log who calls exit/_exit (SpringBoard exit(3) loop)
+// x86Sim: log who calls exit/_exit (SpringBoard exit(3) loop)
 #include <execinfo.h>
 static void exit_bt(const char* what, int code)
 {
@@ -53,7 +53,7 @@ static void d__exit(int code) { exit_bt("_exit", code); _exit(code); }
 DYLD_INTERPOSE(d_exit, exit)
 DYLD_INTERPOSE(d__exit, _exit)
 
-// x86Code: log failing sqlite3_step / sqlite3_open_v2 (with SQL, extended code, errno)
+// x86Sim: log failing sqlite3_step / sqlite3_open_v2 (with SQL, extended code, errno)
 #include <sqlite3.h>
 static int d_sqlite3_step(sqlite3_stmt* s)
 {
@@ -78,7 +78,7 @@ static int d_sqlite3_open_v2(const char* f, sqlite3** db, int fl, const char* vf
 DYLD_INTERPOSE(d_sqlite3_step, sqlite3_step)
 DYLD_INTERPOSE(d_sqlite3_open_v2, sqlite3_open_v2)
 
-// x86Code: SQLite's own error log (statement abort sites, I/O errors)
+// x86Sim: SQLite's own error log (statement abort sites, I/O errors)
 static void sqlog(void* u, int rc, const char* msg)
 {
 	char line[1000];

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live window showing the simulator's screen, with input.
-Frames come from host/simfb's shared-memory ring (cli/libexec/fbring.py; /dev/shm/x86code-a64-simfb.ring); without a ring,
-from the framebuffer.bgra dump. x86Code: GTK 4: each new frame becomes a Gdk.MemoryTexture that the GPU scales to the
+Frames come from host/simfb's shared-memory ring (cli/libexec/fbring.py; /dev/shm/x86sim-a64-simfb.ring); without a ring,
+from the framebuffer.bgra dump. x86Sim: GTK 4: each new frame becomes a Gdk.MemoryTexture that the GPU scales to the
 window, checked on every tick of the display's frame clock (so up to the display's rate, ~60 fps). The Tk version
 spent ~200 ms redrawing each 590x1278 photo image (about 5 fps).
     cli/libexec/simview.py [framebuffer.bgra] [scale-divisor]   (default: 2; the window can be resized)
@@ -13,7 +13,7 @@ Console pane (right; SIMVIEW_CONSOLE=0 hides it): last-frame age (stall check), 
 followed once a second. Logs: SIMVIEW_LOGS (colon-separated dirs), default the a64 and x86 device log dirs."""
 import glob, os, threading, socket, struct, sys, time
 import gi
-# x86Code: GTK's GPU renderers (vulkan, the default, and gl) upload the whole frame texture for every
+# x86Sim: GTK's GPU renderers (vulkan, the default, and gl) upload the whole frame texture for every
 # frame, and on the NVIDIA driver ~75% of that CPU time is kernel time inside the driver's ioctls: 46% of a core at
 # 60 fps (40% with gl). The cairo renderer scales the frame into the window's shm buffer on the CPU instead: 13%,
 # the compositor's cost unchanged (perf: tests on a synthetic 60 Hz ring). GSK_RENDERER=vulkan|gl still overrides.
@@ -124,7 +124,7 @@ def send(line):
                 s.connect(current_sock())
                 # keep simhid's on-demand keyboard attached 5 min after our last key (its default is 30 s, then
                 # the next key pays a re-attach + 1.5 s settle); see host/simhid/simhid.m kbidle
-                s.sendall(("kbidle %s\n" % os.environ.get("X86CODE_VIEWER_KB_IDLE_S", "300")).encode())
+                s.sendall(("kbidle %s\n" % os.environ.get("X86SIM_VIEWER_KB_IDLE_S", "300")).encode())
                 state["sock"] = s
             state["sock"].sendall((line + "\n").encode())
             return
@@ -159,7 +159,7 @@ def usage(sym):
 
 
 def on_activate(app):
-    win = Gtk.ApplicationWindow(application=app, title="x86Code iOS Simulator")
+    win = Gtk.ApplicationWindow(application=app, title="x86Sim iOS Simulator")
     pic = Gtk.Picture()
     pic.set_content_fit(Gtk.ContentFit.FILL)
     dw, dh = state["size"]
@@ -186,8 +186,8 @@ def on_activate(app):
         root = os.path.dirname(here)
         dirs = os.environ.get("SIMVIEW_LOGS") or ":".join([
             os.path.join(booted_device() or os.path.join(os.path.dirname(root), "var/device-a64"), "data/var/log"),
-            os.path.join(os.environ.get("X86SIM_SCRATCH") or os.path.expanduser("~/scratch/x86code"),
-                         "a64prefix/private/var/tmp/x86code-a64"),
+            os.path.join(os.environ.get("X86SIM_SCRATCH") or os.path.expanduser("~/scratch/x86sim"),
+                         "a64prefix/private/var/tmp/x86sim-a64"),
             os.path.join(x86config.data(), "var/log")])
         offs = {}
 
@@ -328,7 +328,7 @@ def on_activate(app):
         now = time.monotonic()
         state["frame_at"] = now
         f = state["fps"] = [t for t in state["fps"] if t > now - 1.0] + [now]
-        win.set_title("x86Code iOS Simulator — frame %d, %d fps" % (seq, len(f)))
+        win.set_title("x86Sim iOS Simulator — frame %d, %d fps" % (seq, len(f)))
         state["shown"] = state.get("shown", 0) + 1
         if now - state.setdefault("logged", now) >= 5:   # the draw rate, every 5 s while frames come (stdout)
             print("simview: %d of %d frames drawn in %.1f s (peak 1 s: %d fps)" % (state["shown"],
@@ -348,7 +348,7 @@ def on_activate(app):
         pic.set_paintable(Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.B8G8R8A8_PREMULTIPLIED,
                                                 GLib.Bytes.new(bytes(w * h * 4)), w * 4))
         state["frame_t"] = None
-        win.set_title("x86Code iOS Simulator — %s" % why)
+        win.set_title("x86Sim iOS Simulator — %s" % why)
 
     def watch():
         """Once a second: follow the booted phone's ring, and drop the picture when the sim stops or reboots."""
@@ -368,7 +368,7 @@ def on_activate(app):
     GLib.timeout_add_seconds(1, watch)
     blank() if not ring.seq() else None
 
-    # x86Code: event-driven. A thread sleeps on the ring (fbring.Ring.wait: a futex simfb wakes at every publish) and
+    # x86Sim: event-driven. A thread sleeps on the ring (fbring.Ring.wait: a futex simfb wakes at every publish) and
     # hands each new frame to the GTK main loop; nothing runs while the screen doesn't change (the frame-clock tick of
     # before woke the process at the display's rate all the time). Without a ring: framebuffer.bgra every 0.5 s.
     def update(done):
@@ -423,6 +423,6 @@ def on_activate(app):
     win.present()
 
 
-app = Gtk.Application(application_id="org.x86code.simview", flags=Gio.ApplicationFlags.NON_UNIQUE)
+app = Gtk.Application(application_id="org.x86sim.simview", flags=Gio.ApplicationFlags.NON_UNIQUE)
 app.connect("activate", on_activate)
 app.run([sys.argv[0]])

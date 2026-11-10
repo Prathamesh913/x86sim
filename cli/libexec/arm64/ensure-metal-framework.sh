@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86Code: iOS 27 ships Metal.framework's executable only in the dyld shared cache.
+# x86Sim: iOS 27 ships Metal.framework's executable only in the dyld shared cache.
 # On-disk tree has Info.plist, metallibs, and XPCServices/MTLCompilerService.xpc, but no Metal binary.
 # Without the on-disk executable, CFBundle / xpc_bundle cannot resolve the framework path for the
 # embedded Application XPC service, so MTLCompilerService lookups fail with "No such process" (error 3).
@@ -24,7 +24,7 @@ if ! command -v ipsw >/dev/null 2>&1; then
 	echo "ensure-metal-framework: need ipsw (dyld extract)" >&2
 	exit 1
 fi
-TMP=${X86SIM_SCRATCH:-$HOME/scratch/x86code}/metal-framework-extract
+TMP=${X86SIM_SCRATCH:-$HOME/scratch/x86sim}/metal-framework-extract
 rm -rf "$TMP"
 mkdir -p "$TMP"
 echo "ensure-metal-framework: extracting Metal from dyld cache..." >&2

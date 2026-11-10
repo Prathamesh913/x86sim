@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Input 3: guest backtraces of running arm64 processes (libarm64jit X86CODE_A64_GBT=1, e.g. through the a64-penv file:
-# "SpringBoard X86CODE_A64_GBT=1"). Asks every such process for a dump (touches <scratch>/gbt/req; each process's host
+# Input 3: guest backtraces of running arm64 processes (libarm64jit X86SIM_A64_GBT=1, e.g. through the a64-penv file:
+# "SpringBoard X86SIM_A64_GBT=1"). Asks every such process for a dump (touches <scratch>/gbt/req; each process's host
 # thread writes <scratch>/gbt/<exe>.<pid>.txt within a second) and prints the newest dump of each, cache addresses
 # symbolized with dscsym.py (image + nearest export: an internal function shows as "<export below>+off").
 #   python3 -I tools/debug/gbt.py [-n] [exe ...]     (-n: no new request, symbolize the last dumps)
@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dscsym  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SCRATCH = os.environ.get('X86SIM_SCRATCH', os.path.expanduser('~/scratch/x86code'))
+SCRATCH = os.environ.get('X86SIM_SCRATCH', os.path.expanduser('~/scratch/x86sim'))
 D = os.path.join(SCRATCH, 'gbt')
 CACHE = os.environ.get('GBT_CACHE') or glob.glob(ROOT + '/runtimes/ios-27.2-24B8117-arm64/extracted/Library/Developer/CoreSimulator/Profiles/Runtimes/*/Contents/Resources/RuntimeRoot/System/Library/Caches/com.apple.dyld/dyld_sim_shared_cache_arm64')[0]
 

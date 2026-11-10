@@ -1,4 +1,4 @@
-# x86Code release: a tag v<version>-pre<N> (or a manual run naming one) builds the AppImage and publishes a GitHub
+# x86Sim release: a tag v<version>-pre<N> (or a manual run naming one) builds the AppImage and publishes a GitHub
 # *pre-release* with the AppImage, its .zsync (for AppImageUpdate) and SHA256SUMS. Full releases (tags without -pre)
 # are not published by this workflow yet, on purpose.
 name: release
@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: x86code-appimage
+          name: x86sim-appimage
           path: dist
       - name: Check the tag
         run: |
@@ -37,7 +37,7 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          name: x86Code ${{ env.TAG }}
+          name: x86Sim ${{ env.TAG }}
           prerelease: true
           # the repo has immutable releases: assets go up while it is a draft, then it is published (next step)
           draft: true

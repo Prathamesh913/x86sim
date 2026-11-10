@@ -1,4 +1,4 @@
-// x86Code: LSE atomics / CAS / CASP on x0 (maybe top-byte tagged): words as kAtomics in fastmemtest.cpp
+// x86Sim: LSE atomics / CAS / CASP on x0 (maybe top-byte tagged): words as kAtomics in fastmemtest.cpp
 // (clang --target=arm64-apple-macos -march=armv8.1-a -c; llvm-objdump -d)
     add x9, x0, #192
     mov x16, #7

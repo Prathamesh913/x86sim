@@ -1,4 +1,4 @@
-//! x86Code: survey which functions of metallibs metal2vulkan's translator compiles for a device profile.
+//! x86Sim: survey which functions of metallibs metal2vulkan's translator compiles for a device profile.
 //! Usage: survey <profile.json> <lib.metallib>...   Function constants get zero values (false/0) so the
 //! translation is exercised; vertex and fragment functions compile alone with default lowering inputs.
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};

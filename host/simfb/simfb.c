@@ -1,4 +1,4 @@
-// x86Code: stand-in for CoreSimulator's SimFramebuffer.framework (x86_64, iOS simulator).
+// x86Sim: stand-in for CoreSimulator's SimFramebuffer.framework (x86_64, iOS simulator).
 // There is no host: one built-in display; every submitted frame is copied to
 // a shared-memory ring (see "frame output" below; cli/libexec/fbring.py) and, every 2 s, to $SIMFB_OUT (default
 // $HOME/framebuffer.bgra) as a 16-byte header {w, h, stride, seq}
@@ -24,7 +24,7 @@
 
 #define EXPORT __attribute__((visibility("default")))
 
-#ifndef WIDTH0  // x86Code: the arm64 build (iPhone 17, iOS 27) passes 1206 x 2622
+#ifndef WIDTH0  // x86Sim: the arm64 build (iPhone 17, iOS 27) passes 1206 x 2622
 #define WIDTH0 1179
 #define HEIGHT0 2556
 #endif
@@ -176,7 +176,7 @@ static void init_types(void) {
 		conn_type = _CFRuntimeRegisterClass(&c);
 		display_type = _CFRuntimeRegisterClass(&d);
 		swapchain_type = _CFRuntimeRegisterClass(&s);
-		const char* ring = getenv("SIMFB_RING") ?: "/Volumes/SystemRoot/dev/shm/x86code-simfb.ring";
+		const char* ring = getenv("SIMFB_RING") ?: "/Volumes/SystemRoot/dev/shm/x86sim-simfb.ring";
 		CFArrayRef integ = integrated_displays();
 		ndisps = integ ? (int)CFArrayGetCount(integ) : 1;
 		for (int i = 0; i < ndisps; i++) {
@@ -189,7 +189,7 @@ static void init_types(void) {
 				d->w = WIDTH; d->h = HEIGHT;
 				d->name = CFSTR("LCD"); // CA clients pick the main display by this exact name
 				d->devname = d->name;
-				d->uid = CFSTR("x86Code-main-display");
+				d->uid = CFSTR("x86Sim-main-display");
 				snprintf(d->ring_path, sizeof(d->ring_path), "%s", ring);
 			} else {
 				d->id = (uint32_t)dict_int(e, "screenID") ?: (uint32_t)(i + 1);
@@ -197,7 +197,7 @@ static void init_types(void) {
 				CFTypeRef n = dict_get(e, "displayName"), dn = dict_get(e, "deviceName");
 				d->name = n && CFGetTypeID(n) == CFStringGetTypeID() ? CFStringCreateCopy(NULL, n) : CFStringCreateWithFormat(NULL, NULL, CFSTR("LCD-%d"), i);
 				d->devname = dn && CFGetTypeID(dn) == CFStringGetTypeID() ? CFStringCreateCopy(NULL, dn) : d->name;
-				d->uid = CFStringCreateWithFormat(NULL, NULL, CFSTR("x86Code-display-%u"), d->id);
+				d->uid = CFStringCreateWithFormat(NULL, NULL, CFSTR("x86Sim-display-%u"), d->id);
 				size_t l = strlen(ring);
 				if (l > 5 && !strcmp(ring + l - 5, ".ring")) snprintf(d->ring_path, sizeof(d->ring_path), "%.*s-%u.ring", (int)(l - 5), ring, d->id);
 				else snprintf(d->ring_path, sizeof(d->ring_path), "%s-%u", ring, d->id);
@@ -262,7 +262,7 @@ EXPORT uint32_t SFBDisplayGetID(SFBDisplayRef d) { return disp_of(d)->id; }
 EXPORT uint32_t SFBDisplayGetType(SFBDisplayRef d) { return 0; }
 EXPORT CFStringRef SFBDisplayGetName(SFBDisplayRef d) { return disp_of(d)->name; }
 EXPORT CFStringRef SFBDisplayGetDisplayUID(SFBDisplayRef d) { return disp_of(d)->uid; }
-// x86Code: new in iOS 27's SimFramebuffer client interface
+// x86Sim: new in iOS 27's SimFramebuffer client interface
 EXPORT CFStringRef SFBDisplayGetDeviceName(SFBDisplayRef d) { return disp_of(d)->devname; }
 EXPORT CFStringRef SFBDisplayGetMaskPath(SFBDisplayRef d) { return NULL; }
 EXPORT uint64_t SFBDisplayGetFlags(SFBDisplayRef d) { return 1; }
@@ -340,15 +340,15 @@ EXPORT void SFBSwapchainSwapSetCallback(SFBSwapchainRef sc, void* context, dispa
 	sc->cb_queue = queue;
 }
 
-// x86Code: frame output. Every completed present is copied into a ring of RING_SLOTS frame slots in a shared-memory
-// file (default /Volumes/SystemRoot/dev/shm/x86code-simfb.ring, i.e. Linux's /dev/shm; $SIMFB_RING overrides) that
+// x86Sim: frame output. Every completed present is copied into a ring of RING_SLOTS frame slots in a shared-memory
+// file (default /Volumes/SystemRoot/dev/shm/x86sim-simfb.ring, i.e. Linux's /dev/shm; $SIMFB_RING overrides) that
 // the Linux viewers mmap (cli/libexec/fbring.py documents the layout). The slot written is never the latest one; its seq
 // is zeroed first and set after the copy, then the header's latest/seq are published (release order). The old
 // framebuffer.bgra file ($SIMFB_OUT) is still written, but at most every 2 s (and once more for the last frame), for
 // tools that read it. The header also carries present statistics (see struct ring_hdr).
 #define RING_SLOTS 4
 #define RING_HDR 4096
-// x86Code: age_us = publish time - the present's SwapSubmit time (us): a long frame interval with a small age was late
+// x86Sim: age_us = publish time - the present's SwapSubmit time (us): a long frame interval with a small age was late
 // from CA (the app/render server), a large age was held by the GPU or the refresh pacing (tests/perf.py scroll)
 struct ring_slot { _Atomic uint64_t seq; uint64_t time_ns; uint32_t width, height, stride, age_us; };
 struct ring_hdr {
@@ -367,13 +367,13 @@ _Static_assert(__builtin_offsetof(struct ring_hdr, st_submits) == 192, "ring lay
 static uint64_t file_last_ns;
 static dispatch_source_t file_timer;
 
-// x86Code: readers on Linux (simview, fbring.wait) sleep in FUTEX_WAIT on the low 32 bits of the header's
+// x86Sim: readers on Linux (simview, fbring.wait) sleep in FUTEX_WAIT on the low 32 bits of the header's
 // seq instead of polling; every publish wakes them. Darling processes are Linux processes and its userland makes
 // Linux syscalls directly, so this is Linux's futex(2) (shared, not FUTEX_PRIVATE: the page is a /dev/shm file
 // mapped by other processes).
 static void ring_wake(void* addr) {
 #if defined(__arm64__)
-	// x86Code: under libarm64jit, "svc #0xfffe" is a Linux syscall (x8 = x86_64 number)
+	// x86Sim: under libarm64jit, "svc #0xfffe" is a Linux syscall (x8 = x86_64 number)
 	register long x0 __asm__("x0") = (long)addr, x1 __asm__("x1") = 1, x2 __asm__("x2") = 0x7fffffffL;
 	register long x8 __asm__("x8") = 202;
 	__asm__ volatile("svc #0xfffe" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
@@ -543,7 +543,7 @@ static void dump(SFBSwapchainRef sc, IOSurfaceRef s, uint64_t submit_ns) {   // 
 	if (seq == 1 || seq % 600 == 0) fprintf(stderr, "simfb: frame %llu %ux%u (display %u)\n", (unsigned long long)seq, w, h, D->id);
 }
 
-// x86Code: GPU completion for presents. With CA's Metal renderer (host/metalhostd, X86CODE_METAL) the GPU may still be
+// x86Sim: GPU completion for presents. With CA's Metal renderer (host/metalhostd, X86SIM_METAL) the GPU may still be
 // writing the surface when CA submits it: CA passes no fence to SFBSwapchainSwapAddSurface (both extra arguments are
 // 0) and never calls SFBSwapchainAcquireSurfaceFence; on a Mac the host's GPU reads of the surface are ordered after
 // the simulator's GPU writes by the driver (implicit IOSurface sync). Here we track it in-process: every
@@ -554,7 +554,7 @@ static void dump(SFBSwapchainRef sc, IOSurfaceRef s, uint64_t submit_ns) {   // 
 static uint64_t gpu_commits;            // command buffers committed so far (their seq: 1..gpu_commits)
 static uint64_t gpu_outstanding[4096];  // seqs of committed, not yet completed command buffers (ring of slots)
 static size_t gpu_noutstanding;
-// x86Code: presents waiting for the GPU are a FIFO of up to PRESENT_QUEUE (CA rotates 3 swapchain surfaces, so a
+// x86Sim: presents waiting for the GPU are a FIFO of up to PRESENT_QUEUE (CA rotates 3 swapchain surfaces, so a
 // surface isn't drawn into again until two newer presents are out). The single waiting slot of before dropped every
 // present that came while the previous one still waited (GPU latency ~9 ms vs a 16 ms frame: up to 60% of the
 // presents of a home-screen swipe). Only when the queue is full is the oldest dropped ("superseded").
@@ -566,7 +566,7 @@ static bool gpu_done_upto(uint64_t target) {
 	for (size_t i = 0; i < gpu_noutstanding; i++) if (gpu_outstanding[i] <= target) return false;
 	return true;
 }
-// x86Code: scanout at the display's refresh. CA's SimDisplay does not wait for the swap callback (finished_update is
+// x86Sim: scanout at the display's refresh. CA's SimDisplay does not wait for the swap callback (finished_update is
 // the replaced buffer's seed), so presents came whenever CA rendered: up to ~94 a second while dragging, unevenly
 // spaced. A present whose GPU work is done now waits for the next refresh slot after the previous publish (a display
 // shows a frame at vsync); a newer ready present replaces one still waiting (counted as superseded). Frames that come

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# x86Code (Speed 14): build <jitcache dir>/placement.txt, the fixed addresses of non-cache Mach-Os (frameworks, bundles
+# x86Sim (Speed 14): build <jitcache dir>/placement.txt, the fixed addresses of non-cache Mach-Os (frameworks, bundles
 # and app executables outside the dyld cache) in the free top of the cache window [0x2ac000000, 0x300000000).
 # libarm64jit places each listed file there (dyld_sim's reservation after opening it, or the main executable), so its
 # translations persist by address like the cache's; a file that changed (size/mtime) or isn't listed loads as before.

@@ -3,13 +3,13 @@
 # fb2png + tesseract (OCR), drives it with simtouch / the openurl trigger file. Output dir: $O.
 # Speed 24 note: the earlier gate scripts lived only in scratch and were lost with it; these are kept in the repo.
 X=${X86SIM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
-SCR=${X86SIM_SCRATCH:-$HOME/scratch/x86code}
+SCR=${X86SIM_SCRATCH:-$HOME/scratch/x86sim}
 DEV=${A64_DEVICE:-$X/var/device-a64}
-export SIMFB_RING_LINUX=${SIMFB_RING_LINUX:-/dev/shm/x86code-a64-simfb.ring}
+export SIMFB_RING_LINUX=${SIMFB_RING_LINUX:-/dev/shm/x86sim-a64-simfb.ring}
 export SIMHID_SOCKET=${SIMHID_SOCKET:-$DEV/data/simhid.sock} X86SIM_DEVICE=$DEV
 export TESSDATA_PREFIX=${TESSDATA_PREFIX:-$SCR/tessdata}
-LOGB=${A64_DPREFIX:-$SCR/a64prefix}/private/var/tmp/x86code-a64
-AOT=$X/tools/launcher/target/release/x86code-aot
+LOGB=${A64_DPREFIX:-$SCR/a64prefix}/private/var/tmp/x86sim-a64
+AOT=$X/tools/launcher/target/release/x86sim-aot
 cd "$X"
 say() { echo "$*" | tee -a "$O/gate.log"; }
 # shot PNG: the ring's newest frame; its frame number goes to $O/.frame
@@ -17,7 +17,7 @@ shot() { timeout 12 python3 cli/libexec/fb2png.py "$SIMFB_RING_LINUX" "$1" 2>/de
 ocr() { shot "$O/now.png"; timeout 20 tesseract "$O/now.png" stdout --psm 11 2>/dev/null | tr '\n' ' ' | tr -s ' '; }
 touch_() { timeout 8 python3 cli/libexec/simtouch.py "$@" >/dev/null 2>&1; }
 home() { touch_ home; sleep "${1:-5}"; }
-open_() { printf '%s\n' "$1" > "$DEV/data/tmp/x86code-openurl.new"; mv "$DEV/data/tmp/x86code-openurl.new" "$DEV/data/tmp/x86code-openurl"; }
+open_() { printf '%s\n' "$1" > "$DEV/data/tmp/x86sim-openurl.new"; mv "$DEV/data/tmp/x86sim-openurl.new" "$DEV/data/tmp/x86sim-openurl"; }
 app() { open_ "app $1"; }
 # crash lines in the per-process JIT logs since mark_logs
 CRASHRE='signal 11|signal 4 |SIGSEGV|SIGILL|SIGABRT|guest exception|die:|fatal native'

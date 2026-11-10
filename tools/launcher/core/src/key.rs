@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 /// disagree with the builder (it once showed 0x16 parts as stale while the builder and the image were 0x17).
 pub const CODEGEN_VERSION: u64 = 0x1d;
 /// inline objc (bit 17) and the Apple timebase (bit 18), the defaults; fuse_svc (bit 16) and the strict exclusive
-/// monitor (bit 19) and the inline memory address check (bit 20, X86CODE_A64_MEMCHECK=1) are off.
+/// monitor (bit 19) and the inline memory address check (bit 20, X86SIM_A64_MEMCHECK=1) are off.
 pub const FLAGS: u64 = 0x6 << 16;
-/// FLAGS plus the code-shaping flags set in the environment (inherited by the builder): X86CODE_A64_MEMCHECK=1 (bit
+/// FLAGS plus the code-shaping flags set in the environment (inherited by the builder): X86SIM_A64_MEMCHECK=1 (bit
 /// 20) builds and names an image with the inline memory address check, for A/B against the default.
 pub fn flags() -> u64 {
-    let memcheck = std::env::var("X86CODE_A64_MEMCHECK").map(|v| v.trim() == "1").unwrap_or(false);
+    let memcheck = std::env::var("X86SIM_A64_MEMCHECK").map(|v| v.trim() == "1").unwrap_or(false);
     FLAGS | (memcheck as u64) << 20
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# x86Code (Speed 11): warm the host page cache for an arm64 boot. The host runs under memory pressure, and the boot's
+# x86Sim (Speed 11): warm the host page cache for an arm64 boot. The host runs under memory pressure, and the boot's
 # hot file pages (the AOT image .map/.idx and the dyld cache, ~0.9 GB) are often evicted between boots. They then come
 # back as thousands of small random page faults from the encrypted disk while dyld_sim and the first processes wait
 # (SpringBoard's dyld prepare took 3.5-12 s depending on it).

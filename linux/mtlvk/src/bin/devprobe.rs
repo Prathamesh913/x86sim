@@ -1,4 +1,4 @@
-//! x86Code RAM 2: the idle cost of a metal2vulkan device on this host: PSS by mapping kind and malloc's figures
+//! x86Sim RAM 2: the idle cost of a metal2vulkan device on this host: PSS by mapping kind and malloc's figures
 //! before and after `Device::system_default()`, and after a raw Vulkan instance + device without the runtime.
 //! Usage: devprobe [raw|runtime]
 fn pss() -> String {
@@ -142,7 +142,7 @@ fn cbtest() {
     }
 }
 
-/// x86Code RAM 5: the driver's host malloc per command buffer: 10 pools x N primaries (each recorded with a few fills
+/// x86Sim RAM 5: the driver's host malloc per command buffer: 10 pools x N primaries (each recorded with a few fills
 /// and submitted), then free / trim / destroy, malloc's in-use and PSS after each.
 fn cbmalloc() {
     use ash::vk;
@@ -165,7 +165,7 @@ fn cbmalloc() {
         for _ in 0..10 {
             let pool = dev.create_command_pool(&vk::CommandPoolCreateInfo::default().flags(vk::CommandPoolCreateFlags::TRANSIENT | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER).queue_family_index(0), None).unwrap();
             let cbs = dev.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(n)).unwrap();
-            // x86Code RAM 8: ONETIME=0 begins them reusable (no ONE_TIME_SUBMIT), as the runtime's replays do
+            // x86Sim RAM 8: ONETIME=0 begins them reusable (no ONE_TIME_SUBMIT), as the runtime's replays do
             let flags = if std::env::var("ONETIME").as_deref() == Ok("0") { vk::CommandBufferUsageFlags::empty() } else { vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT };
             for cb in &cbs {
                 dev.begin_command_buffer(*cb, &vk::CommandBufferBeginInfo::default().flags(flags)).unwrap();
@@ -190,7 +190,7 @@ fn cbmalloc() {
     }
 }
 
-/// x86Code RAM 8: does a command pool that once recorded a large command buffer take a large chunk for each later
+/// x86Sim RAM 8: does a command pool that once recorded a large command buffer take a large chunk for each later
 /// small one? 40 pools each record a big command buffer (BIG fills), one at a time (submitted, waited, the pool
 /// reset with RELEASE_RESOURCES when RELEASE=1, else plainly); then all 40 record a small one (10 fills) at once,
 /// in flight together. nvctl after each phase.
@@ -241,7 +241,7 @@ fn cbgrow() {
     }
 }
 
-/// x86Code RAM 10: where NVIDIA's command memory high water lives. 40 pools record BIG commands at once (on THREADS
+/// x86Sim RAM 10: where NVIDIA's command memory high water lives. 40 pools record BIG commands at once (on THREADS
 /// threads), submitted together; then every pool destroyed; then the recording threads ended; then a fresh pool of
 /// small work. nvctl after each step.
 fn cbhigh() {

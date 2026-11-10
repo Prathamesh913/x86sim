@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""x86Code: simctl's developer commands for the Linux simulator (x86sim launch/terminate/get_app_container/listapps/
-push/location/addmedia/log/io). Requests go to host/openurl (the com.x86code.openurl job inside the device, which does
-what CoreSimulatorBridge does in a Mac's device) as one line "req <id> <json>" in <data>/tmp/x86code-openurl; the
-answer is the log line "result <id> <json>" in <data>/var/log/x86code-openurl.log.
+"""x86Sim: simctl's developer commands for the Linux simulator (x86sim launch/terminate/get_app_container/listapps/
+push/location/addmedia/log/io). Requests go to host/openurl (the com.x86sim.openurl job inside the device, which does
+what CoreSimulatorBridge does in a Mac's device) as one line "req <id> <json>" in <data>/tmp/x86sim-openurl; the
+answer is the log line "result <id> <json>" in <data>/var/log/x86sim-openurl.log.
 
   launch [--console|--console-pty] [--stdout=P] [--stderr=P] [-w|--wait-for-debugger] [--terminate-running-process]
          [--oslog] [--env K=V]... <bundle id> [args...]
@@ -25,8 +25,8 @@ import x86config  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = x86config.data()
-LOG = os.path.join(DATA, "var/log/x86code-openurl.log")
-Q = os.path.join(DATA, "tmp/x86code-openurl")
+LOG = os.path.join(DATA, "var/log/x86sim-openurl.log")
+Q = os.path.join(DATA, "tmp/x86sim-openurl")
 
 
 def die(msg, code=1):
@@ -43,7 +43,7 @@ def request(cmd, timeout=60, **kw):
     except OSError:
         start = 0
     line = "req %s %s\n" % (rid, json.dumps(kw, separators=(",", ":")))
-    # x86Code: the helper takes the file whole and removes it; wait while an earlier request is still queued
+    # x86Sim: the helper takes the file whole and removes it; wait while an earlier request is still queued
     for _ in range(100):
         if not os.path.exists(Q):
             break
@@ -78,9 +78,9 @@ def app_info(bid):
 
 def oslog_env():
     """Environment for an app whose os_log goes to <data>/var/log/oslog.<executable>.<pid>.log: libsimshim's built-in
-    os_log formatter (host/simshim/diag/oslogdiag.m, -DSIMSHIM_OSLOG) turns on for X86CODE_OSLOG, without logd or
+    os_log formatter (host/simshim/diag/oslogdiag.m, -DSIMSHIM_OSLOG) turns on for X86SIM_OSLOG, without logd or
     diagnosticd (OS_ACTIVITY_DT_MODE would stream to diagnosticd, which isn't run; the boot doesn't stall on it)."""
-    return {"X86CODE_OSLOG": "all", "X86CODE_OSLOG_DIR": x86config.get("X86SIM_DVIEW") + os.path.join(DATA, "var/log")}
+    return {"X86SIM_OSLOG": "all", "X86SIM_OSLOG_DIR": x86config.get("X86SIM_DVIEW") + os.path.join(DATA, "var/log")}
 
 
 def follow(paths, until=None, stop=None):
@@ -203,21 +203,21 @@ def cmd_launch(a):
         o["env"].update(oslog_env())
     outs = {}
     if console == "pty":
-        # x86Code: as simctl --console-pty: the app's stdout and stderr are a pseudo-terminal (isatty, line-buffered
+        # x86Sim: as simctl --console-pty: the app's stdout and stderr are a pseudo-terminal (isatty, line-buffered
         # stdio). A Linux pty's slave, opened by path through the container's view of the Linux root.
         master, slave = os.openpty()
         tty.setraw(slave)
         name = os.ttyname(slave)
         o["stdout"] = o["stderr"] = x86config.get("X86SIM_DVIEW") + name
     elif console:
-        # x86Code: simctl --console hands the app a pty / pipe; FrontBoard here takes file paths (as the Bridge's
+        # x86Sim: simctl --console hands the app a pty / pipe; FrontBoard here takes file paths (as the Bridge's
         # __StandardOutPath), so the app writes files in the device's tmp and we follow them
-        d = os.path.join(DATA, "tmp/x86code-console")
+        d = os.path.join(DATA, "tmp/x86sim-console")
         os.makedirs(d, exist_ok=True)
         for s in ("stdout", "stderr"):
             p = os.path.join(d, "%s.%s" % (o["bundle"], s))
             open(p, "w").close()
-            o[s] = "tmp/x86code-console/%s.%s" % (o["bundle"], s)
+            o[s] = "tmp/x86sim-console/%s.%s" % (o["bundle"], s)
             outs[p] = sys.stdout if s == "stdout" else sys.stderr
     r = check(request("launch", timeout=50, **o), "launch")
     if r.get("waiting"):
@@ -372,7 +372,7 @@ def cmd_location(a):
 def cmd_addmedia(a):
     if not a:
         die("usage: x86sim addmedia <image or video>...", 2)
-    d = os.path.join(DATA, "tmp/x86code-media")
+    d = os.path.join(DATA, "tmp/x86sim-media")
     os.makedirs(d, exist_ok=True)
     rel = []
     for p in a:
@@ -380,7 +380,7 @@ def cmd_addmedia(a):
             die("x86sim addmedia: %s: no such file" % p)
         n = "%s-%s" % (uuid.uuid4().hex[:6], os.path.basename(p))
         shutil.copyfile(p, os.path.join(d, n))
-        rel.append("tmp/x86code-media/" + n)
+        rel.append("tmp/x86sim-media/" + n)
     r = check(request("addmedia", timeout=120, paths=rel), "addmedia")
     print("x86sim addmedia: added %d" % r.get("added", 0))
 
@@ -399,7 +399,7 @@ def cmd_log(a):
         r = check(request("launch", timeout=50, bundle=bid, env=oslog_env(), terminate=True), "launch")
         print("x86sim: %s relaunched with os_log to a file (pid %s)" % (bid, r.get("pid")), file=sys.stderr, flush=True)
     d = os.path.join(DATA, "var/log")
-    # x86Code: os_log of processes the diag shim formats (liboslogdiag: --oslog launches, X86CODE_INSERT boots with
+    # x86Sim: os_log of processes the diag shim formats (liboslogdiag: --oslog launches, X86SIM_INSERT boots with
     # data/oslog.filter): data/var/log/oslog.<prog>.<pid>.log. Follow the ones written from now on.
     t0 = time.time() - 2
     pos = {}

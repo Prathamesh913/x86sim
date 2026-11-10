@@ -1,4 +1,4 @@
-// x86Code RAM 3 fastmem test guest (words in fastmemtest.cpp: clang --target=arm64-apple-macos -march=armv8.1-a -c; llvm-objdump -d)
+// x86Sim RAM 3 fastmem test guest (words in fastmemtest.cpp: clang --target=arm64-apple-macos -march=armv8.1-a -c; llvm-objdump -d)
 // x0 = buffer (maybe tagged), x1 = second buffer untagged; results into x2..x28
     ldrb w2, [x0]
     ldrh w3, [x0, #2]

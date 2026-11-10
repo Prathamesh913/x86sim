@@ -1,5 +1,5 @@
 #!/bin/sh
-# x86Code (Speed 27): host files an iOS simulator reads from the Mac's own /System/Library by absolute path (not from
+# x86Sim (Speed 27): host files an iOS simulator reads from the Mac's own /System/Library by absolute path (not from
 # its runtime root), fetched once from the Mac ($X86SIM_MAC, mac-env.sh) into runtimes/macos-host (gitignored: Apple
 # data, never committed). boot-a64.sh links them into the Darling prefix.
 #   GeoServicesData: geod's seed resource manifest (ResourceManifest.json + region/territory/time zone archives).

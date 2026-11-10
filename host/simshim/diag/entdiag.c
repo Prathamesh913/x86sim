@@ -1,5 +1,5 @@
 // Diagnostic shim: logs entitlement lookups (key, result) made through libxpc and
-// libsystem_containermanager to /private/tmp/x86code-entdiag.<pid>.log
+// libsystem_containermanager to /private/tmp/x86sim-entdiag.<pid>.log
 #include <xpc/xpc.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -20,7 +20,7 @@ extern xpc_object_t container_audit_token_copy_entitlement(const void* token, co
 static void logline(const char* fn, const char* key, const void* token, xpc_object_t v)
 {
 	char path[64], line[512], *desc = v ? xpc_copy_description(v) : NULL;
-	snprintf(path, sizeof(path), "/private/tmp/x86code-entdiag.%d.log", getpid());
+	snprintf(path, sizeof(path), "/private/tmp/x86sim-entdiag.%d.log", getpid());
 	int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	int pid = token ? ((const int*) token)[5] : -1;
 	int n = snprintf(line, sizeof(line), "%s(%s, pid %d) -> %.200s\n", fn, key ? key : "(null)", pid, desc ? desc : "NULL");

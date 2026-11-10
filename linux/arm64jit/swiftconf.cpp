@@ -1,4 +1,4 @@
-// x86Code Speed 7: native step for the Swift runtime's protocol conformance scan (iOS 27.0 24A434 libswiftCore).
+// x86Sim Speed 7: native step for the Swift runtime's protocol conformance scan (iOS 27.0 24A434 libswiftCore).
 // swift_conformsToProtocolMaybeInstantiateSuperclasses walks every conformance record of every loaded image on each
 // (type, protocol) cache miss, for each superclass: ~10 guest instructions per record, ~11% of Preferences cold.
 // The record step at kStep (ldrsw x8,[x23] .. compare the record's protocol with x21) is read by the JIT as
@@ -8,7 +8,7 @@
 // loop does on reaching the match path (kMatch) or the end of the section list (kDone).
 // Records are found through one index (protocol -> records, in walk order), and records that certainly name another
 // type are skipped natively (cannot_match); Preferences cold: 51M guest round trips -> 10M, the conformance code
-// ~14.5% -> ~3.5% of samples. X86CODE_A64_SWIFT_CONF_NATIVE=0 turns it off, X86CODE_A64_SWIFT_CONF_FILTER=0 only the
+// ~14.5% -> ~3.5% of samples. X86SIM_A64_SWIFT_CONF_NATIVE=0 turns it off, X86SIM_A64_SWIFT_CONF_FILTER=0 only the
 // skip. The code words around kStep are checked once before it is used.
 #include "a64.h"
 
@@ -36,12 +36,12 @@ constexpr u32 kExpect[] = {
     0xd2800008, 0xeb15011f, 0x54fffe41, 0x91001368,
 };
 int g_state = -1;  // -1 unchecked, 0 off, 1 on
-const bool g_verify = getenv("X86CODE_A64_SWIFT_CONF_VERIFY") != nullptr;
+const bool g_verify = getenv("X86SIM_A64_SWIFT_CONF_VERIFY") != nullptr;
 u64 kMatched[3] = {0, 0, 0};  // the guest's "mov x8, #0" right after a successful type check (verify mode)
 
 bool enabled() {
     static const bool ok = [] {
-        const char *e = getenv("X86CODE_A64_SWIFT_CONF_NATIVE");
+        const char *e = getenv("X86SIM_A64_SWIFT_CONF_NATIVE");
         if (e && atoi(e) == 0) return false;
         kNextSection = swift_text_find(kExpect, nullptr, sizeof kExpect / 4);
         if (!kNextSection) { logf("swift conformance step: code not found in libswiftCore; not used"); return false; }
@@ -115,14 +115,14 @@ void reclaim_locked() {
 }
 std::atomic<u64> g_seen_base{0}, g_seen_count{0};
 std::mutex g_mu;
-// X86CODE_A64_SWIFT_CONF_DEBUG=1: counters, logged every 16K steps
-const bool g_dbg = getenv("X86CODE_A64_SWIFT_CONF_DEBUG") != nullptr;
+// X86SIM_A64_SWIFT_CONF_DEBUG=1: counters, logged every 16K steps
+const bool g_dbg = getenv("X86SIM_A64_SWIFT_CONF_DEBUG") != nullptr;
 std::atomic<u64> g_calls{0}, g_hits{0}, g_builds{0}, g_nobase{0}, g_mism{0}, g_skipped{0};
 thread_local u64 t_would_skip = 0;  // verify mode: the record handed to kMatch that the filter would have skipped
 std::atomic<u64> g_verify_bad{0}, g_verify_ok{0};
 #define COUNT(c) do { if (g_dbg) (c)++; } while (0)
 bool getenv_off_filter() {
-    static const bool off = getenv("X86CODE_A64_SWIFT_CONF_FILTER") && atoi(getenv("X86CODE_A64_SWIFT_CONF_FILTER")) == 0;
+    static const bool off = getenv("X86SIM_A64_SWIFT_CONF_FILTER") && atoi(getenv("X86SIM_A64_SWIFT_CONF_FILTER")) == 0;
     return off;
 }
 
@@ -156,7 +156,7 @@ u64 unique_value_descriptor(u64 metadata) {
 // them unique. The chain is read from the metadata (superclass at +8, Swift-class bit in the data word at +0x20,
 // description at +0x40) and used only if it ends at a non-Swift root (SwiftObject/NSObject): a superclass the guest
 // would still have to instantiate (incomplete metadata) leaves the chain ending at a Swift class, and nothing is
-// skipped. X86CODE_A64_SWIFT_CONF_CLASS=0 turns the class part off; X86CODE_A64_SWIFT_CONF_VERIFY=1 never skips but
+// skipped. X86SIM_A64_SWIFT_CONF_CLASS=0 turns the class part off; X86SIM_A64_SWIFT_CONF_VERIFY=1 never skips but
 // logs any record the filter would have skipped that the guest then matched (the guest's three "matched" sites).
 struct Query {
     int n = 0;          // descriptors in d (0: no filter)
@@ -165,7 +165,7 @@ struct Query {
 Query make_query(u64 metadata) {
     Query q;
     if (const u64 v = unique_value_descriptor(metadata)) { q.d[q.n++] = v; return q; }
-    static const bool cls = !(getenv("X86CODE_A64_SWIFT_CONF_CLASS") && atoi(getenv("X86CODE_A64_SWIFT_CONF_CLASS")) == 0);
+    static const bool cls = !(getenv("X86SIM_A64_SWIFT_CONF_CLASS") && atoi(getenv("X86SIM_A64_SWIFT_CONF_CLASS")) == 0);
     if (!cls || !metadata || *(const u64 *)metadata <= 0x7ff) return q;  // not a class (isa pointer), or off
     bool swift = false;
     int n = 0;

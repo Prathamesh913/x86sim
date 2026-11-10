@@ -233,7 +233,7 @@ void install_wrapper() {
     sa.sa_flags = (cur.sa_flags | SA_SIGINFO) & ~SA_RESETHAND;
     sigaction(kSuspSig, &sa, nullptr);
 }
-bool susp_off() { static const bool v = getenv("X86CODE_A64_SUSP_DEFER") && atoi(getenv("X86CODE_A64_SUSP_DEFER")) == 0; return v; }
+bool susp_off() { static const bool v = getenv("X86SIM_A64_SUSP_DEFER") && atoi(getenv("X86SIM_A64_SUSP_DEFER")) == 0; return v; }
 }  // namespace
 
 void GuestThread::susp_safe_point() {

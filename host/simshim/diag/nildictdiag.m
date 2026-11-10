@@ -1,7 +1,7 @@
-// x86Code: diagnostic shim (arm64): which dictionary gets a nil object. In processes named in X86CODE_NILDICT (default
+// x86Sim: diagnostic shim (arm64): which dictionary gets a nil object. In processes named in X86SIM_NILDICT (default
 // Spotlight) +[NSDictionary dictionaryWithObjects:forKeys:count:] logs keys, the non-nil objects and the caller when an
 // object is nil (CoreSpotlight's _CSSuggestionToken threw "attempt to insert nil object from objects[0]").
-// Log: X86CODE_DATA_DIR/var/log/nildict.<pid>.log. X86CODE_INSERT=<this dylib> (build/mac-build-diag.sh).
+// Log: X86SIM_DATA_DIR/var/log/nildict.<pid>.log. X86SIM_INSERT=<this dylib> (build/mac-build-diag.sh).
 #import <Foundation/Foundation.h>
 #include "diagpath.h"
 #include <objc/runtime.h>
@@ -12,7 +12,7 @@
 static IMP o_dwo;
 static int logfd(void) {
 	static int fd = -1;
-	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86CODE_DATA_DIR "/var/log/nildict.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
+	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86SIM_DATA_DIR "/var/log/nildict.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
 	return fd;
 }
 static id d_dwo(id cls, SEL s, const id *objs, const id *keys, NSUInteger n) {
@@ -28,7 +28,7 @@ static id d_dwo(id cls, SEL s, const id *objs, const id *keys, NSUInteger n) {
 	return ((id(*)(id, SEL, const id *, const id *, NSUInteger))o_dwo)(cls, s, objs, keys, n);
 }
 __attribute__((constructor)) static void init(void) {
-	const char *want = getenv("X86CODE_NILDICT") ?: "Spotlight";
+	const char *want = getenv("X86SIM_NILDICT") ?: "Spotlight";
 	if (strcmp(want, getprogname())) return;
 	Method m = class_getClassMethod(objc_getClass("NSDictionary"), @selector(dictionaryWithObjects:forKeys:count:));
 	if (m) o_dwo = method_setImplementation(m, (IMP)d_dwo);

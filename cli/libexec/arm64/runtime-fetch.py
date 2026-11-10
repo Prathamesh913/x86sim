@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code (Speed 22): iOS simulator runtimes straight from Apple, no Mac and no Apple ID.
+"""x86Sim (Speed 22): iOS simulator runtimes straight from Apple, no Mac and no Apple ID.
 
     runtime-fetch.py list                 iOS 27.x runtimes in Apple's catalogue (the one Xcode reads)
     runtime-fetch.py url BUILD            the runtime's download URL (from gdmf.apple.com, as Xcode asks for it)

@@ -16,8 +16,8 @@
     cli/libexec/simtouch.py dismiss [rounds]               answer permission prompts on screen (location: "Allow While Using
                                                       App", notifications/others: "Allow"), found by OCR (tesseract)
     cli/libexec/simtouch.py openurl <url>                  open a URL (as `simctl openurl`); needs the boot's openurl job:
-                                                      com.x86code.openurl (the phone's boot starts it; log:
-                                                      var/device/data/var/log/x86code-openurl.log)"""
+                                                      com.x86sim.openurl (the phone's boot starts it; log:
+                                                      var/device/data/var/log/x86sim-openurl.log)"""
 import os, socket, struct, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -83,7 +83,7 @@ def edge_at(x, y, w, h):
     return None
 
 
-# x86Code: permission prompts are answered here: OCR the frame, tap the allowing button.
+# x86Sim: permission prompts are answered here: OCR the frame, tap the allowing button.
 # Preference order: the location prompt's "Allow While Using App", then a lone "Allow" (notifications, TCC).
 def find_allow_button():
     import subprocess
@@ -154,8 +154,8 @@ def main(a):
             time.sleep(2)
         return
     if a[0] in ("openurl", "app"):
-        # x86Code: host/openurl/openurl (a launchd job in the device) takes URLs from this file
-        q = os.path.join(os.path.dirname(SOCK), "tmp/x86code-openurl")
+        # x86Sim: host/openurl/openurl (a launchd job in the device) takes URLs from this file
+        q = os.path.join(os.path.dirname(SOCK), "tmp/x86sim-openurl")
         with open(q + ".new", "w") as f:
             f.write(("app " if a[0] == "app" else "") + " ".join(a[1:]) + "\n")
         os.rename(q + ".new", q)

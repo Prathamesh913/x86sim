@@ -1,8 +1,8 @@
 // Stage 3: multi-thread translation stress for the shared code cache.
 // Many threads concurrently translate and execute overlapping call graphs (indirect
 // calls + a mutex-protected shared counter) so block linking / fast-dispatch races
-// show up. Expect: exit 0 under X86CODE_A64_SHARED=1 (BlockLinking on by default via atomic
-// patch heads). X86CODE_A64_LINK=0 disables linking for experiments.
+// show up. Expect: exit 0 under X86SIM_A64_SHARED=1 (BlockLinking on by default via atomic
+// patch heads). X86SIM_A64_LINK=0 disables linking for experiments.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>

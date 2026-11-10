@@ -1,4 +1,4 @@
-# x86Code CI: build the AppImage on every push to main and every pull request (artifact only, no release).
+# x86Sim CI: build the AppImage on every push to main and every pull request (artifact only, no release).
 name: ci
 on:
   push:

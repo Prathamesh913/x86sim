@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: rewrite a copied device's absolute data/ paths to its own (device-a64.py create; repair of old clones).
+"""x86Sim: rewrite a copied device's absolute data/ paths to its own (device-a64.py create; repair of old clones).
 
     device-repath.py DEVICE [OLD_DEVICE]     DEVICE's data/ was copied from OLD_DEVICE (default var/device-a64)
                                              (refuses a booted DEVICE; --force: anyway)

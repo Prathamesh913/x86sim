@@ -1,4 +1,4 @@
-// x86Code: stand-in for CoreSimulator's SimulatorHID.framework (x86_64, iOS simulator), loaded by backboardd.
+// x86Sim: stand-in for CoreSimulator's SimulatorHID.framework (x86_64, iOS simulator), loaded by backboardd.
 //
 // How the runtime uses it (SimulatorClient.framework, IndigoHIDSystemSpawnLoopback(IOHIDEventSystemRef)):
 //   path = getenv("SIMULATOR_HID_SYSTEM_MANAGER"); bundle = [NSBundle bundleWithPath:path];
@@ -95,7 +95,7 @@ extern IOHIDEventRef IOHIDEventCreateVendorDefinedEvent(CFAllocatorRef, uint64_t
 #define kDigitizerPosition 0x4
 #define kDigitizerIdentity 0x20
 #define kFieldDigitizerIsDisplayIntegrated ((11 << 16) | 25)
-// x86Code: how Apple's Simulator marks edge touches (SimulatorKit IndigoHIDMessageForMouseNSEvent, Xcode 27.1): the
+// x86Sim: how Apple's Simulator marks edge touches (SimulatorKit IndigoHIDMessageForMouseNSEvent, Xcode 27.1): the
 // IndigoHIDEdge (0 none, 1 top, 2 left, 3 bottom, 4 right) picks the digitizer event mask from a table, 0x40000 |
 // {0, 0x02000000, 0x08000000, 0x01000000, 0x04000000} (the swipe direction away from that edge: top = swipe down,
 // bottom = swipe up ...), and SimulatorHID passes that mask to IOHIDEventCreateDigitizerFingerEvent on every phase.
@@ -103,7 +103,7 @@ extern IOHIDEventRef IOHIDEventCreateVendorDefinedEvent(CFAllocatorRef, uint64_t
 static const uint32_t edge_mask[5] = { 0x40000, 0x02040000, 0x08040000, 0x01040000, 0x04040000 };
 static int touch_edge;
 
-// x86Code arm64: also mirror to a host-visible log file. stderr under the JIT can be late or
+// x86Sim arm64: also mirror to a host-visible log file. stderr under the JIT can be late or
 // interleaved with backboardd's own logging; a dedicated file lets us see whether the socket
 // thread actually runs handle_line / dispatch.
 static FILE* g_logf;
@@ -115,7 +115,7 @@ static void slog(const char* fmt, ...) {
 		char def[512];
 		if (!p || !*p) {  // Linux user's scratch, seen through Darling's SystemRoot (same user name)
 			struct passwd* pw = getpwuid(getuid());
-			snprintf(def, sizeof def, "/Volumes/SystemRoot/home/%s/scratch/x86code/simhid.log", pw ? pw->pw_name : "");
+			snprintf(def, sizeof def, "/Volumes/SystemRoot/home/%s/scratch/x86sim/simhid.log", pw ? pw->pw_name : "");
 			p = def;
 		}
 		g_logf = fopen(p, "a");
@@ -322,7 +322,7 @@ static void dispatch_event(VService* s, IOHIDEventRef e) {
 		if (e) CFRelease(e);
 		return;
 	}
-	// x86Code arm64: call _IOHIDServiceDispatchEvent on this thread. dispatch_async onto the
+	// x86Sim arm64: call _IOHIDServiceDispatchEvent on this thread. dispatch_async onto the
 	// service queue / main queue was a silent no-op under the JIT for socket-thread producers
 	// (reads happened, UI never saw touches). Direct dispatch matches Indigo's in-thread path.
 	_IOHIDServiceDispatchEvent(s->service, e);
@@ -358,7 +358,7 @@ static void send_touch(const char* phase, double x, double y, int edge) {
 	dispatch_event(cur_touch, hand);
 }
 
-// x86Code: two fingers in one hand event, as a multi-touch digitizer reports them (the hand carries the centroid; a
+// x86Sim: two fingers in one hand event, as a multi-touch digitizer reports them (the hand carries the centroid; a
 // finger child per contact with its own index and identity; range/touch/identity bits on the down and up events).
 static bool touching2;
 static uint32_t touch2_identity = 1000;
@@ -396,8 +396,8 @@ static void send_key(VService* s, uint32_t page, uint32_t usage, bool down) {
 
 typedef struct { int fd; uint64_t kb_idle_ns; int kb_settle_ms; } Client;  // kb_idle_ns 0: default; kb_settle_ms -1: default
 
-// x86Code (RAM 2): the time of the last user input, for cli/libexec/jetsam.py (an app the user is touching or typing
-// into is never reclaimed): <SIMULATOR_SHARED_RESOURCES_DIRECTORY>/tmp/x86code-input, its mtime touched at each touch,
+// x86Sim (RAM 2): the time of the last user input, for cli/libexec/jetsam.py (an app the user is touching or typing
+// into is never reclaimed): <SIMULATOR_SHARED_RESOURCES_DIRECTORY>/tmp/x86sim-input, its mtime touched at each touch,
 // key or button command (at most once a second).
 static void note_input(void) {
 	static uint64_t last;
@@ -407,7 +407,7 @@ static void note_input(void) {
 	last = t;
 	if (!*path) {
 		const char* dir = getenv("SIMULATOR_SHARED_RESOURCES_DIRECTORY") ?: getenv("HOME") ?: "/tmp";
-		snprintf(path, sizeof(path), "%s/tmp/x86code-input", dir);
+		snprintf(path, sizeof(path), "%s/tmp/x86sim-input", dir);
 	}
 	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd >= 0) { (void)!write(fd, "1\n", 2); close(fd); }
@@ -464,7 +464,7 @@ static void handle_line(char* line, Client* cl) {
 	unsigned usage;
 	if (sscanf(line, "key %15s %i", a, &usage) == 2) {
 #if __arm64__
-		// x86Code arm64: the keyboard service is attached at the first key command (see initUsingHIDService).
+		// x86Sim arm64: the keyboard service is attached at the first key command (see initUsingHIDService).
 		// Speed 31 held this client's keys for a fixed 1.5 s after every attach (keys 300 ms after the first were
 		// lost or scrambled). Input: host keyboard latency (kblat.py) found the attach itself is ready in ~0.1 s
 		// (backboardd sets the service's properties within 110 ms) and a burst typed 0 ms after it lands whole; what
@@ -529,7 +529,7 @@ static void handle_line(char* line, Client* cl) {
 	if (*line) slog("unknown command: %s", line);
 }
 
-// x86Code arm64: serialize with a mutex instead of dispatch_sync. dispatch_sync from the
+// x86Sim arm64: serialize with a mutex instead of dispatch_sync. dispatch_sync from the
 // socket pthread onto cmd_q was observed to consume socket bytes without ever running the
 // block under the A64 JIT (no touch logs, no UI). Mutex + direct call stays on this GuestThread.
 static pthread_mutex_t cmd_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -579,7 +579,7 @@ static void* listen_thread(void* arg) {
 	}
 	slog("listening on %s", path);
 	for (;;) {
-		// x86Code: Darling's accept() crashes with a NULL address (it converts the sockaddr back unconditionally)
+		// x86Sim: Darling's accept() crashes with a NULL address (it converts the sockaddr back unconditionally)
 		struct sockaddr_un peer; socklen_t plen = sizeof(peer);
 		int c = accept(s, (struct sockaddr*)&peer, &plen);
 		if (c < 0) { if (errno == EINTR) continue; slog("accept: errno %d", errno); usleep(100000); continue; }
@@ -601,21 +601,21 @@ static void* listen_thread(void* arg) {
 - (instancetype)initUsingHIDService:(IOHIDEventSystemRef_)system error:(NSError**)error {
 	if (!(self = [super init])) return nil;
 	if (!system) { if (error) *error = [NSError errorWithDomain:@"SimHID" code:1 userInfo:nil]; [self release]; return nil; }
-	// displayUUID must match SFBDisplayGetDisplayUID ("x86Code-main-display"): BKIOHIDService
+	// displayUUID must match SFBDisplayGetDisplayUID ("x86Sim-main-display"): BKIOHIDService
 	// _setUpInitialProperties copies the HID property "displayUUID" into its ivar; without it,
 	// BKDisplayConvertCAScreenLocationToContext gets a null UUID and drops every touch.
 	touch_svc = (VService){ "touchscreen", 0x7863000000000001ull,
-		make_props(@"com.apple.SimulatorHID.ScreenTouchService.x86Code-main-display", 0x0d, 0x04, @{
+		make_props(@"com.apple.SimulatorHID.ScreenTouchService.x86Sim-main-display", 0x0d, 0x04, @{
 			@"DisplayIntegrated": @YES,
 			@"SupportsInk": @NO,
-			@"displayUUID": @"x86Code-main-display",
+			@"displayUUID": @"x86Sim-main-display",
 		}) };
-	buttons_svc = (VService){ "buttons", 0x7863000000000002ull, make_props(@"x86Code buttons", 0x0c, 0x01, nil) };
-	keyboard_svc = (VService){ "keyboard", 0x7863000000000003ull, make_props(@"x86Code keyboard", 0x01, 0x06, nil) };
+	buttons_svc = (VService){ "buttons", 0x7863000000000002ull, make_props(@"x86Sim buttons", 0x0c, 0x01, nil) };
+	keyboard_svc = (VService){ "keyboard", 0x7863000000000003ull, make_props(@"x86Sim keyboard", 0x01, 0x06, nil) };
 	add_service(system, &touch_svc);
 	add_service(system, &buttons_svc);
 	// Models 2: the second integrated display of $SIMULATOR_CAPABILITIES (as host/simfb publishes it: SFB display
-	// <screenID>, UID x86Code-display-<screenID>) gets its own touchscreen, and the device a hinge sensor
+	// <screenID>, UID x86Sim-display-<screenID>) gets its own touchscreen, and the device a hinge sensor
 	{
 		const char* cp = getenv("SIMULATOR_CAPABILITIES");
 		NSDictionary* caps = cp ? [NSDictionary dictionaryWithContentsOfFile:@(cp)] : nil;
@@ -626,11 +626,11 @@ static void* listen_thread(void* arg) {
 			if (n++ == 1) inner_display_id = [d[@"screenID"] unsignedIntValue];
 		}
 		if (n >= 2 && inner_display_id) {
-			NSString* uid = [NSString stringWithFormat:@"x86Code-display-%u", inner_display_id];
+			NSString* uid = [NSString stringWithFormat:@"x86Sim-display-%u", inner_display_id];
 			inner_touch_svc = (VService){ "touchscreen-inner", 0x7863000000000004ull,
 				make_props([@"com.apple.SimulatorHID.ScreenTouchService." stringByAppendingString:uid], 0x0d, 0x04, @{
 					@"DisplayIntegrated": @YES, @"SupportsInk": @NO, @"displayUUID": uid }) };
-			hinge_svc = (VService){ "hinge", 0x7863000000000005ull, make_props(@"x86Code hinge", 0xff0c, 0x21, nil) };
+			hinge_svc = (VService){ "hinge", 0x7863000000000005ull, make_props(@"x86Sim hinge", 0xff0c, 0x21, nil) };
 			const char* h = getenv("SIMHID_HINGE");
 			hinge_deg = h && *h ? atof(h) : 0;
 			add_service(system, &inner_touch_svc);
@@ -639,7 +639,7 @@ static void* listen_thread(void* arg) {
 		}
 	}
 #if __arm64__
-	// x86Code arm64: an attached keyboard service puts UIKit in hardware-keyboard mode, so a text field never shows the
+	// x86Sim arm64: an attached keyboard service puts UIKit in hardware-keyboard mode, so a text field never shows the
 	// software keyboard. Attach it only when the host first types (like Xcode's simulator does); SIMHID_KEYBOARD=1: at start.
 	hid_system = system;
 	const char* kb = getenv("SIMHID_KEYBOARD");

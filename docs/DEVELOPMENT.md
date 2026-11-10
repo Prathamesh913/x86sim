@@ -1,4 +1,4 @@
-# Developing x86Code
+# Developing x86Sim
 
 Building from source, the repository layout and day-to-day use from the command line. For the
 design, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -8,7 +8,7 @@ design, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Linux x86-64** with a recent kernel. Darling needs its usual setup: FUSE/overlayfs and a setuid-root `darling`
   binary.
 - **A Vulkan GPU**: NVIDIA (proprietary driver) or AMD (RADV), with `VK_EXT_external_memory_host`. Development used an
-  NVIDIA RTX 5090. Without a usable GPU, `X86CODE_METAL=0` falls back to software rendering.
+  NVIDIA RTX 5090. Without a usable GPU, `X86SIM_METAL=0` falls back to software rendering.
 - **Darling's build dependencies**: clang/LLVM, cmake, ninja, bison, flex, FUSE, libcap, Python 3, and the rest of
   Darling's [build list](https://docs.darlinghq.org/build-instructions.html); dynarmic also needs boost headers.
 - **Rust** (stable, via rustup) for `linux/mtlvk` and metal2vulkan.
@@ -31,12 +31,12 @@ host/       simulator-side code (Mach-O, run inside Darling): simhost (x86_64), 
 linux/      native Linux pieces: arm64jit (the JIT host library), mtlvk (Rust, Metal on Vulkan), mdnsd, hostnet
 tests/      sample apps (tests/apps), arm64 JIT tests (tests/arm64), Metal (mtlprobe + shaders)
             and IOSurface (iosprobe) tests, perf.py
-tools/      launcher/: the launcher GUI, x86code-aot, x86code-mcp; debug/: core dumps, stacks, stuck processes,
+tools/      launcher/: the launcher GUI, x86sim-aot, x86sim-mcp; debug/: core dumps, stacks, stuck processes,
             Darling install (dinstall.sh); runtime/extract-runtime.py: Apple's runtime image -> RuntimeRoot on Linux
 build/      build scripts (mac-build-*.sh) for the host/ and tests/ binaries: on Linux by default (linux-env.sh), or a
             Mac; release/: the AppImage
 docs/       ARCHITECTURE, WORKAROUNDS, METAL, RELEASE, protocols/, REPOS, screens/
-external/   git submodules: darling, dynarmic and metal2vulkan (x86code branches of the x86code forks)
+external/   git submodules: darling, dynarmic and metal2vulkan (x86sim branches of the x86sim forks)
 ```
 
 ## Setup
@@ -46,7 +46,7 @@ phone) from the launcher's Setup page; see [docs/RELEASE.md](RELEASE.md). From s
 
 1. **Clone with submodules.**
    ```sh
-   git clone --recursive https://github.com/x86code/x86code.git && cd x86code
+   git clone --recursive https://github.com/x86sim/x86sim.git && cd x86sim
    cp x86sim.env.example x86sim.env      # then edit if needed: paths, GPU settings
    ```
 2. **Get the iOS 27.2 runtime** straight from Apple (about 8 GB download, ~23 GB unpacked):
@@ -65,12 +65,12 @@ phone) from the launcher's Setup page; see [docs/RELEASE.md](RELEASE.md). From s
    ```sh
    make mtlvk                            # Metal on Vulkan
    linux/arm64jit/install.sh             # the arm64 JIT, installed into Darling
-   (cd tools/launcher && cargo build --release)   # launcher, x86code-aot, x86code-mcp
+   (cd tools/launcher && cargo build --release)   # launcher, x86sim-aot, x86sim-mcp
    ```
 5. **Pre-translate** (optional, much faster boots and app opens):
-   `tools/launcher/target/release/x86code-aot --device $PWD/var/device-a64 build --full`, or the launcher's
+   `tools/launcher/target/release/x86sim-aot --device $PWD/var/device-a64 build --full`, or the launcher's
    Pre-translate page.
-6. **Boot:** from the launcher, or `X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh` (see *Usage*).
+6. **Boot:** from the launcher, or `X86SIM_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh` (see *Usage*).
 
 Commands that need root (installing Darling, killing the setuid `darling` launcher, cores) read the password from
 `SUDO_PASS` in the environment or use sudo's prompt or cache. The password is never stored in a file.
@@ -103,9 +103,9 @@ x86sim device models|list|create --model "iPhone 17 Pro" [name]
 tests/perf.py all               # short performance run (idle CPU, launch times, frame times, touch latency)
 ```
 
-Useful environment variables: `X86CODE_METAL=all|backboardd|0` (GPU for every process / backboardd only / software
-rendering), `A64_JOBS=min|slim|std|full`, `A64_DROP="label ..."`, `X86CODE_NODT=all,-<label>` (os_log text for one job),
-`X86CODE_INSERT=host/simshim/diag/...` (diagnostic shims, built with `make mac-diag`), `X86CODE_MDNS=0`,
+Useful environment variables: `X86SIM_METAL=all|backboardd|0` (GPU for every process / backboardd only / software
+rendering), `A64_JOBS=min|slim|std|full`, `A64_DROP="label ..."`, `X86SIM_NODT=all,-<label>` (os_log text for one job),
+`X86SIM_INSERT=host/simshim/diag/...` (diagnostic shims, built with `make mac-diag`), `X86SIM_MDNS=0`,
 `X86SIM_JETSAM=0`, `X86SIM_MEM_MAX`. Debugging: `tools/debug/` (`lastcrash.sh`, `stuck.sh <process>`, `allstacks.sh`,
 `sigctx.py`).
 
@@ -128,5 +128,5 @@ shader still needs a Mac.
 them; no code or content) on the machine that made the release. The planner counts it with the install's own profiles,
 so a new install's first image already holds what apps run. Refresh it after using the system apps on a dev build:
 
-    tools/launcher/target/release/x86code-aot --jc ~/scratch/x86code/jc-24B8117 export-training \
+    tools/launcher/target/release/x86sim-aot --jc ~/scratch/x86sim/jc-24B8117 export-training \
         --out cli/libexec/arm64/training-24B8117.x86t

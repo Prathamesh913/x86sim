@@ -34,7 +34,7 @@ namespace Dynarmic::Backend { bool IsJitCodeAddress(unsigned long host_pc); }
 #include <dlfcn.h>
 
 namespace a64 {
-bool g_step = getenv("X86CODE_A64_STEP") != nullptr;  // one instruction per Run (exact fault PCs)
+bool g_step = getenv("X86SIM_A64_STEP") != nullptr;  // one instruction per Run (exact fault PCs)
 
 const DarwinApi *g_darwin;
 // Speed 19: Darling's x86_64 libsystem_platform fills generically: bzero and memset are memset_pattern4, which calls
@@ -68,7 +68,7 @@ bool is_fast_fill(const void *fn) {
     return false;
 }
 void *dsym(const char *name) {
-    if (!(getenv("X86CODE_A64_FASTFILL") && atoi(getenv("X86CODE_A64_FASTFILL")) == 0))
+    if (!(getenv("X86SIM_A64_FASTFILL") && atoi(getenv("X86SIM_A64_FASTFILL")) == 0))
         for (const auto &f : kFast) if (!strcmp(name, f.n)) return f.f;
     return g_darwin->dlsym((void *)-2 /* RTLD_DEFAULT */, name);
 }
@@ -121,7 +121,7 @@ static Mapped map_macho(const std::string &path, bool want_unixthread) {
     const bool is_dyld = path.size() >= 17 && path.compare(path.size() - 17, 17, "/usr/lib/dyld_sim") == 0;
     if (const Placement *pl = want_unixthread && !is_dyld ? nullptr : placement_find(path.c_str()); pl && size <= pl->slot && placement_claim(pl, fd)) {
         base = mmap((void *)pl->addr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
-        if (getenv("X86CODE_A64_STATS")) logf("placement: exe %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
+        if (getenv("X86SIM_A64_STATS")) logf("placement: exe %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
     }
     if (base == MAP_FAILED)
         base = mmap((void *)lo, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (lo ? MAP_FIXED_NOREPLACE : 0), -1, 0);
@@ -190,11 +190,11 @@ static thread_local int tl_open_fd = -1;
 // path under the runtime root that names an image of the cache, so dyld takes the cache's copy (one copy of Metal's
 // ObjC classes, already translated in the image); everything else in the process (CFBundle, xpc) uses the native calls
 // and still finds the file. The libsystem stub dylibs are answered before this (stub_fd_for_path).
-// X86CODE_A64_DYLD_HIDE_CACHED=0 shows those files to dyld_sim again.
+// X86SIM_A64_DYLD_HIDE_CACHED=0 shows those files to dyld_sim again.
 static std::string g_sim_root;
 static std::unordered_set<std::string> g_cached_paths;
 static void load_cached_paths(const std::string &cache, const std::string &root) {
-    if (const char *e = getenv("X86CODE_A64_DYLD_HIDE_CACHED"); e && atoi(e) == 0) return;
+    if (const char *e = getenv("X86SIM_A64_DYLD_HIDE_CACHED"); e && atoi(e) == 0) return;
     int fd = d_open(cache.c_str(), O_RDONLY);
     if (fd < 0) return;
     uint8_t h[0x200];
@@ -236,10 +236,10 @@ static void set_guest_errno(int e) {
 // Perf 8: the libsystem stub dylibs go to a fixed address just below the cache window in every process (they went
 // anywhere, so every cache GOT entry for libsystem held a different value in each process and the builder). With one
 // address, A64StubLinkPass links the cache's libsystem import stubs straight to the stub (guarded), in the image too.
-// X86CODE_A64_STUB_FIXED=0: anywhere.
+// X86SIM_A64_STUB_FIXED=0: anywhere.
 static thread_local u64 tl_stub_addr;
 u64 stub_fixed_address(const char *install) {
-    static const bool on = !(getenv("X86CODE_A64_STUB_FIXED") && atoi(getenv("X86CODE_A64_STUB_FIXED")) == 0);
+    static const bool on = !(getenv("X86SIM_A64_STUB_FIXED") && atoi(getenv("X86SIM_A64_STUB_FIXED")) == 0);
     if (!on) return 0;
     if (!strcmp(install, "/usr/lib/system/libsystem_kernel.dylib")) return kStubBase;
     if (!strcmp(install, "/usr/lib/system/libsystem_platform.dylib")) return kStubBase + kStubSlot;
@@ -283,18 +283,18 @@ static u64 place_reservation(u64 size, int prot) {
             if (p == (void *)a) return a;
             if (p != MAP_FAILED) munmap(p, size);
         }
-        if (getenv("X86CODE_A64_STATS")) logf("stub dylib not at %#lx (reserve %#lx)", (unsigned long)a, (unsigned long)size);
+        if (getenv("X86SIM_A64_STATS")) logf("stub dylib not at %#lx (reserve %#lx)", (unsigned long)a, (unsigned long)size);
         return 0;
     }
     const Placement *pl = tl_open_place;
     tl_open_place = nullptr;
     if (!pl || !size || size > pl->slot || !placement_claim(pl, tl_open_fd)) {
-        if (pl && getenv("X86CODE_A64_STATS")) logf("placement: %s not placed (reserve %#lx, slot %#lx)", pl->key.c_str(), (unsigned long)size, (unsigned long)pl->slot);
+        if (pl && getenv("X86SIM_A64_STATS")) logf("placement: %s not placed (reserve %#lx, slot %#lx)", pl->key.c_str(), (unsigned long)size, (unsigned long)pl->slot);
         return 0;
     }
     void *p = mmap((void *)pl->addr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
     if (p == MAP_FAILED) return 0;
-    if (getenv("X86CODE_A64_STATS")) logf("placement: %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
+    if (getenv("X86SIM_A64_STATS")) logf("placement: %s at %#lx", pl->key.c_str(), (unsigned long)pl->addr);
     return pl->addr;
 }
 // vm_allocate(task, addr*, size, flags)
@@ -397,7 +397,7 @@ static u64 build_syscall_helpers() {
 // Faults that dynarmic's fastmem handler doesn't recover: report the guest state (last block entry) before Darling's
 // handler reports the host side.
 static void peek() {
-    if (const char *pk = getenv("X86CODE_A64_PEEK"))  // debug: comma-separated guest addresses to dump (8 bytes each)
+    if (const char *pk = getenv("X86SIM_A64_PEEK"))  // debug: comma-separated guest addresses to dump (8 bytes each)
         for (const char *q = pk; *q;) {
             char *e; u64 a = strtoull(q, &e, 16);
             if (e == q) break;
@@ -488,7 +488,7 @@ static void native_backtrace(ucontext_t *ctx) {
 // a jump to a non-exec address) is fatal. Chaining it to Darling's sigexc handler parked the faulting thread in a
 // darlingserver sigprocess RPC forever (often holding the zone lock of the malloc that faulted), so the process hung
 // at 0% instead of crashing and being restarted by launchd_sim. Now: report (lock-free; a nested fault in the handler
-// kills at once; no SIGALRM watchdog: unblocking a pending SIGALRM killed the process mid-report), then SIGKILL. X86CODE_A64_NATIVE_FAULT=chain
+// kills at once; no SIGALRM watchdog: unblocking a pending SIGALRM killed the process mid-report), then SIGKILL. X86SIM_A64_NATIVE_FAULT=chain
 // restores the old chaining.
 static void fatal_exit(int code) {
     (void)code;
@@ -513,7 +513,7 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
         g_old_segv.sa_sigaction(sig, si, uc);
         return;
     }
-    if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86CODE_A64_FAULTLOG")) {
+    if (sig == SIGSEGV && si->si_code == SEGV_ACCERR && in_const_data((u64)si->si_addr) && !getenv("X86SIM_A64_FAULTLOG")) {
         struct sigaction *old = &g_old_segv;
         if (old->sa_flags & SA_SIGINFO) { old->sa_sigaction(sig, si, uc); return; }
     }
@@ -538,7 +538,7 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
     long expect = 0;
     in_handler_tid.compare_exchange_strong(expect, tid);
     const u64 rip = (u64)ctx->uc_mcontext.gregs[REG_RIP];
-    static const char *nf = getenv("X86CODE_A64_NATIVE_FAULT");
+    static const char *nf = getenv("X86SIM_A64_NATIVE_FAULT");
     const bool fatal = !Dynarmic::Backend::IsJitCodeAddress(rip) && !(nf && !strcmp(nf, "chain"));
     char buf[256];
     int n = snprintf(buf, sizeof buf, "signal %d code %d addr %p rip %#llx err %#llx\n", sig, si->si_code, si->si_addr,
@@ -556,7 +556,7 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
             logf("  guest lr in %s", m[0] ? m : "(unmapped)");
         }
     }
-    if (getenv("X86CODE_A64_FAULTBYTES")) {  // debug: the faulting host instruction's first bytes
+    if (getenv("X86SIM_A64_FAULTBYTES")) {  // debug: the faulting host instruction's first bytes
         auto *ip = (const uint8_t *)ctx->uc_mcontext.gregs[REG_RIP];
         logf("rip bytes %02x %02x %02x %02x %02x %02x", ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
     }
@@ -653,11 +653,11 @@ static void on_abrt(int, siginfo_t *si, void *uc) {
     } else {
         logf("no GuestThread on aborting tid (native-only or TLS cleared)");
     }
-    // Speed 27: training passes only (X86CODE_A64_AOT_AUTOSAVE=1): keep what this process translated, as a normal
+    // Speed 27: training passes only (X86SIM_A64_AOT_AUTOSAVE=1): keep what this process translated, as a normal
     // exit does. A process that aborts right after new code ran (Maps' route card: SwiftUI missed its update deadline
     // while translating) otherwise loses exactly the code the image lacks. Not in normal use: the save takes the
     // shared code lock, which the aborting thread may hold.
-    if (const char *a = getenv("X86CODE_A64_AOT_AUTOSAVE"); a && atoi(a) == 1) jitcache_save_on_exit();
+    if (const char *a = getenv("X86SIM_A64_AOT_AUTOSAVE"); a && atoi(a) == 1) jitcache_save_on_exit();
     signal(SIGABRT, SIG_DFL);
     raise(SIGABRT);
 }
@@ -714,7 +714,7 @@ static void memlog_once() {
         while (fgets(l, sizeof l, f)) if (!strncmp(l, "RssAnon:", 8)) anon = atol(l + 8);
         fclose(f);
     }
-    if (getenv("X86CODE_A64_STATS")) {  // Speed 6: hottest svc thunks so far (SIGUSR1; was only at exit)
+    if (getenv("X86SIM_A64_STATS")) {  // Speed 6: hottest svc thunks so far (SIGUSR1; was only at exit)
         extern u64 g_thunk_counts[0x10000];
         std::vector<std::pair<u64, u32>> v;
         for (u32 i = 0, n = thunk_count(); i < n; i++) if (g_thunk_counts[i]) v.push_back({g_thunk_counts[i], i});
@@ -762,14 +762,14 @@ static void memlog_once() {
     }
 }
 static void on_usr1(int, siginfo_t *, void *) { memlog_once(); }
-// X86CODE_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS.
+// X86SIM_A64_MEMLOG=<seconds>: a native thread logs the ELF side's malloc use (glibc mallinfo2) and the anon RSS.
 // SIGUSR1 always dumps one memlog line (no env needed) for live attribution of host anon blobs.
 static void start_memlog() {
     struct sigaction su{};
     su.sa_sigaction = on_usr1;
     su.sa_flags = SA_SIGINFO | SA_RESTART;
     sigaction(SIGUSR1, &su, nullptr);
-    const char *e = getenv("X86CODE_A64_MEMLOG");
+    const char *e = getenv("X86SIM_A64_MEMLOG");
     if (!e || atoi(e) <= 0) return;
     int secs = atoi(e);
     sigset_t all, old;  // RAM 14: native threads block every signal (see gheap.cpp start_scavenger)
@@ -787,7 +787,7 @@ static void start_memlog() {
 // RAM 4: every read fault on a file mapping maps the whole fault-around window (fault_around_bytes = 64 KB, or the
 // whole large folio) of what is in the page cache; MADV_RANDOM no longer turns that off. A process ends up mapping
 // several times the pages it touched (all counted in PSS; Referenced is set on all of them).
-// X86CODE_A64_FILETRIM=<secs> (default 15, 0 off): a native thread checks every <secs> whether the process was idle (under 3% CPU)
+// X86SIM_A64_FILETRIM=<secs> (default 15, 0 off): a native thread checks every <secs> whether the process was idle (under 3% CPU)
 // and its file RSS grew by >= 2 MB since the last trim; then it drops the page-table entries of clean file pages
 // (MADV_DONTNEED: the pages stay in the page cache; a later touch maps them again from there, no I/O). Only where no
 // data can be lost: read-only shared mappings (a shared page lives in the page cache anyway), and the parts of a
@@ -796,7 +796,7 @@ static void start_memlog() {
 // libarm64jit's own patches of guest __TEXT (mprotect, write, mprotect) hold g_text_patch_mu, as does each 2 MB step.
 // The AOT image (.map, MAP_PRIVATE rwx: link sites are written at run time) the same way, page by page, with the
 // shared emitter lock held for each 2 MB step (every write to translated code happens under it), so a site being
-// linked can never lose its new copy-on-write page. X86CODE_A64_FILETRIM_IMAGE=0: leave the image alone.
+// linked can never lose its new copy-on-write page. X86SIM_A64_FILETRIM_IMAGE=0: leave the image alone.
 std::mutex g_text_patch_mu;
 std::shared_mutex g_cache_prot_mu;
 bool with_shared_code_lock(void (*fn)(void *), void *arg);  // jit.cpp
@@ -828,17 +828,17 @@ static std::vector<std::pair<u64, u64>> cache_ro_ranges(const char *path, bool r
     close(fd);
     return r;
 }
-static bool cache_const_trim() {  // X86CODE_A64_FILETRIM_CONST=0: leave the cache's read-only __DATA_CONST alone
-    static const bool on = !(getenv("X86CODE_A64_FILETRIM_CONST") && atoi(getenv("X86CODE_A64_FILETRIM_CONST")) == 0);
+static bool cache_const_trim() {  // X86SIM_A64_FILETRIM_CONST=0: leave the cache's read-only __DATA_CONST alone
+    static const bool on = !(getenv("X86SIM_A64_FILETRIM_CONST") && atoi(getenv("X86SIM_A64_FILETRIM_CONST")) == 0);
     return on;
 }
-static bool priv_trim() {  // X86CODE_A64_FILETRIM_PRIV=0: leave non-cache read-only private file mappings alone
-    static const bool on = !(getenv("X86CODE_A64_FILETRIM_PRIV") && atoi(getenv("X86CODE_A64_FILETRIM_PRIV")) == 0);
+static bool priv_trim() {  // X86SIM_A64_FILETRIM_PRIV=0: leave non-cache read-only private file mappings alone
+    static const bool on = !(getenv("X86SIM_A64_FILETRIM_PRIV") && atoi(getenv("X86SIM_A64_FILETRIM_PRIV")) == 0);
     return on;
 }
 static void file_trim_once() {
     struct V { u64 a, b; int kind; };  // 0 cache (g_text_patch_mu), 1 shared, 2 AOT image (emitter lock)
-    static const bool image = !(getenv("X86CODE_A64_FILETRIM_IMAGE") && atoi(getenv("X86CODE_A64_FILETRIM_IMAGE")) == 0);
+    static const bool image = !(getenv("X86SIM_A64_FILETRIM_IMAGE") && atoi(getenv("X86SIM_A64_FILETRIM_IMAGE")) == 0);
     std::vector<V> v;
     static std::map<std::string, std::vector<std::pair<u64, u64>>> ro;  // per cache file
     if (FILE *f = fopen("/proc/self/maps", "r")) {
@@ -941,12 +941,12 @@ static void file_trim_once() {
     }
     close(pm);
 }
-// RAM 4 diagnostics: X86CODE_A64_COWDIFF=<secs> X86CODE_A64_COWDIFF_DIR=<dir>: once, <secs> after start, compare
+// RAM 4 diagnostics: X86SIM_A64_COWDIFF=<secs> X86SIM_A64_COWDIFF_DIR=<dir>: once, <secs> after start, compare
 // every private (COW'd) page of the AOT image mapping with the file and classify the changed bytes by the site kind
 // they hit (link head: 8-byte aligned `mov rax, imm64` unlinked / jmp/jcc linked; RSB `mov rcx, imm64`; other), and
 // where a linked jump now points (inside the image or not). Written to <dir>/cowdiff-<exe>-<pid>.txt.
 static void cow_diff_once() {
-    const char *dir = getenv("X86CODE_A64_COWDIFF_DIR");
+    const char *dir = getenv("X86SIM_A64_COWDIFF_DIR");
     if (!dir) return;
     FILE *f = fopen("/proc/self/maps", "r");
     if (!f) return;
@@ -965,7 +965,7 @@ static void cow_diff_once() {
     fclose(f);
     if (!a) return;
     int pm = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC), fd = open(path, O_RDONLY | O_CLOEXEC);
-    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *exe = getenv("X86SIM_A64_EXE");
     const char *bn = exe && strrchr(exe, '/') ? strrchr(exe, '/') + 1 : "guest";
     char out[512];
     snprintf(out, sizeof out, "%s/cowdiff-%s-%d.txt", dir, bn, (int)getpid());
@@ -1036,11 +1036,11 @@ static void cow_diff_once() {
     close(pm);
     close(fd);
 }
-// x86Code RAM 6: the fast dispatch table (a64:fastdispatch, 1-4 MB per process) is a cache of block lookups hashed by
+// x86Sim RAM 6: the fast dispatch table (a64:fastdispatch, 1-4 MB per process) is a cache of block lookups hashed by
 // crc32 over the whole table, so a process that ran a few thousand blocks has every page of it touched (36 MB over 38
 // processes at home). An idle process drops it (same as ClearFastDispatchTable: empty = zero bytes; entries are read
 // as one 16-byte access in shared mode, so a reader sees the entry or a miss). Under the shared emitter lock, which
-// GetBlock's fill holds. The next wakeup refills what it runs. X86CODE_A64_FDTRIM=0: off.
+// GetBlock's fill holds. The next wakeup refills what it runs. X86SIM_A64_FDTRIM=0: off.
 static void fastdispatch_trim_locked(void *) {
     if (FILE *f = fopen("/proc/self/maps", "r")) {
         char l[512];
@@ -1053,18 +1053,18 @@ static void fastdispatch_trim_locked(void *) {
     }
 }
 static void fastdispatch_trim() {
-    static const bool on = !(getenv("X86CODE_A64_FDTRIM") && atoi(getenv("X86CODE_A64_FDTRIM")) == 0);
+    static const bool on = !(getenv("X86SIM_A64_FDTRIM") && atoi(getenv("X86SIM_A64_FDTRIM")) == 0);
     if (on) with_shared_code_lock(fastdispatch_trim_locked, nullptr);
 }
 static void start_file_trim() {
-    if (const char *c = getenv("X86CODE_A64_COWDIFF"); c && atoi(c) > 0) {
+    if (const char *c = getenv("X86SIM_A64_COWDIFF"); c && atoi(c) > 0) {
         sigset_t all, old;
         sigfillset(&all);
         pthread_sigmask(SIG_SETMASK, &all, &old);
         std::thread([secs = atoi(c)] { g_non_darling_thread = true; sleep(secs); cow_diff_once(); }).detach();
         pthread_sigmask(SIG_SETMASK, &old, nullptr);
     }
-    const char *e = getenv("X86CODE_A64_FILETRIM");
+    const char *e = getenv("X86SIM_A64_FILETRIM");
     const int secs = e && *e ? atoi(e) : 15;
     if (secs <= 0) return;
     sigset_t all, old;
@@ -1077,16 +1077,16 @@ static void start_file_trim() {
         // RAM 9: file pages come back in bursts: a launched daemon maps ~100+ MB of fault-around in its first seconds,
         // and SpringBoard's status bar clock maps ~110 MB of the AOT image every minute (~2700 faults, 0.1 s of CPU).
         // With one check every 15 s (the first at 30 s, its window counting the launch twice) they stayed 15-60 s, and
-        // a memcat snapshot caught them or not. Now the file RSS is checked every X86CODE_A64_FILETRIM_TICK s (default
+        // a memcat snapshot caught them or not. Now the file RSS is checked every X86SIM_A64_FILETRIM_TICK s (default
         // 3; busy measured over that real window) and trimmed after a quiet tick; the fast dispatch table (a refill
         // costs) is still dropped only after a quiet window of <secs>.
-        const char *te = getenv("X86CODE_A64_FILETRIM_TICK");
+        const char *te = getenv("X86SIM_A64_FILETRIM_TICK");
         int tick = te && *te ? atoi(te) : 3;
         if (tick <= 0 || tick > secs) tick = secs;
         auto now = [] { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; };
         auto pct = [](double c, double w) { return c * 100.0 / (w > 1 ? w : 1); };
         long base = 0, prev = 0;
-        const char *se = getenv("X86CODE_A64_FILETRIM_SETTLE");
+        const char *se = getenv("X86SIM_A64_FILETRIM_SETTLE");
         const long settle_kb = (se && *se ? atol(se) : 64) << 10;
         double c0 = cpu(), w0 = now(), fc0 = c0, fw0 = w0;
         for (;;) {
@@ -1100,7 +1100,7 @@ static void start_file_trim() {
             // RAM 11: a foreground app that keeps a few % of CPU (Health ~5%: an animation, a timer) never went quiet,
             // so its whole launch (0.85-1.1 GB of file pages per app: dyld cache, AOT image and index fault-around)
             // stayed mapped as long as it was open. Also trim once the file RSS stopped growing for a tick, grew by
-            // >= X86CODE_A64_FILETRIM_SETTLE MB (default 64, 0 off) since the last trim, and CPU is under 25%.
+            // >= X86SIM_A64_FILETRIM_SETTLE MB (default 64, 0 off) since the last trim, and CPU is under 25%.
             const long r = rss_file_kb();
             const long grew = r - prev;
             prev = r;
@@ -1113,7 +1113,7 @@ static void start_file_trim() {
             clock_gettime(CLOCK_MONOTONIC, &t1);
             base = prev = rss_file_kb();
             c0 = cpu(); w0 = now();
-            if (getenv("X86CODE_A64_FILETRIM_LOG"))
+            if (getenv("X86SIM_A64_FILETRIM_LOG"))
                 logf("filetrim: RssFile %ld -> %ld MB in %.1f ms (cpu %.1f%%%s)", r >> 10, base >> 10,
                      (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6, busy, busy >= 3.0 ? ", settled" : "");
         }
@@ -1135,7 +1135,7 @@ static void install_fault_report() {
 
 void print_stats() {
     peek();
-    if (!getenv("X86CODE_A64_STATS")) return;
+    if (!getenv("X86SIM_A64_STATS")) return;
     logf("exit after %.1f ms", ms_since(g_t0));
     if (FILE *f = fopen("/proc/self/status", "r")) {
         char l[256];
@@ -1160,44 +1160,44 @@ static bool g_penv_applied = false;
 extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, char **argv, char **envp, char **apple, const DarwinApi *api) {
     clock_gettime(CLOCK_MONOTONIC, &g_t0);
     g_darwin = api;
-    // x86Code: dynarmic writes /tmp/perf-<pid>.map when PERF_BUILDID_DIR is set (Linux perf symbolize).
-    // X86CODE_A64_PERFMAP=1 selects /tmp (the only allowed /tmp use besides that map).
-    if (getenv("X86CODE_A64_PERFMAP") && !getenv("PERF_BUILDID_DIR"))
+    // x86Sim: dynarmic writes /tmp/perf-<pid>.map when PERF_BUILDID_DIR is set (Linux perf symbolize).
+    // X86SIM_A64_PERFMAP=1 selects /tmp (the only allowed /tmp use besides that map).
+    if (getenv("X86SIM_A64_PERFMAP") && !getenv("PERF_BUILDID_DIR"))
         setenv("PERF_BUILDID_DIR", "/tmp", 0);
-    g_trace = getenv("X86CODE_A64_TRACE") != nullptr;
-    // X86CODE_A64_TRACE_PROC=name[,name]: trace only these executables (set for a whole boot)
-    if (const char *tp = getenv("X86CODE_A64_TRACE_PROC"); tp && getenv("X86CODE_A64_EXE")) {
-        const char *e = getenv("X86CODE_A64_EXE"), *b = strrchr(e, '/');
+    g_trace = getenv("X86SIM_A64_TRACE") != nullptr;
+    // X86SIM_A64_TRACE_PROC=name[,name]: trace only these executables (set for a whole boot)
+    if (const char *tp = getenv("X86SIM_A64_TRACE_PROC"); tp && getenv("X86SIM_A64_EXE")) {
+        const char *e = getenv("X86SIM_A64_EXE"), *b = strrchr(e, '/');
         std::string base = b ? b + 1 : e, list = std::string(",") + tp + ",";
         g_trace = list.find("," + base + ",") != std::string::npos;
     }
-    if (const char *sp = getenv("X86CODE_A64_STEP_PROC"); sp && getenv("X86CODE_A64_EXE")) {
-        const char *e = getenv("X86CODE_A64_EXE"), *b = strrchr(e, '/');
+    if (const char *sp = getenv("X86SIM_A64_STEP_PROC"); sp && getenv("X86SIM_A64_EXE")) {
+        const char *e = getenv("X86SIM_A64_EXE"), *b = strrchr(e, '/');
         std::string base = b ? b + 1 : e, list = std::string(",") + sp + ",";
         g_step = list.find("," + base + ",") != std::string::npos;
     }
     d_open = (int (*)(const char *, int, ...))dsym("open");
     boundary_init();
 
-    // The guest executable: from mldr (X86CODE_A64_EXE, argv untouched) or "arm64host <exe> [args]".
+    // The guest executable: from mldr (X86SIM_A64_EXE, argv untouched) or "arm64host <exe> [args]".
     std::string exe;
-    if (const char *e = getenv("X86CODE_A64_EXE")) exe = e;
+    if (const char *e = getenv("X86SIM_A64_EXE")) exe = e;
     else if (argc > 1) { exe = argv[1]; argv++; argc--; }
     else { fprintf(stderr, "usage: arm64host <arm64 iOS-simulator executable> [args...]\n"); return 2; }
     // Speed 6: launchd_sim turns ASLR off for the processes it spawns (personality is inherited across fork/exec;
     // only the simulator's jobs, not the host). Same library and code cache address in every process -> they share
-    // one relocated AOT image. X86CODE_A64_NOASLR=0 keeps ASLR.
+    // one relocated AOT image. X86SIM_A64_NOASLR=0 keeps ASLR.
     if (const char *b = strrchr(exe.c_str(), '/'); !strcmp(b ? b + 1 : exe.c_str(), "launchd_sim") &&
-                                                    !(getenv("X86CODE_A64_NOASLR") && atoi(getenv("X86CODE_A64_NOASLR")) == 0))
+                                                    !(getenv("X86SIM_A64_NOASLR") && atoi(getenv("X86SIM_A64_NOASLR")) == 0))
         personality(personality(0xffffffff) | ADDR_NO_RANDOMIZE);
-    // X86CODE_A64_SLIM_PARK=substr[,substr]: park matching executables before dyld/JIT so SpringBoard's
+    // X86SIM_A64_SLIM_PARK=substr[,substr]: park matching executables before dyld/JIT so SpringBoard's
     // RunningBoard assertions stay satisfied (process alive) without translating Spotlight/WidgetRenderer
     // (~0.5–1.5 GB PSS each). Replaces the kill-every-5s slim-reaper thrash.
-    // Park list: env X86CODE_A64_SLIM_PARK, or file (launchd does not pass env to jobs).
+    // Park list: env X86SIM_A64_SLIM_PARK, or file (launchd does not pass env to jobs).
     // File default: <scratch_dir()>/a64-slim-park (written by boot-a64.sh).
     {
         std::string park;
-        if (const char *e = getenv("X86CODE_A64_SLIM_PARK")) park = e;
+        if (const char *e = getenv("X86SIM_A64_SLIM_PARK")) park = e;
         if (park.empty()) {
             if (FILE *f = fopen((scratch_dir() + "/a64-slim-park").c_str(), "r")) {
                 char buf[512];
@@ -1236,25 +1236,26 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
         else exe = "/Volumes/SystemRoot" + exe;
     }
 
-    // Guest environment: mldr renamed DYLD_* to X86CODE_A64_DYLD_* so Darling's dyld ignores them.
+    // Guest environment: mldr renamed DYLD_* to X86SIM_A64_DYLD_* so Darling's dyld ignores them.
     std::vector<char *> genv;
     std::string root, cache_dir;
     // Speed 30: environ when the a64-penv file applied something (its setenv() calls must reach the guest too), envp
     // otherwise (unchanged default)
     for (char **e = g_penv_applied ? environ : envp; *e; e++) {
         std::string s = *e;
-        if (!s.compare(0, 17, "X86CODE_A64_DYLD_")) s = s.substr(12);
-        // Speed 28 (debug): X86CODE_A64_GENV_<NAME>=v reaches the guest as NAME=v (launchd jobs only get X86CODE_A64_*)
-        else if (!s.compare(0, 17, "X86CODE_A64_GENV_")) s = s.substr(17);
-        else if (!s.compare(0, 16, "X86CODE_A64_EXE=") || !s.compare(0, 16, "X86CODE_A64_JIT=")) continue;
+        auto pre = [&s](std::string_view p) { return s.compare(0, p.size(), p) == 0; };
+        if (pre("X86SIM_A64_DYLD_")) s = s.substr(sizeof("X86SIM_A64_") - 1);
+        // Speed 28 (debug): X86SIM_A64_GENV_<NAME>=v reaches the guest as NAME=v (launchd jobs only get X86SIM_A64_*)
+        else if (pre("X86SIM_A64_GENV_")) s = s.substr(sizeof("X86SIM_A64_GENV_") - 1);
+        else if (pre("X86SIM_A64_EXE=") || pre("X86SIM_A64_JIT=")) continue;
         if (!s.compare(0, 15, "DYLD_ROOT_PATH=")) root = s.substr(15);
         if (!s.compare(0, 22, "DYLD_SHARED_CACHE_DIR=")) cache_dir = s.substr(22);
         genv.push_back(strdup(s.c_str()));
     }
     // 2026-11-03 defaults: JavaScriptCore without its FTL tier (JSC_useFTLJIT=false) unless the guest env sets it.
     // FTL's B3 compiles run translated and cost more than they win here: JS bench 2.06-2.10 s vs 2.53-2.58 s with
-    // FTL (DFG off as well: 4.28 s; no JIT: 6.6 s); page loads unchanged. X86CODE_A64_JSC_FTL=1 keeps JSC's default.
-    if (!(getenv("X86CODE_A64_JSC_FTL") && atoi(getenv("X86CODE_A64_JSC_FTL")) == 1) &&
+    // FTL (DFG off as well: 4.28 s; no JIT: 6.6 s); page loads unchanged. X86SIM_A64_JSC_FTL=1 keeps JSC's default.
+    if (!(getenv("X86SIM_A64_JSC_FTL") && atoi(getenv("X86SIM_A64_JSC_FTL")) == 1) &&
         std::none_of(genv.begin(), genv.end(), [](const char *v) { return !strncmp(v, "JSC_useFTLJIT=", 14); }))
         genv.push_back(strdup("JSC_useFTLJIT=false"));
     if (root.empty()) die("DYLD_ROOT_PATH is not set (the arm64 simulator runtime root)");
@@ -1326,15 +1327,15 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
 }
 
 // Speed 29 debug: per-process environment from a file, applied before every other static initializer of this library
-// (many knobs are read once into static consts). File: $X86CODE_A64_PENV_FILE or <scratch_dir()>/a64-penv,
+// (many knobs are read once into static consts). File: $X86SIM_A64_PENV_FILE or <scratch_dir()>/a64-penv,
 // lines "<program basename> K=V [K=V...]" ("*" for every program; '#' comments). Used to bisect one app's knobs without rebooting the phone.
 __attribute__((constructor(101))) static void a64_penv() {
     // (g_penv_applied: declared above main's environment loop)
-    const char *exe = getenv("X86CODE_A64_EXE");
+    const char *exe = getenv("X86SIM_A64_EXE");
     if (!exe) return;
     const char *b = strrchr(exe, '/');
     b = b ? b + 1 : exe;
-    const char *fn = getenv("X86CODE_A64_PENV_FILE");
+    const char *fn = getenv("X86SIM_A64_PENV_FILE");
     FILE *f = fopen(fn ? fn : (scratch_dir() + "/a64-penv").c_str(), "r");
     if (!f) return;
     char line[1024];
@@ -1351,14 +1352,14 @@ __attribute__((constructor(101))) static void a64_penv() {
 // first touch of a 2 MB-aligned stretch of a guest heap, a thread stack or the JIT's metadata faults a whole 2 MB page
 // (~124 MB of huge pages over an idle phone, mostly untouched 4 KB pages). The AOT image and the dyld cache are file
 // mappings and never used THP here. Per process (inherited across fork/exec), not a host setting.
-// X86CODE_A64_THP=1 keeps the host default.
+// X86SIM_A64_THP=1 keeps the host default.
 __attribute__((constructor(102))) static void a64_no_thp() {
-    const char *e = getenv("X86CODE_A64_THP");
+    const char *e = getenv("X86SIM_A64_THP");
     if (e && atoi(e) == 1) return;
-    // Perf 12: with the AOT image's huge-page copy (X86CODE_A64_AOT_HUGE=1), except what asks for it: this prctl had
+    // Perf 12: with the AOT image's huge-page copy (X86SIM_A64_AOT_HUGE=1), except what asks for it: this prctl had
     // silently refused the copy's 2 MB mappings (MADV_HUGEPAGE). PR_THP_DISABLE_EXCEPT_ADVISED is Linux 6.18+; on older
     // kernels, or without the copy, everything off as before.
-    const char *h = getenv("X86CODE_A64_AOT_HUGE");
+    const char *h = getenv("X86SIM_A64_AOT_HUGE");
     if (h && atoi(h) == 1 && prctl(PR_SET_THP_DISABLE, 1, 1 << 1 /* PR_THP_DISABLE_EXCEPT_ADVISED */, 0, 0) == 0) return;
     prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
 }

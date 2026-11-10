@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: a jetsam stand-in. Reclaims what a device's memorystatus would: idle extensions, background apps and clean
+"""x86Sim: a jetsam stand-in. Reclaims what a device's memorystatus would: idle extensions, background apps and clean
 idle-exit daemons.
 
 On a device memorystatus keeps every process in a band and, when memory runs short, kills the idle band first (clean
@@ -9,8 +9,8 @@ poster and file-provider extensions chronod and PosterBoard started (~6 GB at a 
 a boot's launch events started (Siri's, Wallet's, Maps': ~1 GB). The phone runs as if memory were always short (a host
 runs several phones), so this reclaims as soon as something has been idle a while. What it reads (Darling's
 libsystem_kernel records it in the container, cleared at each boot):
-  /private/var/run/x86code-suspended/<pid>   RunningBoard suspended it (pid_suspend; removed on pid_resume)
-  /private/var/run/x86code-jetsam/<pid>      "<band> <dirty flags> <user data> <darwin bg>" (process/memorystatus.c):
+  /private/var/run/x86sim-suspended/<pid>   RunningBoard suspended it (pid_suspend; removed on pid_resume)
+  /private/var/run/x86sim-jetsam/<pid>      "<band> <dirty flags> <user data> <darwin bg>" (process/memorystatus.c):
       dirty flags as proc_get_dirty: 1 tracked, 2 allows idle exit (launchd: EnablePressuredExit), 4 dirty (an open
       XPC transaction); darwin bg 1 = RunningBoard backgrounded it (PRIO_DARWIN_BG), 0 = brought back; darwin role
       (PRIO_DARWIN_ROLE) 3 = off screen (NON_UI), 6 = DARWIN_BG, 1/2/4 = on screen.
@@ -23,10 +23,10 @@ Kills (SIGKILL, as jetsam; launchd / RunningBoard relaunch what is needed on the
     X86SIM_JETSAM_LAST s (default 90), so switching back to the last app soon is a warm resume. X86SIM_JETSAM_KEEP
     (default 1): how many get the longer time. Only on a positive "this is background" signal, never by inference:
     RunningBoard suspended it, PRIO_DARWIN_BG, darwin role NON_UI / DARWIN_BG, or RunningBoard's state of the process
-    (com.x86code.openurl answers it: host/openurl frontmost()) without the frontboard visibility endowment or suspended.
+    (com.x86sim.openurl answers it: host/openurl frontmost()) without the frontboard visibility endowment or suspended.
     Never killed (checked again, with a fresh answer, right before the kill): an app RunningBoard reports visible,
     one in SpringBoard's display layout or reported frontmost, and one that was in the foreground when the user last
-    touched or typed (<data>/tmp/x86code-input, simhid) within X86SIM_JETSAM_INPUT s (default 60).
+    touched or typed (<data>/tmp/x86sim-input, simhid) within X86SIM_JETSAM_INPUT s (default 60).
     (RAM 2 fix: SBSCopyFrontmostApplicationDisplayIdentifier answers nil for every app here, which read as "home": every
     app in the foreground past 30 s was taken for a background one and killed 90 s later, Maps in the middle of the
     gate's route test. Maps at the home screen keeps visibility and role UI_FOCAL here, so it is reclaimed only once
@@ -54,8 +54,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import x86config  # noqa: E402
 
 PREFIX = x86config.get("X86SIM_DPREFIX")
-DIR = os.path.join(PREFIX, "private/var/run/x86code-suspended")
-JDIR = os.path.join(PREFIX, "private/var/run/x86code-jetsam")
+DIR = os.path.join(PREFIX, "private/var/run/x86sim-suspended")
+JDIR = os.path.join(PREFIX, "private/var/run/x86sim-jetsam")
 EXT = float(os.environ.get("X86SIM_JETSAM_EXT", "10"))
 APP = float(os.environ.get("X86SIM_JETSAM_APP", "30"))
 LAST = float(os.environ.get("X86SIM_JETSAM_LAST", "90"))
@@ -97,13 +97,13 @@ DIRTY_OK = set(os.environ.get("X86SIM_JETSAM_DIRTY", "siriactionsd,corespeechd")
 XPC_IDLE = os.environ.get("X86SIM_JETSAM_XPC", "1") != "0"
 DIRTY_IDLE = float(os.environ.get("X86SIM_JETSAM_DIRTY_IDLE", "300"))
 POLL = 2.0
-# RAM 2: RunningBoard's and SpringBoard's view of the apps, from com.x86code.openurl (host/openurl frontmost()): the
+# RAM 2: RunningBoard's and SpringBoard's view of the apps, from com.x86sim.openurl (host/openurl frontmost()): the
 # request lists the apps' Darling pids, the answer has per pid "pid <pid> <visible> <task state>", "layout <n> <ids>"
 # and SpringBoard's frontmost id on line 1. Asked every FRONT_EVERY s, and again right before an app is killed.
 DEVDATA = os.path.join(os.environ.get("X86SIM_DEVICE", ""), "data")
-FRONT_REQ = os.path.join(DEVDATA, "tmp/x86code-frontmost.req")
-FRONT = os.path.join(DEVDATA, "tmp/x86code-frontmost")
-INPUT = os.path.join(DEVDATA, "tmp/x86code-input")   # simhid: mtime = the last touch / key / button
+FRONT_REQ = os.path.join(DEVDATA, "tmp/x86sim-frontmost.req")
+FRONT = os.path.join(DEVDATA, "tmp/x86sim-frontmost")
+INPUT = os.path.join(DEVDATA, "tmp/x86sim-input")   # simhid: mtime = the last touch / key / button
 INPUT_KEEP = float(os.environ.get("X86SIM_JETSAM_INPUT", "60"))
 FRONT_EVERY = 10.0
 WARN = os.environ.get("X86SIM_JETSAM_WARN", "1") != "0"

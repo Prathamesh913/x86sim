@@ -1,6 +1,6 @@
-// x86Code: diagnostic shim: logs failing mmap() calls (MercuryPosterExtension's vImageCreateCGImageFromBuffer failed
+// x86Sim: diagnostic shim: logs failing mmap() calls (MercuryPosterExtension's vImageCreateCGImageFromBuffer failed
 // with kvImageMemoryAllocationError) with errno and arguments, in MercuryPosterExtension only.
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <sys/mman.h>
 #include <errno.h>
 #include <stdio.h>
@@ -16,7 +16,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[200];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/mmapdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/mmapdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;

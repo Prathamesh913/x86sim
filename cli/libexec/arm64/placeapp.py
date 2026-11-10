@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# x86Code (Speed 31): give an installed app's Mach-Os (executable, its dylibs, embedded frameworks, plug-ins) slots in
+# x86Sim (Speed 31): give an installed app's Mach-Os (executable, its dylibs, embedded frameworks, plug-ins) slots in
 # <jitcache dir>/placement.txt without moving any existing slot (mkplacement.py packs in path order, so a Containers/
 # key would shift every System/ slot and force their image chunks to rebuild). New keys go after the highest slot; a
-# reinstalled file (other size/mtime) keeps its slot when it still fits. Afterwards `x86code-aot update` builds the
+# reinstalled file (other size/mtime) keeps its slot when it still fits. Afterwards `x86sim-aot update` builds the
 # app tier's chunks (one per file, keyed by the Mach-O UUID + a hash of the file + its slot).
 #   placeapp.py JC_DIR APP_DIR...   (APP_DIR: <device>/data/Containers/Bundle/Application/<UUID>/<Name>.app)
 #   placeapp.py --prune JC_DIR [DATA_DIR]   (Speed 35, uninstall: drop every Containers/ row whose container exists on

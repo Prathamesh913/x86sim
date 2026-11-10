@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>MetalDemo</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.x86code.metaldemo</string>
+	<string>com.x86sim.metaldemo</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

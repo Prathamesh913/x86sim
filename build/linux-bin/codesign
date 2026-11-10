@@ -1,5 +1,5 @@
 #!/bin/sh
-# x86Code: codesign for the Linux build (build/linux-env.sh), ad-hoc only, via rcodesign (cargo install apple-codesign).
+# x86Sim: codesign for the Linux build (build/linux-env.sh), ad-hoc only, via rcodesign (cargo install apple-codesign).
 #   codesign -s - [--force] [--entitlements f.plist] <path>     codesign --verify [--strict] <path>
 command -v rcodesign >/dev/null || PATH=$PATH:$HOME/.cargo/bin
 command -v rcodesign >/dev/null || { echo "codesign (linux): rcodesign not found (cargo install apple-codesign)" >&2; exit 1; }

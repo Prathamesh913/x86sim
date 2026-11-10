@@ -7,8 +7,8 @@ function constants, compute pipelines, compute encoders, samplers, threadgroup m
 render encoders with all bindings, fixed-function state and draws, textures over IOSurfaces shared across
 processes, imported without copies). mtlprobe: 46/46.
 
-**Metal is on by default** in the launcher (its boot setting passes `X86CODE_METAL=all` to
-`cli/libexec/arm64/boot-a64.sh`; `X86CODE_METAL=0`, boot-a64.sh's own default when run by hand, gives the software
+**Metal is on by default** in the launcher (its boot setting passes `X86SIM_METAL=all` to
+`cli/libexec/arm64/boot-a64.sh`; `X86SIM_METAL=0`, boot-a64.sh's own default when run by hand, gives the software
 renderer). CoreAnimation's own Metal renderer composites the screen on the host GPU into
 SimFramebuffer's swapchain IOSurfaces, and it draws the iOS 26 glass dock platter that the software renderer leaves
 out. MercuryPosterExtension draws the default wallpaper, which matches a Mac's since the `uint4` alignment fix
@@ -31,7 +31,7 @@ Cross-process IOSurfaces (`com.apple.IOSurface.Remote`, host/iosurfaced/iosurfac
 - **metalhostd** (`metalhostd.m` + `vkmtl.m`, one iossimulator binary; arm64 build in `host/metalhostd/arm64`): dlopens the runtime's
   `MTLSimImplementation`, rebinds its (and MetalSerializer's) GOT entries for `MTLCreateSystemDefaultDevice` /
   `MTLCopyAllDevices` to ours, and calls `init_with_xpc_connection(listener, registryID, 0)` for every service name in
-  `X86CODE_METAL_NAMES` (a launchd job with those `MachServices`). Everything Apple's server does (handshake, buffers
+  `X86SIM_METAL_NAMES` (a launchd job with those `MachServices`). Everything Apple's server does (handshake, buffers
   from xpc_shmem, object commands, command-buffer segments, getBytes into the app's shmem, completion messages 100/101,
   event listeners) is Apple's code; only the `id<MTLDevice>` below it is ours.
 - **vkmtl.m**: `VKMTLDevice`, `VKMTLBuffer`, `VKMTLTexture`, `VKMTLCommandQueue`, `VKMTLCommandBuffer`,
@@ -50,8 +50,8 @@ Cross-process IOSurfaces (`com.apple.IOSurface.Remote`, host/iosurfaced/iosurfac
   `CB_COMMIT` carries a list of commands (copies, fill, mipmaps, render pass, signal/wait, compute encoder
   BEGIN/state/dispatch/END), `EV_CB_DONE` comes back. Stage 4 added `LIB_NEW`, `FUNC_NEW`, `CPS_NEW`, `SAMPLER_NEW`;
   `BUF_NEW`'s reply carries the buffer's GPU address.
-- **Darling** (patches/darling-iossim.patch, all marked `x86Code:`):
-  - darlingserver RPC `x86code_memfd_for_region` (appended last in generate-rpc-wrappers.py so older clients keep their
+- **Darling** (patches/darling-iossim.patch, all marked `x86Sim:`):
+  - darlingserver RPC `x86sim_memfd_for_region` (appended last in generate-rpc-wrappers.py so older clients keep their
     call numbers) + libsystem_kernel BSD syscall **599**: `fd = syscall(599, addr, len, &offset, &shared)` returns the
     memfd behind a range of the caller's memory (made shared first, as `mach_make_memory_entry` does).
   - darlingserver: anonymous `MAP_SHARED` memory (Linux "/dev/zero (deleted)") is moved into a memfd when it is
@@ -69,29 +69,29 @@ Cross-process IOSurfaces (`com.apple.IOSurface.Remote`, host/iosurfaced/iosurfac
 
 ## Gating
 
-`cli/libexec/mksimdevice.py` adds the `com.x86code.metalhostd` job only when `X86CODE_METAL` is set and not `0`.
+`cli/libexec/mksimdevice.py` adds the `com.x86sim.metalhostd` job only when `X86SIM_METAL` is set and not `0`.
 `cli/libexec/arm64/boot-a64.sh` starts this boot's mtlvk on `mtlvk.sock` in its state dir (log `mtlvk.log`), or shares a
 running one (`A64_MTLVK_SOCKET`), and waits up to 5 s for the socket. If mtlvk does not come up, it boots with
-`X86CODE_METAL=0`:
-- `X86CODE_METAL=1`: `com.apple.metal.simulator.mtlprobe` only (the test client).
-- `X86CODE_METAL=proc1,proc2`: `com.apple.metal.simulator.<proc>` for those processes (MTLSimDriver looks up
+`X86SIM_METAL=0`:
+- `X86SIM_METAL=1`: `com.apple.metal.simulator.mtlprobe` only (the test client).
+- `X86SIM_METAL=proc1,proc2`: `com.apple.metal.simulator.<proc>` for those processes (MTLSimDriver looks up
   `com.apple.metal.simulator.<getprogname()>` first).
-- `X86CODE_METAL=backboardd`: CoreAnimation's render server (backboardd) composites with Metal. Every other process
+- `X86SIM_METAL=backboardd`: CoreAnimation's render server (backboardd) composites with Metal. Every other process
   keeps the software path.
-- `X86CODE_METAL=all`: also the generic `com.apple.metal.simulator`, so every process gets a device (SpringBoard,
+- `X86SIM_METAL=all`: also the generic `com.apple.metal.simulator`, so every process gets a device (SpringBoard,
   the wallpaper poster, RenderBox, apps). **This is the launcher's default.**
-- `X86CODE_METAL=backboardd,PosterBoard,MercuryPosterExtension`: CA plus the wallpaper only (apps stay software).
-- `X86CODE_IOSURFACE` (default 1): the iosurfaced job, and no `IOSURFACE_REMOTE_EMULATED`. `X86CODE_IOSURFACE=0`
+- `X86SIM_METAL=backboardd,PosterBoard,MercuryPosterExtension`: CA plus the wallpaper only (apps stay software).
+- `X86SIM_IOSURFACE` (default 1): the iosurfaced job, and no `IOSURFACE_REMOTE_EMULATED`. `X86SIM_IOSURFACE=0`
   goes back to per-process emulation (IOSurfaces cannot be shared; Metal IOSurface textures then fail).
-  `X86CODE_IOSURFACE_LOG=1`: iosurfaced trace.
+  `X86SIM_IOSURFACE_LOG=1`: iosurfaced trace.
 Diagnostics (mtlvk): `MTLVK_DUMP_PASSES=<dir>` (colour attachments after every render pass, resolve textures for
 MSAA; every level of the textures a compute encoder bound; compute buffer bindings logged; `MTLVK_DUMP_MAX`
 command buffers, default 60; view with a raw-to-PNG script), `MTLVK_DUMP_REPLACE=<dir>` (every replaceRegion's
 bytes), and refused render pipelines are written to `run/failed/` (replay: `rpsrepro <profile> <id>-vert.metallib
 <id>-frag.metallib I:FORMAT... stencil=N`). `astctest` (bin) + tools/debug/astccmp.py check MTLSimDriver's ASTC kernel
 against a CPU decoder.
-Optional: `X86CODE_VKMTL_LOG=1` (metalhostd trace), `X86CODE_VKMTL_DUMP=1` (metalhostd saves every metallib it
-receives to `var/metal/captured/`), `X86CODE_METAL_PROFILE=<n>` (hostFeatureProfile, default 10001 =
+Optional: `X86SIM_VKMTL_LOG=1` (metalhostd trace), `X86SIM_VKMTL_DUMP=1` (metalhostd saves every metallib it
+receives to `var/metal/captured/`), `X86SIM_METAL_PROFILE=<n>` (hostFeatureProfile, default 10001 =
 Mac2 + Common3, no tile shaders), `MTLVK_LOG=1` (mtlvk trace).
 
 ## Build and run
@@ -111,8 +111,8 @@ build/mac-build-arm64-shims.sh metalhostd iosurfaced mtlprobe         # -> host/
 cd darling/build && ninja src/external/darlingserver/darlingserver src/external/xnu/darling/src/libsystem_kernel/libsystem_kernel.dylib
 # test: starts mtlvk, boots a minimal arm64 device (metalhostd + mtlprobe + iosurfaced) in its own prefix
 SECS=60 tests/metal/run-probe-a64.sh
-# the normal boot: Metal for every process (boot-a64.sh starts mtlvk; X86CODE_METAL=0 for software rendering)
-X86CODE_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh
+# the normal boot: Metal for every process (boot-a64.sh starts mtlvk; X86SIM_METAL=0 for software rendering)
+X86SIM_METAL=all A64_KEEP=1 cli/libexec/arm64/boot-a64.sh
 ```
 
 Probe output (2026-10-27, RTX 5090, driver 615.78.08), stage 5 (46/46). Every result is checked on the CPU:
@@ -194,7 +194,7 @@ The device name, families and limits the app sees are the client's own (MTLSimDr
   `probe_metallib.h`/`probe_source.h`
   (embedded in mtlprobe), `captured/*.wire.metallib` (what MTLSimImplementation actually hands the device: one
   metallib per specialized function, see "Shader path")
-- `the metal2vulkan x86code branch`: our fixes in external/metal2vulkan (`git apply` there)
+- `the metal2vulkan x86sim branch`: our fixes in external/metal2vulkan (`git apply` there)
 - `../iosurface/iosprobe.m` (two-process IOSurface test); `host/iosurfaced/iosurfaced.m` (com.apple.IOSurface.Remote)
 - `run-probe-a64.sh` (the arm64 probe boot)
 - `PLAN.md`, `PROTOCOL.md`: design and the transport's wire format
@@ -218,7 +218,7 @@ The device name, families and limits the app sees are the client's own (MTLSimDr
   attachments, 14 fragments need framebuffer-fetch formats: both are pipeline inputs, not refusals), RenderBox 54/60,
   MercuryPoster 36/44 (7 refusals: MSL 3.2 program-scope bindings `air.global_bindings`, not implemented by the
   translator; **43/44 since stage 5**, see below).
-- Translator fix (the metal2vulkan x86code branch): a `select` between two constant globals' addresses (blob pointers)
+- Translator fix (the metal2vulkan x86sim branch): a `select` between two constant globals' addresses (blob pointers)
   was refused (`Lowering(Access) NotImplemented`); MTLSimDriver's `pvrtc4` decoder does it.
 - Translator fixes (Spike 3.7, same patch): `[[front_facing]]` taken as an `i8` (RenderBox's specialized
   `path_interior_fragment`), and no `uvec4` units for 16-byte leaves (a `uint4` load from a buffer bound at a
@@ -255,7 +255,7 @@ The device name, families and limits the app sees are the client's own (MTLSimDr
 
 ## CoreAnimation on Metal (backboardd)
 
-`X86CODE_METAL=backboardd`: backboardd's QuartzCore finds a device and switches its render server to Metal. In a
+`X86SIM_METAL=backboardd`: backboardd's QuartzCore finds a device and switches its render server to Metal. In a
 200 s boot it created 27 render pipelines and 0 failed. They include CA's image/colour-matrix/blend fragment
 shaders and the iOS 26 glass shaders (`glass_background_no_bleed_lpf`, `glass_background_sdf_no_bleed_lpf`,
 `variable_blur_*`, `downsample_blur_*`). The swapchain's three full-screen BGRA IOSurfaces (from simfb, created in

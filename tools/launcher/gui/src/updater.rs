@@ -6,7 +6,7 @@ use eframe::egui;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use x86code_core::update::{self, Release};
+use x86sim_core::update::{self, Release};
 
 #[derive(Default, Clone)]
 pub enum Phase {
@@ -108,8 +108,8 @@ impl App {
                 ui.add_space(4.0);
             }
             Phase::Ready(rel, path) => {
-                let running = self.status.values().any(|s| s.phase != x86code_core::instance::Phase::Off);
-                let tip = if running { "Restarts x86Code; running phones keep running" } else { "Restarts x86Code" };
+                let running = self.status.values().any(|s| s.phase != x86sim_core::instance::Phase::Off);
+                let tip = if running { "Restarts x86Sim; running phones keep running" } else { "Restarts x86Sim" };
                 if ui.add(Btn::primary(&format!("Restart for {}", rel.tag)).icon(icon::ARROW_CLOCKWISE).small()).on_hover_text(tip).clicked() {
                     match update::relaunch(&path) {
                         Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
@@ -129,7 +129,7 @@ impl App {
         list_card(ui, |ui| {
             let supported = Updater::supported();
             let detail = if supported {
-                format!("x86Code {}. Looks for a new release when it starts and every 6 hours.", x86code_core::setup::version())
+                format!("x86Sim {}. Looks for a new release when it starts and every 6 hours.", x86sim_core::setup::version())
             } else {
                 "Only for the AppImage; a checkout updates with git.".to_string()
             };

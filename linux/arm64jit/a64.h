@@ -136,13 +136,13 @@ constexpr u32 kExitSvc = 0xffff;
 constexpr u32 kLinuxSvc = 0xfffe;
 // "svc #0xfffd": Swift conformance scan step (swiftconf.cpp), substituted by MemoryReadCode, never in memory.
 constexpr u32 kSwiftConfSvc = 0xfffd;
-// "svc #0xfff9": Speed 29 verify mode of the conformance filter (X86CODE_A64_SWIFT_CONF_VERIFY), at the match sites.
+// "svc #0xfff9": Speed 29 verify mode of the conformance filter (X86SIM_A64_SWIFT_CONF_VERIFY), at the match sites.
 constexpr u32 kSwiftConfVerifySvc = 0xfff9;
-// Speed 30 debug (X86CODE_A64_AGDL=1, iOS 27.2 24B8117 only): AttributeGraph deadline probes, jit.cpp
+// Speed 30 debug (X86SIM_A64_AGDL=1, iOS 27.2 24B8117 only): AttributeGraph deadline probes, jit.cpp
 constexpr u32 kAgDlSetSvc = 0xfff1, kAgDlPassedSvc = 0xfff2, kAgDlCancelSvc = 0xfff3;
-// Speed 31 debug (X86CODE_A64_AGOUT=<attribute id hex>, 27.2 24B8117): AGGraphSetOutputValue / AGGraphGetOutputValue probes
+// Speed 31 debug (X86SIM_A64_AGOUT=<attribute id hex>, 27.2 24B8117): AGGraphSetOutputValue / AGGraphGetOutputValue probes
 constexpr u32 kAgOutSetSvc = 0xfff4, kAgOutGetSvc = 0xfff5;
-// Speed 35 debug (X86CODE_A64_AGCHK=1): AG::Graph::UpdateStack::update's post-rule flags load (27.2 0x1c950c134)
+// Speed 35 debug (X86SIM_A64_AGCHK=1): AG::Graph::UpdateStack::update's post-rule flags load (27.2 0x1c950c134)
 constexpr u32 kAgChkSvc = 0xffd0;
 void agout_dump(u32 attr);
 // "svc #0xfffc": Swift type-by-name conformance walk step (swiftscan.cpp), substituted by MemoryReadCode.
@@ -178,24 +178,24 @@ void swiftconf_step(GuestThread &t);
 void swiftconf_verify(GuestThread &t);
 std::optional<u32> swifttype_read_code(u64 a);  // swiftscan.cpp: svc at the type-by-name conformance walk
 void swifttype_step(GuestThread &t);
-const std::string &scratch_dir();  // jitcache.cpp: $X86SIM_SCRATCH, else <real user home>/scratch/x86code
+const std::string &scratch_dir();  // jitcache.cpp: $X86SIM_SCRATCH, else <real user home>/scratch/x86sim
 const std::string &jitcache_cache_file();  // jitcache.cpp: the main dyld cache file
 u32 swift_text_word(u64 a);  // swiftscan.cpp: a code word of the cache, read from its file
 u64 swift_text_find(const u32 *words, const u32 *mask, size_t n);  // swiftscan.cpp: code pattern in libswiftCore
 struct GuestThread;
-void svc_bench(GuestThread &t);  // X86CODE_A64_SVCBENCH=n / X86CODE_A64_GUESTLIB_TEST=1 (guestlibc.cpp)
+void svc_bench(GuestThread &t);  // X86SIM_A64_SVCBENCH=n / X86SIM_A64_GUESTLIB_TEST=1 (guestlibc.cpp)
 bool is_guest_libc_export(const std::string &n);
 size_t emit_guest_libc(const std::string &n, uint32_t *o, u32 slow);  // dyldsim.cpp: native shortcuts in dyld_sim (after mapping, before it runs)
 uint32_t thunk_count();                // acquire-load of published thunk count (see add_thunk)
 
 // Generic handlers: integer/pointer/fp arguments straight through (x0-x7 -> rdi..r9 + stack, d0-d7 -> xmm0-7).
-bool memcheck();            // X86CODE_A64_MEMCHECK=1: inline address check per guest access (RAM 3; jit.cpp)
-bool strict_monitor();      // X86CODE_A64_STRICT_MONITOR=1: dynarmic's global exclusive monitor (handlers.cpp)
-bool timebase_apple();       // X86CODE_A64_TIMEBASE=apple: guest mach time at 24 MHz (handlers.cpp)
+bool memcheck();            // X86SIM_A64_MEMCHECK=1: inline address check per guest access (RAM 3; jit.cpp)
+bool strict_monitor();      // X86SIM_A64_STRICT_MONITOR=1: dynarmic's global exclusive monitor (handlers.cpp)
+bool timebase_apple();       // X86SIM_A64_TIMEBASE=apple: guest mach time at 24 MHz (handlers.cpp)
 void tb_convert_qos_changes(void *list, int n);  // kevent_qos_s timer changes: guest ticks -> ns (handlers.cpp)
 u64 tb_ns_to_ticks(u64 ns);
 void gsample_start(GuestThread *t);
-void gsample_forget(GuestThread *t);  // X86CODE_A64_GSAMPLE (jit.cpp)
+void gsample_forget(GuestThread *t);  // X86SIM_A64_GSAMPLE (jit.cpp)
 void h_generic(GuestThread &t, u32 i);
 void h_generic_bool(GuestThread &t, u32 i);  // bool result: zero-extend al
 void h_variadic(GuestThread &t, u32 i);      // fixed args in registers, the rest from guest stack slots
@@ -230,7 +230,7 @@ size_t emit_guest_code(const std::string &name, uint32_t *out, u32 slow_thunk); 
 // stubs link to them there. Their code is the same in every process (stub_code_hash checks it, jitcache.cpp).
 constexpr u64 kStubBase = 0x2FFF00000ull, kStubSlot = 0x40000ull;
 u64 stub_code_hash();
-u64 stub_fixed_address(const char *install);  // 0: anywhere (X86CODE_A64_STUB_FIXED=0)
+u64 stub_fixed_address(const char *install);  // 0: anywhere (X86SIM_A64_STUB_FIXED=0)
 struct StubLib { std::string install_name; int fd = -1; size_t size = 0; std::string path; };
 // Builds the arm64 stub dylib for one host library (exports from the cache placeholder's export trie).
 StubLib build_stub_dylib(const std::string &install_name, const std::vector<std::string> &exports);
@@ -272,7 +272,7 @@ void jitcache_set_shared(const std::shared_ptr<Dynarmic::A64::Jit::SharedCode> &
 void jitcache_try_load(Dynarmic::A64::Jit::SharedCode &shared);
 u64 jitcache_image_code_bytes();  // Speed 18: code size of the image this process will load (0: none)
 void jitcache_try_save(Dynarmic::A64::Jit::SharedCode &shared, const std::string &to = "");
-void jitcache_aot_build(GuestThread &t);  // X86CODE_A64_AOT_BUILD=1: union of training .bins -> .aot
+void jitcache_aot_build(GuestThread &t);  // X86SIM_A64_AOT_BUILD=1: union of training .bins -> .aot
 void jitcache_save_if_shared();  // no-op when SHARED=0 or no live shared code
 u64 reserve_aligned(u64 size, u64 mask);  // guest-VM range [12 GB, 63 GB), PROT_NONE
 // gheap.cpp

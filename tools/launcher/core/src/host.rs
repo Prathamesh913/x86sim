@@ -147,7 +147,7 @@ pub struct HubSettings {
     pub card_w: f32,
     /// order of the phones on the home view: "name" | "newest" | "oldest" | "model" | "ios"
     pub sort: String,
-    /// look for a newer x86Code release (AppImage only) at start and every few hours
+    /// look for a newer x86Sim release (AppImage only) at start and every few hours
     pub check_updates: bool,
     /// release channel: "" (the running version's: pre-release builds follow pre-releases) | "stable" | "pre"
     pub channel: String,

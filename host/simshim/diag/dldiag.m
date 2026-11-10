@@ -1,7 +1,7 @@
-// x86Code: diagnostic shim (Speed 30, arm64): who keeps a CADisplayLink running. Swizzles CADisplayLink's
+// x86Sim: diagnostic shim (Speed 30, arm64): who keeps a CADisplayLink running. Swizzles CADisplayLink's
 // +displayLinkWithTarget:selector:, -setPaused:, -addToRunLoop:forMode:, -invalidate, -setPreferredFrameRateRange: and
 // logs the target's class, the selector and the caller's return addresses (raw, unslid: `ipsw dyld a2s`).
-// Every 10 s it lists the live links (paused or not). Log: /private/var/tmp/x86code-a64/dldiag.<prog>.<pid>.log
+// Every 10 s it lists the live links (paused or not). Log: /private/var/tmp/x86sim-a64/dldiag.<prog>.<pid>.log
 // Enabled by DLDIAG=1 in the process's environment (e.g. libarm64jit's a64-penv file).
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
@@ -88,7 +88,7 @@ __attribute__((constructor)) static void dldiag_init(void)
 {
 	if (!getenv("DLDIAG")) return;
 	char p[512];
-	snprintf(p, sizeof(p), "/private/var/tmp/x86code-a64/dldiag.%s.%d.log", getprogname(), getpid());
+	snprintf(p, sizeof(p), "/private/var/tmp/x86sim-a64/dldiag.%s.%d.log", getprogname(), getpid());
 	lfd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	links = [NSHashTable weakObjectsHashTable];
 	Class c = objc_getClass("CADisplayLink");

@@ -17,12 +17,12 @@ target_link_options(arm64jit PRIVATE -static-libstdc++ -static-libgcc -Wl,--no-u
 target_link_libraries(arm64jit PRIVATE dynarmic pthread)
 # Speed 31: ARM's astc-encoder (third_party/astcenc, Apache-2.0) for the native libate ASTC decode (astc.cpp)
 file(GLOB ASTCENC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astcenc/astcenc_*.cpp)
-add_library(astcenc_x86code STATIC ${ASTCENC_SRC})
-target_compile_definitions(astcenc_x86code PRIVATE ASTCENC_SSE=41 ASTCENC_AVX=0 ASTCENC_POPCNT=1 ASTCENC_F16C=0 ASTCENC_NEON=0 ASTCENC_SVE=0)
-target_compile_options(astcenc_x86code PRIVATE -O2 -msse4.1 -mpopcnt -fvisibility=hidden -w)
-target_link_libraries(arm64jit PRIVATE astcenc_x86code)
+add_library(astcenc_x86sim STATIC ${ASTCENC_SRC})
+target_compile_definitions(astcenc_x86sim PRIVATE ASTCENC_SSE=41 ASTCENC_AVX=0 ASTCENC_POPCNT=1 ASTCENC_F16C=0 ASTCENC_NEON=0 ASTCENC_SVE=0)
+target_compile_options(astcenc_x86sim PRIVATE -O2 -msse4.1 -mpopcnt -fvisibility=hidden -w)
+target_link_libraries(arm64jit PRIVATE astcenc_x86sim)
 # Speed 32: Apple's reference LZFSE decoder (third_party/lzfse, BSD-3; from Darling's src/external/lzfse) for lzfse.cpp
-add_library(lzfse_x86code STATIC third_party/lzfse/lzfse_decode.c third_party/lzfse/lzfse_decode_base.c
+add_library(lzfse_x86sim STATIC third_party/lzfse/lzfse_decode.c third_party/lzfse/lzfse_decode_base.c
             third_party/lzfse/lzfse_fse.c third_party/lzfse/lzvn_decode_base.c)
-target_compile_options(lzfse_x86code PRIVATE -O2 -fvisibility=hidden -fPIC -w)
-target_link_libraries(arm64jit PRIVATE lzfse_x86code)
+target_compile_options(lzfse_x86sim PRIVATE -O2 -fvisibility=hidden -fPIC -w)
+target_link_libraries(arm64jit PRIVATE lzfse_x86sim)

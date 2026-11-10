@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: short performance measurements on a running boot (seconds each, normal load).
+"""x86Sim: short performance measurements on a running boot (seconds each, normal load).
 
   tests/perf.py idle [secs]               CPU per process at idle (default 10 s)
   tests/perf.py scroll [secs]             drags up/down on the current screen (a list: open Settings first):

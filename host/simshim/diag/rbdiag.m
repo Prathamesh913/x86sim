@@ -1,7 +1,7 @@
-// x86Code: diagnostic shim (runningboardd): which LSBundleProxy does RunningBoard get for extension processes,
+// x86Sim: diagnostic shim (runningboardd): which LSBundleProxy does RunningBoard get for extension processes,
 // and what extension point identifier does it report ("could not find extension point for xpcservice<...>")
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <dlfcn.h>
 #include <objc/runtime.h>
 #include <mach-o/dyld.h>
@@ -9,7 +9,7 @@
 #include <unistd.h>
 static int logfd(void) {
 	static int fd = -1;
-	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86CODE_DATA_DIR "/var/log/rbdiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
+	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86SIM_DATA_DIR "/var/log/rbdiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
 	return fd;
 }
 static IMP o_ep;

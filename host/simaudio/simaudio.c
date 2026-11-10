@@ -1,4 +1,4 @@
-// x86Code: libsimaudio.dylib, the simulator's audio devices on a Linux host.
+// x86Sim: libsimaudio.dylib, the simulator's audio devices on a Linux host.
 //
 // On a Mac the simulator's CoreAudio is only a HAL *client*: HALC_ProxySystem looks up the host's coreaudiod
 // (bootstrap_look_up2 "com.apple.audio.audiohald", forwarded by launchd_sim to the Mac's bootstrap) and every
@@ -9,11 +9,11 @@
 // thread runs the clients' IOProcs on a clock and moves PCM over a Unix socket to cli/libexec/simaudio.py on Linux,
 // which plays it on PipeWire/PulseAudio (pw-cat) and records the microphone from there.
 //
-// Socket: $X86CODE_AUDIO_SOCKET (Darling path). Per stream one connection: a 16-byte header
+// Socket: $X86SIM_AUDIO_SOCKET (Darling path). Per stream one connection: a 16-byte header
 //   "x86A" | u32 direction (0 output, 1 input) | u32 sample rate | u32 channels
 // then raw float32 interleaved frames (output: sim -> Linux; input: Linux -> sim).
 // Linked flat-namespace with weak references: a process that does not load CoreAudio is left untouched.
-// X86CODE_AUDIO_LOG=1: log calls on our objects and unknown properties to stderr.
+// X86SIM_AUDIO_LOG=1: log calls on our objects and unknown properties to stderr.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,7 +155,7 @@ static void notify(AudioObjectID obj, UInt32 sel, UInt32 scope) {
 
 // ---- Linux connection ----
 static int connect_linux(struct dev* d) {
-	const char* path = getenv("X86CODE_AUDIO_SOCKET");
+	const char* path = getenv("X86SIM_AUDIO_SOCKET");
 	if (!path || !*path) return -1;
 	int s = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (s < 0) return -1;
@@ -201,8 +201,8 @@ static void stamp(struct dev* d, double sample, AudioTimeStamp* t) {
 
 static void* iothread(void* arg) {
 	struct dev* d = arg;
-	pthread_setname_np(d->input ? "com.x86code.simaudio.input" : "com.x86code.simaudio.output");
-	// x86Code: a time-constraint thread as the HAL's IO thread would be
+	pthread_setname_np(d->input ? "com.x86sim.simaudio.input" : "com.x86sim.simaudio.output");
+	// x86Sim: a time-constraint thread as the HAL's IO thread would be
 	struct sched_param sp = { .sched_priority = 47 }; pthread_setschedparam(pthread_self(), SCHED_RR, &sp);
 	UInt32 ch = d->channels;
 	float *mix = NULL, *buf = NULL, *in = NULL; size_t cap = 0;
@@ -319,8 +319,8 @@ static OSStatus getprop(AudioObjectID obj, const AudioObjectPropertyAddress* a, 
 			AudioObjectID r = 0;
 			if (qual && qsize >= sizeof(CFStringRef)) {
 				CFStringRef u = *(CFStringRef*)qual;
-				if (u && CFStringCompare(u, CFSTR("x86code-output"), 0) == 0) r = kOutDev;
-				if (u && CFStringCompare(u, CFSTR("x86code-input"), 0) == 0) r = kInDev;
+				if (u && CFStringCompare(u, CFSTR("x86sim-output"), 0) == 0) r = kOutDev;
+				if (u && CFStringCompare(u, CFSTR("x86sim-input"), 0) == 0) r = kInDev;
 			}
 			PUT(AudioObjectID, r);
 		}
@@ -329,8 +329,8 @@ static OSStatus getprop(AudioObjectID obj, const AudioObjectPropertyAddress* a, 
 		case FCC("main"): case FCC("pmut"): case FCC("slep"): case FCC("unld"): case FCC("hogr"): case FCC("user"): PUT(UInt32, 1);
 		case FCC("inot"): case FCC("stmo"): case FCC("powh"): PUT(UInt32, 0);
 		case FCC("plg#"): case FCC("box#"): case FCC("clk#"): case FCC("prs#"): case FCC("tap#"): *ioSize = 0; return 0;
-		case FCC("lnam"): PUTCF("x86code audio");
-		case FCC("lmak"): PUTCF("x86code");
+		case FCC("lnam"): PUTCF("x86sim audio");
+		case FCC("lmak"): PUTCF("x86sim");
 		}
 		return -1;  // not ours: let the real HAL answer
 	}
@@ -368,10 +368,10 @@ static OSStatus getprop(AudioObjectID obj, const AudioObjectPropertyAddress* a, 
 	case FCC("bcls"): PUT(UInt32, FCC("aobj"));
 	case FCC("stdv"): PUT(AudioObjectID, kSys);
 	case FCC("lnam"): PUTCF(d->input ? "Linux Microphone" : "Linux Speaker");
-	case FCC("lmak"): PUTCF("x86code");
+	case FCC("lmak"): PUTCF("x86sim");
 	case FCC("lmod"): PUTCF("PipeWire");
-	case FCC("uid "): PUTCF(d->input ? "x86code-input" : "x86code-output");
-	case FCC("muid"): PUTCF("x86code-pipewire");
+	case FCC("uid "): PUTCF(d->input ? "x86sim-input" : "x86sim-output");
+	case FCC("muid"): PUTCF("x86sim-pipewire");
 	case FCC("tran"): PUT(UInt32, FCC("virt"));
 	case FCC("clkd"): PUT(UInt32, 0x86);
 	case FCC("livn"): PUT(UInt32, 1);
@@ -530,7 +530,7 @@ static OSStatus removelistener(AudioObjectID o, const AudioObjectPropertyAddress
 	pthread_mutex_unlock(&llock);
 	return 0;
 }
-// x86Code: system-object listeners are recorded as well (default device changes come from us), and still passed on
+// x86Sim: system-object listeners are recorded as well (default device changes come from us), and still passed on
 // so the HAL's own bookkeeping is unchanged
 static OSStatus my_AddPropertyListener(AudioObjectID o, const AudioObjectPropertyAddress* a, AudioObjectPropertyListenerProc p, void* d) {
 	if (a && (ours(o) || o == kSys)) { addlistener(o, a, p, d, NULL, NULL); if (ours(o)) return 0; }
@@ -557,7 +557,7 @@ static Boolean my_ObjectExists(AudioObjectID o) {
 	return AudioObjectExists ? AudioObjectExists(o) : 0;
 }
 static void my_ObjectShow(AudioObjectID o) {
-	if (ours(o)) { fprintf(stderr, "x86code audio object %x\n", o); return; }
+	if (ours(o)) { fprintf(stderr, "x86sim audio object %x\n", o); return; }
 	if (AudioObjectShow) AudioObjectShow(o);
 }
 
@@ -657,7 +657,7 @@ static OSStatus my_GetNearestStartTime(AudioObjectID o, AudioTimeStamp* t, UInt3
 static OSStatus my_CreateAggregateDevice(CFDictionaryRef desc, AudioObjectID* out) { return ERR_UNSUP; }
 
 __attribute__((constructor)) static void init(void) {
-	logon = getenv("X86CODE_AUDIO_LOG") != NULL;
+	logon = getenv("X86SIM_AUDIO_LOG") != NULL;
 	timebase();
 }
 

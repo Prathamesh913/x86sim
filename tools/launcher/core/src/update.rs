@@ -1,4 +1,4 @@
-//! Self-update for the AppImage: the newest GitHub release of x86code/x86code (pre-releases included while there are
+//! Self-update for the AppImage: the newest GitHub release of x86sim/x86sim (pre-releases included while there are
 //! only pre-releases), downloaded next to the running AppImage, checked against the release's SHA256SUMS and swapped in
 //! with a rename (the running copy keeps working: its file stays open). The next start runs the new version; AppRun
 //! copies its payload into the data dir once per version, so phones and data carry over.
@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-pub const REPO: &str = "x86code/x86code";
+pub const REPO: &str = "x86sim/x86sim";
 
 #[derive(Debug, Clone)]
 pub struct Release {
@@ -50,7 +50,7 @@ pub fn version_key(v: &str) -> Option<(u32, u32, u32, u32)> {
 
 fn curl_json(url: &str) -> Result<serde_json::Value> {
     let out = Command::new("curl")
-        .args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: x86code-launcher", url])
+        .args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: x86sim-launcher", url])
         .stdin(Stdio::null())
         .output()
         .context("running curl")?;
@@ -116,7 +116,7 @@ pub fn install(rel: &Release, target: &Path, done: Arc<AtomicU64>) -> Result<Pat
     let part = dir.join(format!(".{}.part", rel.asset_name));
     let _ = std::fs::remove_file(&part);
     let mut child = Command::new("curl")
-        .args(["-fsSL", "--retry", "3", "-H", "User-Agent: x86code-launcher", "-o"])
+        .args(["-fsSL", "--retry", "3", "-H", "User-Agent: x86sim-launcher", "-o"])
         .arg(&part)
         .arg(&rel.asset_url)
         .stdin(Stdio::null())
@@ -158,9 +158,9 @@ pub fn install(rel: &Release, target: &Path, done: Arc<AtomicU64>) -> Result<Pat
     }
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755))?;
-    // the file keeps its name when it is version-less ("x86code.AppImage"); a versioned name follows the release
+    // the file keeps its name when it is version-less ("x86sim.AppImage"); a versioned name follows the release
     let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let dest = if version_key(name.trim_start_matches("x86code-").trim_end_matches("-x86_64.AppImage")).is_some() { dir.join(&rel.asset_name) } else { target.to_path_buf() };
+    let dest = if version_key(name.trim_start_matches("x86sim-").trim_end_matches("-x86_64.AppImage")).is_some() { dir.join(&rel.asset_name) } else { target.to_path_buf() };
     std::fs::rename(&part, &dest).with_context(|| format!("replacing {}", dest.display()))?;
     if dest != target {
         let _ = std::fs::remove_file(target);

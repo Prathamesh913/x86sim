@@ -1,18 +1,18 @@
-//! x86code-aot: the chunked AOT image, feature toggles and sim control from the command line.
+//! x86sim-aot: the chunked AOT image, feature toggles and sim control from the command line.
 //!
-//!   x86code-aot [--jc DIR] status [--json] [--all]       per-chunk state: up to date / stale (why) / missing
-//!   x86code-aot [--jc DIR] update [--workers N]          rebuild only stale and missing chunks, then assemble
-//!   x86code-aot [--jc DIR] build [--full] [--workers N] [--only NAME]
-//!   x86code-aot [--jc DIR] measure [--workers N]         every chunk of the scope, unlimited, sizes only
-//!   x86code-aot [--jc DIR] config [KEY VALUE]            scope (hot|loaded|all), budget_mb, follow_features, training
-//!   x86code-aot features list|get ID|set ID on|off|preset full|lean|minimal [--device DIR]
-//!   x86code-aot sim status|start|stop|restart|show [--device DIR|NAME]   status: every phone
-//!   x86code-aot setup check|install-darling|link-runtime DIR|done [--json]   the launcher's setup steps (docs/RELEASE.md)
+//!   x86sim-aot [--jc DIR] status [--json] [--all]       per-chunk state: up to date / stale (why) / missing
+//!   x86sim-aot [--jc DIR] update [--workers N]          rebuild only stale and missing chunks, then assemble
+//!   x86sim-aot [--jc DIR] build [--full] [--workers N] [--only NAME]
+//!   x86sim-aot [--jc DIR] measure [--workers N]         every chunk of the scope, unlimited, sizes only
+//!   x86sim-aot [--jc DIR] config [KEY VALUE]            scope (hot|loaded|all), budget_mb, follow_features, training
+//!   x86sim-aot features list|get ID|set ID on|off|preset full|lean|minimal [--device DIR]
+//!   x86sim-aot sim status|start|stop|restart|show [--device DIR|NAME]   status: every phone
+//!   x86sim-aot setup check|install-darling|link-runtime DIR|done [--json]   the launcher's setup steps (docs/RELEASE.md)
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use x86code_core::{aot, features, instance, sim};
+use x86sim_core::{aot, features, instance, sim};
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -25,7 +25,7 @@ fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL); // `| head` ends quietly
     }
     if let Err(e) = run() {
-        eprintln!("x86code-aot: {e:#}");
+        eprintln!("x86sim-aot: {e:#}");
         std::process::exit(1);
     }
 }
@@ -81,7 +81,7 @@ fn run() -> Result<()> {
             );
             let need = st.stale + st.missing;
             if need > 0 {
-                println!("{need} of {} chunks need rebuilding (x86code-aot update)", st.total);
+                println!("{need} of {} chunks need rebuilding (x86sim-aot update)", st.total);
             }
             for c in st.chunks.iter().filter(|c| all || c.state != "up-to-date") {
                 println!("  {:10} {:6.1} MB  {}{}", c.state, c.slot_mb, c.name, if c.reasons.is_empty() { String::new() } else { format!("  [{}]", c.reasons.join("; ")) });
@@ -146,8 +146,8 @@ fn run() -> Result<()> {
             let out = take(&mut args, "--out").map(PathBuf::from).or_else(|| aot::shipped_training(&p)).context("no output path")?;
             let mut dirs: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
             dirs.push(p.jc.clone());
-            let uuid = x86code_core::dyldcache::Cache::open(&cfg.runtime_root)?.uuid_hex();
-            let n = x86code_core::hot::write_shipped(&dirs, &uuid, &out)?;
+            let uuid = x86sim_core::dyldcache::Cache::open(&cfg.runtime_root)?.uuid_hex();
+            let n = x86sim_core::hot::write_shipped(&dirs, &uuid, &out)?;
             println!("{n} blocks -> {} ({:.1} MB)", out.display(), std::fs::metadata(&out)?.len() as f64 / 1e6);
             return Ok(());
         }
@@ -212,7 +212,7 @@ fn run() -> Result<()> {
             }
         }
         "setup" => {
-            use x86code_core::setup;
+            use x86sim_core::setup;
             let sub = if args.is_empty() { "check".to_string() } else { args.remove(0) };
             match sub.as_str() {
                 "check" => {
@@ -220,7 +220,7 @@ fn run() -> Result<()> {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&c)?);
                     } else {
-                        println!("x86Code {} · data {}", setup::version(), aot::repo_root().display());
+                        println!("x86Sim {} · data {}", setup::version(), aot::repo_root().display());
                         for k in &c {
                             println!("{:5} {:20} {}{}", format!("{:?}", k.level).to_lowercase(), k.name, k.detail, if k.fix.is_empty() { String::new() } else { format!("\n{:27}{}", "", k.fix) });
                         }

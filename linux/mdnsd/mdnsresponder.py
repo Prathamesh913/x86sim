@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: mDNSResponder stand-in for the iOS simulator under Darling.
+"""x86Sim: mDNSResponder stand-in for the iOS simulator under Darling.
 
 On a Mac the simulator has no mDNSResponder of its own: its libsystem_dnssd (mDNSResponder-2881's
 dnssd_clientstub) connects to the host's daemon at /var/run/mDNSResponder (MDNS_UDS_SERVERPATH, overridable with
@@ -20,7 +20,7 @@ GetProperty (DaemonVersion), GetPID. Accepted without results (they must not fai
 the name), RegisterRecord/AddRecord/UpdateRecord/RemoveRecord, Browse, Resolve (no multicast DNS here),
 EnumerateDomains ("local."), Reconfirm, SetDomain, NAT port mapping (reports unsupported), delegate connections.
 
-Usage: mdnsresponder.py <socket path>   (cli/libexec/arm64/boot-a64.sh starts it; X86CODE_MDNS_LOG=1 logs every request)
+Usage: mdnsresponder.py <socket path>   (cli/libexec/arm64/boot-a64.sh starts it; X86SIM_MDNS_LOG=1 logs every request)
 """
 import os
 import socket
@@ -29,10 +29,10 @@ import sys
 import threading
 import time
 
-# x86Code release: the AppImage carries dnspython (ISC) for hosts without python3-dnspython; run with -I, so the path
-# comes from X86CODE_PYLIB (set by the AppImage's entry), appended after the system's own packages
-if os.environ.get("X86CODE_PYLIB"):
-    sys.path.append(os.environ["X86CODE_PYLIB"])
+# x86Sim release: the AppImage carries dnspython (ISC) for hosts without python3-dnspython; run with -I, so the path
+# comes from X86SIM_PYLIB (set by the AppImage's entry), appended after the system's own packages
+if os.environ.get("X86SIM_PYLIB"):
+    sys.path.append(os.environ["X86SIM_PYLIB"])
 import dns.exception  # noqa: E402
 import dns.flags
 import dns.rdatatype
@@ -52,7 +52,7 @@ ERR_NONE, ERR_UNKNOWN, ERR_NOSUCHNAME, ERR_BADPARAM, ERR_NOSUCHRECORD = 0, -6553
 ERR_NATPM_UNSUPPORTED, ERR_TIMEOUT = -65564, -65568
 T_A, T_AAAA, T_CNAME = 1, 28, 5
 IF_LOCALONLY = 0xFFFFFFFF
-LOG = os.environ.get("X86CODE_MDNS_LOG") == "1"
+LOG = os.environ.get("X86SIM_MDNS_LOG") == "1"
 
 
 def log(*a):

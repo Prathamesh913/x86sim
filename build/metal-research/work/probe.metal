@@ -1,4 +1,4 @@
-// x86Code: stage-4 compute kernels for mtlprobe (compiled on the Mac for the iOS simulator:
+// x86Sim: stage-4 compute kernels for mtlprobe (compiled on the Mac for the iOS simulator:
 // tests/metal/shaders/build.sh -> probe.metallib; mtlprobe also compiles this source at run time).
 #include <metal_stdlib>
 using namespace metal;

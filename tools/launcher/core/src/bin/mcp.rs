@@ -1,11 +1,11 @@
-//! x86code-mcp: a small MCP server (JSON-RPC 2.0 over stdio, one message per line) for the x86Code arm64 simulator:
+//! x86sim-mcp: a small MCP server (JSON-RPC 2.0 over stdio, one message per line) for the x86Sim arm64 simulator:
 //! feature toggles (list / get / set / preset), sim control (status / start / stop / restart to apply) and the AOT
-//! image status. Uses x86code-core like the CLI and the GUI.
+//! image status. Uses x86sim-core like the CLI and the GUI.
 //!
-//! Register it with an MCP client, e.g. `claude mcp add x86code -- /path/to/x86code-mcp`.
+//! Register it with an MCP client, e.g. `claude mcp add x86sim -- /path/to/x86sim-mcp`.
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use x86code_core::{aot, apps, features, instance, sim};
+use x86sim_core::{aot, apps, features, instance, sim};
 
 fn tools() -> Value {
     let phone = json!({"type": "string", "description": "the phone: its name (as in the hub, e.g. \"QA\"), folder (device-a64-qa) or path. Default: the only running phone, else the configured one"});
@@ -117,7 +117,7 @@ fn call(name: &str, a: &Value) -> anyhow::Result<Value> {
             anyhow::ensure!(inst.inner.is_some(), "{} has one screen", inst.name);
             let deg = a["angle"].as_f64().unwrap_or(if a["open"].as_bool().unwrap_or(true) { 180.0 } else { 0.0 }).clamp(0.0, 180.0);
             let ms = a["ms"].as_u64().unwrap_or(600) as u32;
-            x86code_core::hid::Hid::new(&inst.sock).hinge(deg, ms);
+            x86sim_core::hid::Hid::new(&inst.sock).hinge(deg, ms);
             std::thread::sleep(std::time::Duration::from_millis(ms as u64 + 300));
             json!({"phone": inst.name, "hinge": inst.hinge(), "screen": if inst.inner_active() { "inner" } else { "outer" }})
         }
@@ -153,7 +153,7 @@ fn main() {
             "initialize" => Ok(json!({
                 "protocolVersion": req["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "x86code", "version": env!("CARGO_PKG_VERSION")}
+                "serverInfo": {"name": "x86sim", "version": env!("CARGO_PKG_VERSION")}
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tools()})),

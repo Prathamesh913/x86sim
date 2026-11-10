@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code Speed 1c: fb2png / ring decode must use IOSurface stride, not width*4.
+"""x86Sim Speed 1c: fb2png / ring decode must use IOSurface stride, not width*4.
 
 A 1206-wide BGRA frame has tight rows of 4824 bytes and a 64-byte-aligned stride of 4864.
 Decoding with Pillow frombuffer/frombytes without the real stride (or with w*4) shifts every
@@ -56,7 +56,7 @@ def main():
     assert abs(slope - 10.0) < 0.05, slope
 
     # fb2png refuses a short buffer (tight-only bytes with a padded stride header)
-    scratch = os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86code"))
+    scratch = os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86sim"))
     root = os.path.join(os.path.dirname(__file__), "../..")
     fb2png = os.path.join(root, "cli/libexec/fb2png.py")
     with tempfile.TemporaryDirectory(dir=scratch) as td:

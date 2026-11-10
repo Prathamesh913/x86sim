@@ -1,12 +1,12 @@
 //! The setup page (first run from the AppImage, and Settings > Setup later): host checks, installing Darling (the one
 //! password prompt), getting iOS (download from Apple, or link one already on disk), pre-translating (on by default) and
-//! the first phone. Each step only shows what it needs; the logic is x86code_core::setup.
+//! the first phone. Each step only shows what it needs; the logic is x86sim_core::setup.
 use crate::global::{fetch_progress, list_row, note};
 use crate::theme::*;
 use crate::{App, View};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
-use x86code_core::setup::{self, Check, DarlingState, Level};
+use x86sim_core::setup::{self, Check, DarlingState, Level};
 
 #[derive(Default)]
 pub struct Setup {
@@ -61,8 +61,8 @@ impl App {
         }
         let mut recheck = false;
         let sub_text = match setup::appimage() {
-            Some(_) => format!("x86Code {}. Everything below runs once; data lives in {}.", setup::version(), x86code_core::aot::repo_root().display()),
-            None => format!("Checkout at {} (developer setup: see README.md).", x86code_core::aot::repo_root().display()),
+            Some(_) => format!("x86Sim {}. Everything below runs once; data lives in {}.", setup::version(), x86sim_core::aot::repo_root().display()),
+            None => format!("Checkout at {} (developer setup: see README.md).", x86sim_core::aot::repo_root().display()),
         };
         page_header(ui, "Setup", &sub_text, |ui| {
             recheck = ui.add(Btn::secondary("Check again").icon(icon::ARROW_CLOCKWISE)).clicked();
@@ -117,7 +117,7 @@ impl App {
             let detail = match &ds {
                 DarlingState::Ready if setup::userns() => "Ready, without root: it runs in a user namespace of your own. Nothing to install.".into(),
                 DarlingState::Ready => format!("Installed in {}", setup::OPT_DARLING),
-                DarlingState::Outdated { .. } => "This version of x86Code brings a newer build.".into(),
+                DarlingState::Outdated { .. } => "This version of x86Sim brings a newer build.".into(),
                 _ => format!("Copied to {} once, owned by root: its launcher must be setuid root to set up each phone's container.", setup::OPT_DARLING),
             };
             list_row(ui, icon::SHIELD_CHECK, "Darling", &detail, |ui| {
@@ -135,7 +135,7 @@ impl App {
             }
             if !ready {
                 if let Some(cmd) = setup::install_command(&setup::stage_dir()) {
-                    note(ui, &format!("Or in a terminal, after copying {} to {}: sudo {}", std::env::var("X86CODE_DARLING_STAGE").unwrap_or_default(), setup::stage_dir().display(), cmd.join(" ")));
+                    note(ui, &format!("Or in a terminal, after copying {} to {}: sudo {}", std::env::var("X86SIM_DARLING_STAGE").unwrap_or_default(), setup::stage_dir().display(), cmd.join(" ")));
                 } else if setup::appimage().is_none() {
                     note(ui, "In a checkout: make darling-install (README.md, Setup step 3).");
                 }
@@ -172,7 +172,7 @@ impl App {
             };
             list_row(ui, icon::STACK, &format!("iOS {}", setup::DEFAULT_VERSION), &detail, |ui| {
                 if !have_rt && fetching.is_none() {
-                    let partial = self.runtimes.iter().find(|r| r.build == setup::DEFAULT_BUILD).and_then(x86code_core::host::partial_download);
+                    let partial = self.runtimes.iter().find(|r| r.build == setup::DEFAULT_BUILD).and_then(x86sim_core::host::partial_download);
                     fetch = ui.add(Btn::primary(if partial.is_some() { "Resume download" } else { "Download" }).icon(icon::DOWNLOAD_SIMPLE)).clicked();
                 }
             });
@@ -195,7 +195,7 @@ impl App {
             self.download(setup::DEFAULT_BUILD, &format!("iOS {}", setup::DEFAULT_VERSION));
         }
         if let Some(f) = cancel {
-            x86code_core::host::cancel_fetch(&f);
+            x86sim_core::host::cancel_fetch(&f);
             self.fetching.remove(&f.build);
             self.fetch_started.remove(&f.build);
         }

@@ -1,4 +1,4 @@
-// x86Code test apps: shared result log. Every check prints "X86TEST <app> <check> PASS|FAIL <detail>" to stderr
+// x86Sim test apps: shared result log. Every check prints "X86TEST <app> <check> PASS|FAIL <detail>" to stderr
 // (launchd_sim's app log) and appends it to Documents/x86test-results.txt (tests/apps/run.sh reads that file).
 import Foundation
 

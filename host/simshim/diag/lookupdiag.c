@@ -1,8 +1,8 @@
-// x86Code: diagnostic shim: who looks up which Mach/XPC service. Logs each distinct (process, service name) once to
-// X86CODE_DATA_DIR/var/log/x86code-lookups.log as "<epoch.ms> <process>[<pid>] <api> <name>", from
+// x86Sim: diagnostic shim: who looks up which Mach/XPC service. Logs each distinct (process, service name) once to
+// X86SIM_DATA_DIR/var/log/x86sim-lookups.log as "<epoch.ms> <process>[<pid>] <api> <name>", from
 // xpc_connection_create_mach_service (NSXPCConnection, most clients), bootstrap_look_up/2/3 (CFMessagePort, MIG
 // clients) and xpc_endpoint-less lookups that end up there. Pair with launchd's "Successfully spawned ... because
-// ipc (mach)" lines to see what started an on-demand job (cli/libexec/svcwhy.py). X86CODE_INSERT=<this dylib>.
+// ipc (mach)" lines to see what started an on-demand job (cli/libexec/svcwhy.py). X86SIM_INSERT=<this dylib>.
 #include "diagpath.h"
 #include <xpc/xpc.h>
 #include <mach/mach.h>
@@ -52,7 +52,7 @@ static void note(const char* api, const char* name)
 	int n = snprintf(line, sizeof line, "%ld.%03d %s[%d] %s %s\n", (long) tv.tv_sec, (int) (tv.tv_usec / 1000),
 		getprogname(), getpid(), api, name);
 	if (n >= (int) sizeof line) n = sizeof line - 1;
-	int fd = open(X86CODE_DATA_DIR "/var/log/x86code-lookups.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+	int fd = open(X86SIM_DATA_DIR "/var/log/x86sim-lookups.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
 	if (fd >= 0) { write(fd, line, n); close(fd); }
 }
 

@@ -1,4 +1,4 @@
-//! x86Code: replay a render pipeline mtlvk refused (var/metal/failed/<id>-{vert,frag}.metallib) through
+//! x86Sim: replay a render pipeline mtlvk refused (var/metal/failed/<id>-{vert,frag}.metallib) through
 //! metal2vulkan's compiler, with its full error. Usage:
 //!   rpsrepro <profile.json> <vert.metallib> <frag.metallib|-> [I:FORMAT_RAW ...] [samples=N]
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};

@@ -625,8 +625,8 @@ pub fn fmt_mb(mb: f64) -> String {
 }
 
 /// Label and colour of a phone's state.
-pub fn phase_look(phase: x86code_core::instance::Phase, runtime_present: bool) -> (&'static str, Color32) {
-    use x86code_core::instance::Phase;
+pub fn phase_look(phase: x86sim_core::instance::Phase, runtime_present: bool) -> (&'static str, Color32) {
+    use x86sim_core::instance::Phase;
     match phase {
         Phase::Running => ("Running", GOOD),
         Phase::Starting => ("Starting", WARN),

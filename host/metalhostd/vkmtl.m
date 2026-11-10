@@ -1,4 +1,4 @@
-// x86Code: libvkmtl.dylib -- our MTLDevice for the Metal simulator service (metalhostd).
+// x86Sim: libvkmtl.dylib -- our MTLDevice for the Metal simulator service (metalhostd).
 //
 // Apple's MTLSimImplementation (the server half of the iOS simulator's Metal transport) replays every app's
 // Metal calls on the device MTLCreateSystemDefaultDevice() returns in its process. In metalhostd that is
@@ -33,7 +33,7 @@ static int g_verbose;
 #define VKTRACE(...) do { if (g_verbose) VKLOG(__VA_ARGS__); } while (0)
 
 extern int syscall(int, ...);
-#define SYS_X86CODE_MEMFD_FOR_REGION 599
+#define SYS_X86SIM_MEMFD_FOR_REGION 599
 
 // ---------------------------------------------------------------------------------------------------------
 // Connection to mtlvk
@@ -140,12 +140,12 @@ static void* vk_reader(void* arg) {
 		}
 	}
 	VKLOG("connection to mtlvk lost");
-	// x86Code: without mtlvk every object fails (a black screen in CA). Exit, so the clients' connections end and
+	// x86Sim: without mtlvk every object fails (a black screen in CA). Exit, so the clients' connections end and
 	// launchd's next metalhostd (started on demand) refuses new clients until mtlvk is back: they then get no
 	// device and fall back to software rendering (see metalhostd.m).
 	// (exit on the main queue: an _exit() from this thread while others were inside darlingserver calls made
 	// darlingserver abort in Thread::setPendingCall and took the whole simulator down)
-	if (!getenv("X86CODE_VKMTL_KEEP_ON_LOSS")) dispatch_async(dispatch_get_main_queue(), ^{ exit(2); });
+	if (!getenv("X86SIM_VKMTL_KEEP_ON_LOSS")) dispatch_async(dispatch_get_main_queue(), ^{ exit(2); });
 	pthread_mutex_lock(&g_plock);
 	g_sock = -1;
 	pthread_cond_broadcast(&g_pcond);
@@ -154,7 +154,7 @@ static void* vk_reader(void* arg) {
 }
 
 static int vk_connect(void) {
-	const char* path = getenv("X86CODE_MTLVK_SOCKET");
+	const char* path = getenv("X86SIM_MTLVK_SOCKET");
 	char full[200];
 	snprintf(full, sizeof(full), "/Volumes/SystemRoot%s", path ? path : VKMTL_SOCKET_DEFAULT);
 	for (int attempt = 0; attempt < 50; attempt++) {
@@ -295,7 +295,7 @@ static pthread_mutex_t g_copied_lock = PTHREAD_MUTEX_INITIALIZER;
 	_vkid = vk_new_id();
 	_contents = p; _length = len; _options = opts; _ownedLen = owned;
 	uint64_t off = 0; uint32_t shared = 0;
-	int fd = syscall(SYS_X86CODE_MEMFD_FOR_REGION, (uint64_t)(uintptr_t)p, (uint64_t)(len ? len : 1), &off, &shared);
+	int fd = syscall(SYS_X86SIM_MEMFD_FOR_REGION, (uint64_t)(uintptr_t)p, (uint64_t)(len ? len : 1), &off, &shared);
 	if (fd < 0) VKLOG("buffer %llu: no memfd for %p+%lu (errno %d): mtlvk keeps a copy", _vkid, p, (unsigned long)len, errno);
 	wbuf b = { 0 };
 	wb_u64(&b, _vkid); wb_u64(&b, len); wb_u64(&b, opts); wb_u64(&b, off);
@@ -413,12 +413,12 @@ static size_t vk_region_bytes(MTLPixelFormat f, MTLRegion r, NSUInteger bpr, NSU
 	MTLTextureUsage _usage;
 	BOOL _allowOpt;
 	MTLTextureSwizzleChannels _swizzle;
-	// x86Code: stage 5: a texture over a buffer's bytes (IOSurface plane or newTextureWithDescriptor:offset:bytesPerRow:)
+	// x86Sim: stage 5: a texture over a buffer's bytes (IOSurface plane or newTextureWithDescriptor:offset:bytesPerRow:)
 	id _buffer;              // VKMTLBuffer (retained)
 	NSUInteger _bufOffset, _bufBPR;
 	IOSurfaceRef _iosurface; // retained
 	NSUInteger _plane;
-	// x86Code: texture views: the parent (retained) and where the view starts in it
+	// x86Sim: texture views: the parent (retained) and where the view starts in it
 	id _parent;
 	NSUInteger _parentLevel, _parentSlice;
 }
@@ -475,7 +475,7 @@ static size_t vk_region_bytes(MTLPixelFormat f, MTLRegion r, NSUInteger bpr, NSU
 - (id<MTLTexture>)rootResource { return _parent ? [_parent rootResource] ?: _parent : nil; }
 - (NSUInteger)parentRelativeLevel { return _parentLevel; }
 - (NSUInteger)parentRelativeSlice { return _parentSlice; }
-// x86Code: texture views (MercuryPoster's wallpaper uses newTextureViewWithPixelFormat:textureType:levels:slices:)
+// x86Sim: texture views (MercuryPoster's wallpaper uses newTextureViewWithPixelFormat:textureType:levels:slices:)
 - (id<MTLTexture>)vk_viewWithFormat:(MTLPixelFormat)pf type:(MTLTextureType)tt levels:(NSRange)levels slices:(NSRange)slices
 	swizzle:(const MTLTextureSwizzleChannels*)swz {
 	VKMTLTexture* v = [[VKMTLTexture alloc] init];
@@ -533,7 +533,7 @@ static size_t vk_region_bytes(MTLPixelFormat f, MTLRegion r, NSUInteger bpr, NSU
 	if (_iosurface) CFRelease(_iosurface);
 	[super dealloc];
 }
-// x86Code: a texture over `buffer`'s bytes from `offset` (rows `bpr` apart); an IOSurface's plane when `surface` is set.
+// x86Sim: a texture over `buffer`'s bytes from `offset` (rows `bpr` apart); an IOSurface's plane when `surface` is set.
 - (instancetype)initWithDescriptor:(MTLTextureDescriptor*)d buffer:(id)buffer offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr
 	iosurface:(IOSurfaceRef)surface plane:(NSUInteger)plane planar:(BOOL)planar {
 	self = [super init];
@@ -570,7 +570,7 @@ static size_t vk_region_bytes(MTLPixelFormat f, MTLRegion r, NSUInteger bpr, NSU
 - (NSUInteger)firstMipmapInTail { return _mips; }
 - (NSUInteger)tailSizeInBytes { return 0; }
 - (MTLTextureCompressionType)compressionType { return MTLTextureCompressionTypeLossless; }
-// x86Code: iOS 27 MTLSimTexture compressionMetadata (lossy/compressed layouts); none of ours are compressed.
+// x86Sim: iOS 27 MTLSimTexture compressionMetadata (lossy/compressed layouts); none of ours are compressed.
 - (id)compressionMetadata { return nil; }
 - (MTLResourceID)gpuResourceID { MTLResourceID r; r._impl = _vkid; return r; }
 - (NSUInteger)allocatedSize {
@@ -910,9 +910,9 @@ static _Atomic int g_dump_n;
 	self = [super init];
 	_vkid = vk_new_id();
 	if (g_dump_libs) {
-		// x86Code: into $X86CODE_VKMTL_DUMP_DIR (a Darling path), default $HOME/tmp (the device's data/tmp for metalhostd)
+		// x86Sim: into $X86SIM_VKMTL_DUMP_DIR (a Darling path), default $HOME/tmp (the device's data/tmp for metalhostd)
 		char path[1024], dflt[900];
-		const char* dir = getenv("X86CODE_VKMTL_DUMP_DIR");
+		const char* dir = getenv("X86SIM_VKMTL_DUMP_DIR");
 		if (!dir) { snprintf(dflt, sizeof(dflt), "%s/tmp", getenv("HOME") ?: "/private/tmp"); dir = dflt; }
 		snprintf(path, sizeof(path), "%s/lib-%d-%d.metallib", dir, getpid(), atomic_fetch_add(&g_dump_n, 1));
 		FILE* f = fopen(path, "wb");
@@ -1105,7 +1105,7 @@ uint32_t vk_constant_values(MTLFunctionConstantValues* cv, wbuf* out) {
 - (MTLShaderValidation)shaderValidation { return MTLShaderValidationDefault; }
 - (MTLSize)requiredThreadsPerThreadgroup { return MTLSizeMake(0, 0, 0); }
 - (uint64_t)uniqueIdentifier { return _vkid; }
-// x86Code: iOS 27 persistent-kernel / forward-progress queries on compute pipelines.
+// x86Sim: iOS 27 persistent-kernel / forward-progress queries on compute pipelines.
 - (NSInteger)forwardProgressUsage { return 0; }
 - (MTLSize)recommendedPersistentThreadgroupsPerGridForThreadsPerThreadgroup:(MTLSize)tpt {
 	(void)tpt; return MTLSizeMake(0, 0, 0);
@@ -1552,7 +1552,7 @@ static void vk_att(vkmtl_attachment* a, MTLRenderPassAttachmentDescriptor* d, VK
 	if (!g_inflight) g_inflight = [[NSMutableDictionary alloc] init];
 	g_inflight[@(_vkid)] = self;
 	pthread_mutex_unlock(&g_inflight_lock);
-	// x86Code: scheduled handlers run before the command buffer goes to mtlvk. Run after it, a fast completion (on the
+	// x86Sim: scheduled handlers run before the command buffer goes to mtlvk. Run after it, a fast completion (on the
 	// completion queue) could call the completed handlers first: MTLSimImplementation then sent the client "completed"
 	// (message 101, the client drops the command buffer's ref) before "scheduled" (100), and the client crashed looking
 	// the ref up (SpringBoard SIGSEGV in -[MTLSimDevice commandBufferForReference:]). Metal always
@@ -1698,7 +1698,7 @@ static void vk_cb_done(uint64_t cbid, uint32_t status, uint32_t error, double st
 - (BOOL)supportsFunctionPointers { return NO; }
 - (BOOL)supportsRaytracing { return NO; }
 - (BOOL)supportsDynamicLibraries { return NO; }
-// x86Code: iOS 27 Metal sim device queries (MTLSimDriver / MTLSimImplementation 24A434). supportsFP8 and
+// x86Sim: iOS 27 Metal sim device queries (MTLSimDriver / MTLSimImplementation 24A434). supportsFP8 and
 // set*GlobalConstantsBase/Size: were removed; getters for *GlobalConstants* still exist on the client and
 // fall through forwardInvocation (nil/0). These stubs avoid unimplemented spam and match Common3/Mac2.
 - (BOOL)supportsPVRTC { return NO; }
@@ -1716,7 +1716,7 @@ static void vk_cb_done(uint64_t cbid, uint32_t status, uint32_t error, double st
 }
 - (BOOL)supportsFeatureSet:(MTLFeatureSet)fs { (void)fs; return NO; }
 - (NSUInteger)minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)f { (void)f; return 256; }
-// x86Code: MetalSerializer's validateIOSurfaceDescriptor requires bytesPerRow % this == 0 (0 fails everything);
+// x86Sim: MetalSerializer's validateIOSurfaceDescriptor requires bytesPerRow % this == 0 (0 fails everything);
 // mtlvk's runtime takes any row pitch (it copies where Vulkan's linear images can't alias the rows)
 - (NSUInteger)iosurfaceTextureAlignmentBytes { return 16; }
 - (NSUInteger)iosurfaceReadOnlyTextureAlignmentBytes { return 16; }
@@ -1851,7 +1851,7 @@ static void vk_cb_done(uint64_t cbid, uint32_t status, uint32_t error, double st
 	free(r);
 	return (id<MTLSamplerState>)s;
 }
-// x86Code: stage 5
+// x86Sim: stage 5
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor*)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane {
 	if (!s) return nil;
 	// the surface's memory in this process (mapped from iosurfaced's MemoryObject): a buffer over it (memfd, syscall
@@ -2008,8 +2008,8 @@ static void vk_borrow_device_methods(void) {
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static void vk_make_device(void) {
-	g_verbose = getenv("X86CODE_VKMTL_LOG") != NULL;
-	g_dump_libs = getenv("X86CODE_VKMTL_DUMP") != NULL;
+	g_verbose = getenv("X86SIM_VKMTL_LOG") != NULL;
+	g_dump_libs = getenv("X86SIM_VKMTL_DUMP") != NULL;
 	vk_hook_constant_values();
 	vk_borrow_device_methods();
 	g_completion_queue = dispatch_queue_create("vkmtl.completion", DISPATCH_QUEUE_SERIAL);
@@ -2026,7 +2026,7 @@ static void vk_make_device(void) {
 	free(r);
 	// MTLDeviceFeatureProfile: 10001 = Mac2 + Common3 (a non-Apple GPU Mac: no tile shaders/imageblocks).
 	// The client derives its GPU families and limits from this value alone (PROTOCOL.md section 1).
-	const char* prof = getenv("X86CODE_METAL_PROFILE");
+	const char* prof = getenv("X86SIM_METAL_PROFILE");
 	d->_profile = prof ? strtoul(prof, NULL, 0) : 10001;
 	d->_vkid = vk_new_id();
 	g_device = d;

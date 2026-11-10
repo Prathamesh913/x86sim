@@ -10,14 +10,14 @@ There is no host: simfb reports one built-in display (1179x2556 at scale 3, the 
 swapchain buffers and, on every present (`SFBSwapchainSwapSubmit`), copies the frame out once the GPU work for it has
 completed (with Metal, simfb waits for the MTLSimCommandBuffer completion; a 1 s watchdog copies anyway).
 
-## Frame ring (`/dev/shm/x86code-simfb.ring`)
+## Frame ring (`/dev/shm/x86sim-simfb.ring`)
 
-Inside Darling the file is `/Volumes/SystemRoot/dev/shm/x86code-simfb.ring` (`$SIMFB_RING` overrides); Linux readers
-use `/dev/shm/x86code-a64-simfb.ring` (`$SIMFB_RING_LINUX`). Readers: `cli/libexec/fbring.py` (library),
+Inside Darling the file is `/Volumes/SystemRoot/dev/shm/x86sim-simfb.ring` (`$SIMFB_RING` overrides); Linux readers
+use `/dev/shm/x86sim-a64-simfb.ring` (`$SIMFB_RING_LINUX`). Readers: `cli/libexec/fbring.py` (library),
 `simview.py` (viewer), `fb2png.py`, `fpsmeter.py`, `framecheck.py`.
 
 ```
-x86Code: reader for host/simfb's shared-memory frame ring (/dev/shm/x86code-simfb.ring).
+x86Sim: reader for host/simfb's shared-memory frame ring (/dev/shm/x86sim-simfb.ring).
 Layout (little-endian), written by simfb in SFBSwapchainSwapSubmit's copy:
   header (4096 bytes): magic 'SFBR' u32, version u32, nslots u32, slot_bytes u32, width u32, height u32,
       stride u32, pad u32, seq u64 (frames published), latest u32 (slot of frame seq), pad u32,

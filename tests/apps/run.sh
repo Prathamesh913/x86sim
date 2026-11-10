@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86Code: the test-app regression suite. Builds tests/apps/x86* on the Mac (build.sh), installs them on a running phone
+# x86Sim: the test-app regression suite. Builds tests/apps/x86* on the Mac (build.sh), installs them on a running phone
 # (`x86sim install`, as simctl install), launches each and checks it logs-first:
 #   1. the install answer, 2. the app's results file (Documents/x86test-results.txt in its data container: every check
 #   "X86TEST <app> <check> PASS|FAIL"), 3. launchd_sim's log for the app exiting / crashing, 4. new crash reports
@@ -28,7 +28,7 @@ RING=$(sed -n 's#^SIMFB_RING=/Volumes/SystemRoot##p' "$X86SIM_DEVICE/sim.env"); 
 fail=0
 crashes() { find "$D/Library/Logs/DiagnosticReports" -name '*.ips' -newer "$OUT/.t0" 2>/dev/null; }
 for n in $apps; do
-	app=$X86SIM_SCRATCH/apps/$n.app; bid=com.x86code.test.$n
+	app=$X86SIM_SCRATCH/apps/$n.app; bid=com.x86sim.test.$n
 	echo "== $n"
 	touch "$OUT/.t0"; l0=$( [ -n "$LLOG" ] && wc -l < "$LLOG" || echo 0)
 	"$X/cli/x86sim" install "$X86SIM_DEVICE" "$app" >"$OUT/$n.install" 2>&1 || { echo "  install FAILED: $(tail -1 "$OUT/$n.install")"; fail=1; continue; }

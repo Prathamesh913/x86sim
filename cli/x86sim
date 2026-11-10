@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86sim: command-line tools for x86Code's phones (the iOS 27 arm64 simulator runtime on Darling + the arm64 JIT).
+# x86sim: command-line tools for x86Sim's phones (the iOS 27 arm64 simulator runtime on Darling + the arm64 JIT).
 # Phones are started by the launcher (tools/launcher) or cli/libexec/arm64/boot-a64.sh.
 # Configuration: x86sim.env in the repo root (see x86sim.env.example); environment variables override it.
 # Run `x86sim help` for the commands. The scripts it wraps live in cli/libexec (and tools/debug, tests/).
@@ -58,13 +58,13 @@ Apps (as xcrun simctl install/uninstall/launch)
 Build
   build [target]       make [target] in the repo root (mtlvk, darling, ...; see `make help`)
 
-Repos (every submodule is a fork in the x86code GitHub org; repos.sh)
+Repos (every submodule is a fork in the x86sim GitHub org; repos.sh)
   repos [status]       dirty / unpushed submodules
   repos commit -m MSG [--dry-run]
                        commit tracked changes in every dirty submodule (deepest first), push each, then commit
-                       and push the bumped pointers in x86code
+                       and push the bumped pointers in x86sim
   upstream-sync [--apply] [PATH...]
-                       fetch each fork's GitHub parent and rebase our x86code branch onto it (dry run reports
+                       fetch each fork's GitHub parent and rebase our x86sim branch onto it (dry run reports
                        behind/ahead and conflicts; --apply rebases, force-with-lease pushes, aborts on conflict)
 U
 }

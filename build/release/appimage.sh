@@ -1,8 +1,8 @@
 #!/bin/sh
-# x86Code release: assemble the AppDir from build/release/build.sh's outputs and the checkout, then pack the AppImage.
+# x86Sim release: assemble the AppDir from build/release/build.sh's outputs and the checkout, then pack the AppImage.
 #   OUT        build.sh's output dir (default build/release/out); the AppDir and the AppImage land there
 #   VERSION    release version (default: git describe of the checkout, e.g. v0.1.0-pre1-3-gabc1234)
-#   UPDATE_INFO  AppImage update information (default: GitHub releases of x86code/x86code, pre-releases included,
+#   UPDATE_INFO  AppImage update information (default: GitHub releases of x86sim/x86sim, pre-releases included,
 #              zsync); "none" for no update info
 # Nothing from Apple goes in: the payload is `git ls-files` of our own dirs (the committed simulator-side binaries are
 # ours, built from host/ sources) plus build outputs; check_no_apple below refuses a tree with Apple runtime/SDK files.
@@ -12,12 +12,12 @@ X=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=$(cd "${OUT:-$X/build/release/out}" && pwd)
 VERSION=${VERSION:-$(git -C "$X" describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)}
 VERSION=${VERSION#v}
-UPDATE_INFO=${UPDATE_INFO:-gh-releases-zsync|x86code|x86code|latest-pre|x86code-*-x86_64.AppImage.zsync}
+UPDATE_INFO=${UPDATE_INFO:-gh-releases-zsync|x86sim|x86sim|latest-pre|x86sim-*-x86_64.AppImage.zsync}
 DL=$OUT/downloads
 A=$OUT/AppDir
-S=$A/usr/share/x86code
+S=$A/usr/share/x86sim
 P=$S/payload
-DEST=$OUT/destdir/opt/x86code/darling
+DEST=$OUT/destdir/opt/x86sim/darling
 mkdir -p "$DL"
 
 IPSW_VER=3.1.741
@@ -46,11 +46,11 @@ rm -rf "$P/linux/mtlvk/src" "$P/tests/metal/shaders"
 # build outputs at the paths the scripts and the launcher expect (repo-relative)
 mkdir -p "$P/linux/mtlvk/target/release" "$P/tools/launcher/target/release"
 cp "$OUT/cargo-mtlvk/release/mtlvk" "$P/linux/mtlvk/target/release/"
-for b in x86code-launcher x86code-aot x86code-mcp; do cp "$OUT/cargo-launcher/release/$b" "$P/tools/launcher/target/release/"; done
+for b in x86sim-launcher x86sim-aot x86sim-mcp; do cp "$OUT/cargo-launcher/release/$b" "$P/tools/launcher/target/release/"; done
 strip --strip-debug "$P/linux/mtlvk/target/release/mtlvk" "$P/tools/launcher/target/release/"*
 echo "$VERSION" > "$S/VERSION"
 
-echo "== Darling (installed by the setup wizard into /opt/x86code)"
+echo "== Darling (installed by the setup wizard into /opt/x86sim)"
 cp -a "$DEST" "$S/darling"
 # libarm64jit.so keeps .symtab: the launcher reads kCodegenVersion from its g_build symbol (core/src/key.rs)
 strip --strip-debug "$S/darling/libexec/darling/usr/libexec/darling/libarm64jit.so" "$S/darling/bin/darlingserver" 2>/dev/null || true
@@ -83,7 +83,7 @@ cp "$X/external/dynarmic/LICENSE.txt" "$S/licenses/dynarmic-LICENSE" 2>/dev/null
 for f in "$X"/external/metal2vulkan/LICENSE*; do [ -f "$f" ] && cp "$f" "$S/licenses/metal2vulkan-$(basename "$f")"; done
 cp "$X/linux/arm64jit/third_party/astcenc/LICENSE.txt" "$S/licenses/astcenc-LICENSE" 2>/dev/null || true
 cp "$X/linux/arm64jit/third_party/lzfse/LICENSE" "$S/licenses/lzfse-LICENSE" 2>/dev/null || true
-cp "$X/LICENSE" "$S/licenses/x86code-LICENSE"
+cp "$X/LICENSE" "$S/licenses/x86sim-LICENSE"
 cp "$X/NOTICE" "$S/NOTICE"
 
 echo "== Apple content check"
@@ -95,17 +95,17 @@ bad=$(find "$A" \( -name 'dyld_sim_shared_cache_*' -o -name '*.simruntime' -o -n
 echo "== AppDir"
 cp "$X/build/release/AppRun" "$A/AppRun"
 chmod +x "$A/AppRun"
-cp "$X/build/release/x86code.desktop" "$A/x86code.desktop"
-cp "$X/build/release/x86code.png" "$A/x86code.png"
+cp "$X/build/release/x86sim.desktop" "$A/x86sim.desktop"
+cp "$X/build/release/x86sim.png" "$A/x86sim.png"
 mkdir -p "$A/usr/share/icons/hicolor/256x256/apps" "$A/usr/share/applications"
-cp "$X/build/release/x86code.png" "$A/usr/share/icons/hicolor/256x256/apps/"
-cp "$X/build/release/x86code.desktop" "$A/usr/share/applications/"
-ln -s x86code.png "$A/.DirIcon"
+cp "$X/build/release/x86sim.png" "$A/usr/share/icons/hicolor/256x256/apps/"
+cp "$X/build/release/x86sim.desktop" "$A/usr/share/applications/"
+ln -s x86sim.png "$A/.DirIcon"
 
 echo "== pack"
 fetch https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage appimagetool.AppImage "${APPIMAGETOOL_SHA:-}"
 chmod +x "$DL/appimagetool.AppImage"
-NAME=x86code-$VERSION-x86_64.AppImage
+NAME=x86sim-$VERSION-x86_64.AppImage
 rm -f "$OUT/$NAME" "$OUT/$NAME.zsync"
 set -- --comp zstd --mksquashfs-opt -Xcompression-level --mksquashfs-opt 19 --no-appstream
 [ "$UPDATE_INFO" = none ] || set -- "$@" -u "$UPDATE_INFO"

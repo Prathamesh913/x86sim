@@ -1,4 +1,4 @@
-// x86Code: diagnostic shim (Speed 27): logs kevent results for sockets (EVFILT_READ/WRITE/SOCK: EOF, errors, socket
+// x86Sim: diagnostic shim (Speed 27): logs kevent results for sockets (EVFILT_READ/WRITE/SOCK: EOF, errors, socket
 // notes), connectx results and failing socket reads/writes, in the processes named in data/oslog.filter, to find where
 // Network.framework's "Network is down" (ENETDOWN) on a first connection comes from.
 // Log: data/var/log/kevdiag.<prog>.<pid>.log
@@ -34,7 +34,7 @@ static int on(void)
 {
 	if (en < 0) {
 		char buf[1024] = {0};
-		int f = open(X86CODE_DATA_DIR "/oslog.filter", O_RDONLY);
+		int f = open(X86SIM_DATA_DIR "/oslog.filter", O_RDONLY);
 		en = 0;
 		if (f >= 0) {
 			ssize_t n = read(f, buf, sizeof(buf) - 1); close(f);
@@ -46,7 +46,7 @@ static int on(void)
 		}
 		if (en) {
 			char p[512];
-			snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/kevdiag.%s.%d.log", getprogname(), getpid());
+			snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/kevdiag.%s.%d.log", getprogname(), getpid());
 			lfd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 			if (lfd < 0) en = 0;
 		}

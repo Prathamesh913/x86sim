@@ -5,7 +5,7 @@ use crate::{viewer, AddDialog, App, View};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use x86code_core::instance::Phase;
+use x86sim_core::instance::Phase;
 
 impl App {
     /// Starts downloading an iOS build (unless it already is). Shared by every Download button.
@@ -17,10 +17,10 @@ impl App {
         if self.fetching.contains_key(build) {
             return;
         }
-        match x86code_core::host::fetch(build) {
+        match x86sim_core::host::fetch(build) {
             Ok(_) => {
                 self.fetch_started.insert(build.to_string(), std::time::Instant::now());
-                self.fetching.insert(build.to_string(), x86code_core::host::Fetch { build: build.to_string(), phase: "starting".into(), ..Default::default() });
+                self.fetching.insert(build.to_string(), x86sim_core::host::Fetch { build: build.to_string(), phase: "starting".into(), ..Default::default() });
                 self.say(format!("Downloading {label}. This takes a while (several GB)."));
             }
             Err(e) => self.say(format!("Couldn't start the download: {e:#}")),
@@ -59,9 +59,9 @@ impl App {
         });
         if sort != self.hub.sort {
             self.hub.sort = sort;
-            let _ = x86code_core::host::save_hub(&self.hub);
+            let _ = x86sim_core::host::save_hub(&self.hub);
         }
-        x86code_core::instance::sort(&mut self.insts, &self.hub.sort);
+        x86sim_core::instance::sort(&mut self.insts, &self.hub.sort);
         if add {
             self.open_add_dialog();
         }
@@ -257,7 +257,7 @@ impl App {
                     Some(s) if phase != Phase::Off && s.pss_mb >= 1.0 => format!("{label} · {} · {:.0}% CPU", fmt_mb(s.pss_mb), s.cpu_pct),
                     _ => label.to_string(),
                 };
-                let pending = x86code_core::instance::needs_restart(&inst, st.as_ref());
+                let pending = x86sim_core::instance::needs_restart(&inst, st.as_ref());
                 let r = ui.horizontal(|ui| {
                     dot_label(ui, &line, col);
                     if pending {
@@ -339,7 +339,7 @@ impl App {
                 // Models 2: a runtime limited to some models (iOS 27.2 24B91016s: iPhone Duo) is picked for them and
                 // greyed out for the others
                 let mid = self.models.get(d.model).map(|m| m.1.clone()).unwrap_or_default();
-                let fits = |r: &x86code_core::host::Runtime| r.restricted_to.is_empty() || r.restricted_to.contains(&mid);
+                let fits = |r: &x86sim_core::host::Runtime| r.restricted_to.is_empty() || r.restricted_to.contains(&mid);
                 if d.model != d.last_model {
                     d.last_model = d.model;
                     if let Some(i) = self.runtimes.iter().position(|r| r.present && r.restricted_to.contains(&mid)) {
@@ -348,7 +348,7 @@ impl App {
                         d.runtime = self.runtimes.iter().rposition(|r| r.present && r.restricted_to.is_empty()).unwrap_or(0);
                     }
                 }
-                let label = |r: &x86code_core::host::Runtime| {
+                let label = |r: &x86sim_core::host::Runtime| {
                     let only = if r.restricted_to.is_empty() { String::new() } else { format!(" ({}) · {} only", r.build, r.restricted_to.join(", ")) };
                     if r.present { format!("iOS {}{only}", r.version) } else { format!("iOS {}{only} · not installed", r.version) }
                 };
@@ -394,7 +394,7 @@ impl App {
                 let name = d.name.clone();
                 let ctx = ctx.clone();
                 std::thread::spawn(move || {
-                    let r = x86code_core::sim::create_device(&m.0, &name, &r.root).map_err(|e| format!("{e:#}"));
+                    let r = x86sim_core::sim::create_device(&m.0, &name, &r.root).map_err(|e| format!("{e:#}"));
                     *busy.lock().unwrap() = Some(r);
                     ctx.request_repaint();
                 });
@@ -411,7 +411,7 @@ fn rgb_well() -> egui::Color32 {
 }
 
 /// "Downloading · 23%" / "Unpacking…": one line for a download in progress
-pub fn fetch_line(f: &x86code_core::host::Fetch) -> String {
+pub fn fetch_line(f: &x86sim_core::host::Fetch) -> String {
     match (f.phase.as_str(), f.pct) {
         ("downloading", Some(p)) => format!("Downloading · {p:.0}%"),
         ("decrypting", _) => "Downloaded · decrypting…".into(),

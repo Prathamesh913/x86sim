@@ -24,7 +24,7 @@ join_prefix_cgroup() {
 		esac
 	done
 	# only this phone's processes: its guests (SIMULATOR_UDID), Darling's loaders (__mldr_sockpath, A64_DPREFIX) and
-	# host helpers (DPREFIX). Every phone's processes have X86CODE_A64_*, and taking those pulled the other running
+	# host helpers (DPREFIX). Every phone's processes have X86SIM_A64_*, and taking those pulled the other running
 	# phones into this scope (stopping this phone then killed them too).
 	for p in $(grep -lsazxF -e "DPREFIX=$DPREFIX" -e "A64_DPREFIX=$DPREFIX" -e "__mldr_sockpath=$DPREFIX/.darlingserver.sock" \
 			${PHONE_UDID:+-e "SIMULATOR_UDID=$PHONE_UDID"} /proc/[0-9]*/environ 2>/dev/null); do

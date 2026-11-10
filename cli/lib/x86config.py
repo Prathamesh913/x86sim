@@ -1,4 +1,4 @@
-"""x86Code: the same configuration as cli/lib/config.sh, for the Python tools (it runs config.sh and reads the result)."""
+"""x86Sim: the same configuration as cli/lib/config.sh, for the Python tools (it runs config.sh and reads the result)."""
 import os
 import subprocess
 

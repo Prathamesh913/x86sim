@@ -1,4 +1,4 @@
-# x86Code: build the AppImage (reusable; called by ci.yml and release.yml). Everything is built from source on the
+# x86Sim: build the AppImage (reusable; called by ci.yml and release.yml). Everything is built from source on the
 # runner; nothing from Apple is present or downloaded (the iOS runtime is fetched by each user's own setup wizard).
 name: build
 on:
@@ -99,14 +99,14 @@ jobs:
           V="${{ inputs.version }}"
           [ -n "$V" ] || V=$(git describe --tags --always)
           VERSION=$V build/release/appimage.sh
-          echo "name=x86code-${V#v}-x86_64.AppImage" >> "$GITHUB_OUTPUT"
+          echo "name=x86sim-${V#v}-x86_64.AppImage" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: x86code-appimage
+          name: x86sim-appimage
           path: |
-            build/release/out/x86code-*.AppImage
-            build/release/out/x86code-*.AppImage.zsync
+            build/release/out/x86sim-*.AppImage
+            build/release/out/x86sim-*.AppImage.zsync
             build/release/out/SHA256SUMS
           retention-days: 14
           compression-level: 0

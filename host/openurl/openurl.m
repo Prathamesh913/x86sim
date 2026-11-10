@@ -1,7 +1,7 @@
-// x86Code: opens URLs in the simulator for tests (as `xcrun simctl openurl`). Run as a job:
+// x86Sim: opens URLs in the simulator for tests (as `xcrun simctl openurl`). Run as a job:
 //   openurl=host/openurl/openurl
-// then write a URL (one per line) to <device>/data/tmp/x86code-openurl (the file is taken and removed);
-// cli/libexec/simtouch.py openurl <url> does that. Log: <device>/data/var/log/x86code-openurl.log. (Not the prefix's
+// then write a URL (one per line) to <device>/data/tmp/x86sim-openurl (the file is taken and removed);
+// cli/libexec/simtouch.py openurl <url> does that. Log: <device>/data/var/log/x86sim-openurl.log. (Not the prefix's
 // /private/var/tmp: a file written there from Linux, into the overlay's upper directory, is not seen inside.)
 //
 // The app is asked to open the URL through FrontBoard (FBSOpenApplicationService, SpringBoard's open-application
@@ -49,7 +49,7 @@ static void openViaFrontBoard(NSURL* url, NSString* u, NSString* app, NSArray* a
 	if (args.count) d[@"__Arguments"] = args; // FBSOpenApplicationOptionKeyArguments (simctl launch <id> args...)
 	id opts = MSG(id, id, SEL, id)(optClass, sel_getUid("optionsWithDictionary:"), d);
 	dispatch_semaphore_t done = dispatch_semaphore_create(0);
-	// x86Code: arm64 under the JIT often needs >30 s for a cold app to finish FrontBoard's open
+	// x86Sim: arm64 under the JIT often needs >30 s for a cold app to finish FrontBoard's open
 	// handshake (Settings ~30 s tap-to-content). Keep 30 s on x86; 120 s when X86SIM_ARCH=arm64.
 	const int open_secs = (getenv("X86SIM_ARCH") && !strcmp(getenv("X86SIM_ARCH"), "arm64")) ? 120 : 30;
 	__block NSString* result = [NSString stringWithFormat:@"(no reply in %d s)", open_secs];
@@ -62,7 +62,7 @@ static void openViaFrontBoard(NSURL* url, NSString* u, NSString* app, NSArray* a
 	fprintf(logf_, "openurl %s -> %s: %s\n", u.UTF8String, bid.UTF8String, result.UTF8String); fflush(logf_);
 }
 
-// x86Code: `x86sim install`, as `simctl install`: on a Mac, CoreSimulator asks CoreSimulatorBridge (a job inside the
+// x86Sim: `x86sim install`, as `simctl install`: on a Mac, CoreSimulator asks CoreSimulatorBridge (a job inside the
 // device) to install, and it calls +[IXAppInstallCoordinator installApplication:consumeSource:options:completion:]
 // with MIInstallOptions (developerInstall) and the entitlement com.apple.private.mobileinstall.allowedSPI =
 // InstallForLaunchServices/UninstallForLaunchServices. That goes to installcoordinationd, which has installd copy
@@ -110,7 +110,7 @@ static void openViaLS(NSURL* url, NSString* u) {
 	fprintf(logf_, "openurl (ls) %s: %d %s\n", u.UTF8String, ok, err.description.UTF8String ?: ""); fflush(logf_);
 }
 
-// x86Code: simctl's other app commands, as CoreSimulatorBridge does them inside a Mac's device. A request is one line
+// x86Sim: simctl's other app commands, as CoreSimulatorBridge does them inside a Mac's device. A request is one line
 // "req <id> <json>" with "cmd"; the answer is one log line "result <id> <json>" (cli/libexec/appinstall.sh waits for it).
 //   launch     {bundle, args, env, stdout, stderr, waitForDebugger, terminate}: FBSOpenApplicationService with the
 //              Bridge's debug options (__DebugOptions: __Arguments, __Environment, __StandardOutPath/__StandardErrorPath
@@ -153,7 +153,7 @@ static NSDictionary* launchApp(NSDictionary* q) {
 	NSString* bid = q[@"bundle"];
 	if ([q[@"terminate"] boolValue]) terminateApp(bid);
 	NSMutableDictionary* d = [@{ @"__UnlockDevice": @YES, @"__ActivateSuspended": @NO } mutableCopy];
-	// x86Code: arguments, environment, standard output paths and wait-for-debugger are FBSDebugOptionKey* values in the
+	// x86Sim: arguments, environment, standard output paths and wait-for-debugger are FBSDebugOptionKey* values in the
 	// FBSOpenApplicationOptionKeyDebuggingOptions dictionary (__DebugOptions), as CoreSimulatorBridge passes them;
 	// at the top level FrontBoard only takes __Arguments
 	NSMutableDictionary* dbg = [NSMutableDictionary new];
@@ -176,7 +176,7 @@ static NSDictionary* launchApp(NSDictionary* q) {
 		dispatch_semaphore_signal(done);
 	};
 	MSG(void, id, SEL, id, id, id)(svc, sel_getUid("openApplication:withOptions:completion:"), bid, opts, completion);
-	// x86Code: with __WaitForDebugger FrontBoard answers only once the app runs (after a debugger resumed it): don't
+	// x86Sim: with __WaitForDebugger FrontBoard answers only once the app runs (after a debugger resumed it): don't
 	// hold the helper; the caller finds the waiting process itself (cli/libexec/simctl.py)
 	BOOL waits = [q[@"waitForDebugger"] boolValue];
 	if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (waits ? 5 : 30) * NSEC_PER_SEC)) && waits)
@@ -242,7 +242,7 @@ static NSDictionary* push(NSString* bid, NSDictionary* payload) {
 	return r;
 }
 
-// x86Code: simctl location, as CoreSimulatorBridge does it: CLSimulationManager (CoreLocation SPI) talks to locationd's
+// x86Sim: simctl location, as CoreSimulatorBridge does it: CLSimulationManager (CoreLocation SPI) talks to locationd's
 // com.apple.locationd.simulation service. q: {clear} | {lat, lon} | {points: [[lat, lon]...], speed, distance,
 // interval} (simctl location start: interpolated between waypoints) | {scenario: name} (simctl location run) | {list}.
 static NSArray* scenarioURLs(id m) {
@@ -307,7 +307,7 @@ static NSDictionary* xpcPing(NSString* name) {
 	xpc_connection_set_event_handler(c, ^(xpc_object_t e) { (void)e; });
 	xpc_connection_resume(c);
 	xpc_object_t m = xpc_dictionary_create(NULL, NULL, 0);
-	xpc_dictionary_set_string(m, "x86code", "ping");
+	xpc_dictionary_set_string(m, "x86sim", "ping");
 	dispatch_semaphore_t done = dispatch_semaphore_create(0);
 	__block NSString* r = @"no reply in 5 s";
 	xpc_connection_send_message_with_reply(c, m, dispatch_get_global_queue(0, 0), ^(xpc_object_t rep) {
@@ -360,7 +360,7 @@ static void request(NSString* rest) {
 	answer(rid, r);
 }
 
-// x86Code: a Linux system call (Darling processes are Linux processes).
+// x86Sim: a Linux system call (Darling processes are Linux processes).
 // Arm64 guest under libarm64jit: svc #0xfffe with x8 = x86_64 syscall number (same as simfb's futex).
 static long linux_syscall3(long n, long a, long b, long c) {
 #if defined(__arm64__)
@@ -377,10 +377,10 @@ static long linux_syscall3(long n, long a, long b, long c) {
 
 static volatile BOOL wake;
 
-// x86Code (RAM 2): what is on screen, for cli/libexec/jetsam.py. RunningBoard never backgrounds or suspends an app
+// x86Sim (RAM 2): what is on screen, for cli/libexec/jetsam.py. RunningBoard never backgrounds or suspends an app
 // that keeps a background mode (Maps: its darwin role stays UI_FOCAL at the home screen), so the Linux side can't tell
-// it left the screen; FrontBoard can. A request is <data>/tmp/x86code-frontmost.req (its own file, so it never races
-// the openurl trigger), optionally with Darling pids, one per line; the answer <data>/tmp/x86code-frontmost (written
+// it left the screen; FrontBoard can. A request is <data>/tmp/x86sim-frontmost.req (its own file, so it never races
+// the openurl trigger), optionally with Darling pids, one per line; the answer <data>/tmp/x86sim-frontmost (written
 // .new, then renamed):
 //   line 1        SBSCopyFrontmostApplicationDisplayIdentifier (empty: nil, "?": not found). It answers nil for every
 //                 app here (also with Maps on screen), so jetsam.py no longer uses it; kept for diagnosis.
@@ -450,13 +450,13 @@ static void frontmost(NSString* home, NSString* req) {
 		}
 		[o appendFormat:@"pid %d %ld %ld %ld\n", pid, vis, task, scenes];
 	}
-	NSString* out = [home stringByAppendingString:@"/tmp/x86code-frontmost"];
+	NSString* out = [home stringByAppendingString:@"/tmp/x86sim-frontmost"];
 	NSString* tmp = [out stringByAppendingString:@".new"];
 	[o writeToFile:tmp atomically:NO encoding:NSUTF8StringEncoding error:nil];
 	rename(tmp.UTF8String, out.UTF8String);
 }
 
-// x86Code: waits for the request file to be renamed into place (see main)
+// x86Sim: waits for the request file to be renamed into place (see main)
 static void* watchThread(void* arg) {
 	long ifd = (long)arg;
 	char buf[4096];
@@ -475,18 +475,18 @@ int main(void) {
 	@autoreleasepool {
 		NSString* home = @(getenv("HOME") ?: "/private/var/tmp");
 		home_ = home;
-		// x86Code: diagnosis: this process's os_log into var/log/oslog.openurl.<pid>.log through libsimshim, when <data>/tmp/x86code-openurl.oslog exists
-		if (access([home stringByAppendingString:@"/tmp/x86code-openurl.oslog"].UTF8String, F_OK) == 0) {
-			setenv("X86CODE_OSLOG", "all", 1);
-			setenv("X86CODE_OSLOG_DIR", [home stringByAppendingString:@"/var/log"].UTF8String, 1);
+		// x86Sim: diagnosis: this process's os_log into var/log/oslog.openurl.<pid>.log through libsimshim, when <data>/tmp/x86sim-openurl.oslog exists
+		if (access([home stringByAppendingString:@"/tmp/x86sim-openurl.oslog"].UTF8String, F_OK) == 0) {
+			setenv("X86SIM_OSLOG", "all", 1);
+			setenv("X86SIM_OSLOG_DIR", [home stringByAppendingString:@"/var/log"].UTF8String, 1);
 		}
-		logf_ = fopen([home stringByAppendingString:@"/var/log/x86code-openurl.log"].UTF8String, "a");
+		logf_ = fopen([home stringByAppendingString:@"/var/log/x86sim-openurl.log"].UTF8String, "a");
 		dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
 		dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_NOW);
 		fprintf(logf_, "openurl: ready\n"); fflush(logf_);
-		const char* path = [home stringByAppendingString:@"/tmp/x86code-openurl"].UTF8String;
-		// x86Code: wait for the request file instead of polling it every 0.3 s (~40 wakeups a second at idle, and up to
-		// 0.3 s added to every `x86sim app`). The writers rename x86code-openurl.new over it: a Linux inotify watch on the
+		const char* path = [home stringByAppendingString:@"/tmp/x86sim-openurl"].UTF8String;
+		// x86Sim: wait for the request file instead of polling it every 0.3 s (~40 wakeups a second at idle, and up to
+		// 0.3 s added to every `x86sim app`). The writers rename x86sim-openurl.new over it: a Linux inotify watch on the
 		// directory (IN_MOVED_TO/IN_CLOSE_WRITE; Darling processes make Linux syscalls directly, as simfb's futex does)
 		// whose descriptor a dispatch read source waits on. (A DISPATCH_SOURCE_TYPE_VNODE on the directory never
 		// registered under Darling's libkqueue.) The run loop still runs between requests (CoreLocation
@@ -501,7 +501,7 @@ int main(void) {
 				ifd = -1;
 		}
 		if (ifd >= 0) {
-			// x86Code: a thread of its own blocks in read() on the inotify descriptor. A dispatch read source on it (on
+			// x86Sim: a thread of its own blocks in read() on the inotify descriptor. A dispatch read source on it (on
 			// the main queue, later on a serial queue) delivered the first event only: libdispatch never got the next
 			// one, so every request after the first waited for the 5 s fallback. CFRunLoopStop is
 			// thread-safe and isn't lost when the loop isn't waiting yet (its next run returns at once).
@@ -518,7 +518,7 @@ int main(void) {
 					[[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
 						beforeDate:[NSDate dateWithTimeIntervalSinceNow:ifd >= 0 ? 5.0 : 0.3]];
 				wake = NO;
-				NSString* freq = [home stringByAppendingString:@"/tmp/x86code-frontmost.req"];
+				NSString* freq = [home stringByAppendingString:@"/tmp/x86sim-frontmost.req"];
 				NSString* fr = [NSString stringWithContentsOfFile:freq encoding:NSUTF8StringEncoding error:nil];
 				if (unlink(freq.UTF8String) == 0)
 					frontmost(home, fr ?: @"");

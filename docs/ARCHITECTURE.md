@@ -1,6 +1,6 @@
 # Architecture
 
-x86Code runs Apple's **iOS 27 arm64 simulator runtime** (default: iOS 27.2, 24B8117) on x86-64 Linux. The runtime's
+x86Sim runs Apple's **iOS 27 arm64 simulator runtime** (default: iOS 27.2, 24B8117) on x86-64 Linux. The runtime's
 binaries are unchanged. They run under **Darling** (a Darwin compatibility layer: Mach-O loader + XNU syscall/Mach
 emulation + `darlingserver`), and their arm64 code is translated to x86-64 by **libarm64jit** (`linux/arm64jit`, built
 on dynarmic), just in time or from a pre-translated (AOT) image. Everything CoreSimulator and the Mac host would provide
@@ -12,7 +12,7 @@ started by the launcher (`tools/launcher`) through `cli/libexec/arm64/boot-a64.s
 ```
  Linux host                                             Darling container (one prefix per phone)
  ---------------------------------------------          -------------------------------------------------------------
- launcher (tools/launcher) / x86code-aot                 darling shell -> simhost (host/simhost, x86_64)
+ launcher (tools/launcher) / x86sim-aot                 darling shell -> simhost (host/simhost, x86_64)
    boot-a64.sh: mksimdevice.py, mtlvk, mdnsresponder,       -> launchd_sim (runtime)  [device: <device>/data]
                 simaudio.py, jetsam.py                         -> the runtime's daemons and agents (backboardd, SpringBoard,
    limited.sh scope -> boot-inner.sh -> darling shell             cfprefsd, lsd, runningboardd, ..., apps)
@@ -30,13 +30,13 @@ started by the launcher (`tools/launcher`) through `cli/libexec/arm64/boot-a64.s
  darlingserver (Darling, Linux process): Mach IPC, threads, VM, memfd-backed shared memory for every container process
 ```
 
-## Darling (external/darling, branch x86code)
+## Darling (external/darling, branch x86sim)
 
 Darling provides the Mach-O loader (`mldr`), the XNU syscall and Mach trap emulation (`libsystem_kernel`, in
 `darling-xnu`), the Mach IPC/task/thread server (`darlingserver`), `dyld` for the host side and `iokitd`. The iOS
 simulator runtime is far more demanding than the macOS userland Darling targets: workloops, cooperative thread pools
 (Swift concurrency), ulock, Mach memory entries, guarded fds, getattrlist/fsctl/chflags, PF_ROUTE, csops and more.
-All changes are on the `x86code` branches of our forks ([REPOS.md](REPOS.md)), each marked `x86Code:` in the source.
+All changes are on the `x86sim` branches of our forks ([REPOS.md](REPOS.md)), each marked `x86Sim:` in the source.
 
 Inside Darling the Linux root is `/Volumes/SystemRoot`; the scripts translate paths (`mksimdevice.py darling()`).
 Each phone has its own Darling prefix (`A64_DPREFIX`, default `$X86SIM_SCRATCH/a64prefix`); stopping a phone stops only
@@ -45,8 +45,8 @@ that prefix's container.
 ## arm64 code: arm64host and libarm64jit
 
 When `mldr` is asked to run an arm64-only Mach-O, it re-executes itself on `arm64host` (`host/arm64host`, an x86_64
-macOS program installed next to mldr) with `X86CODE_A64_EXE` naming the arm64 program, and renames `DYLD_*` to
-`X86CODE_A64_DYLD_*`. arm64host starts like any Darling process (native libSystem, TSD, darlingserver), loads the ELF
+macOS program installed next to mldr) with `X86SIM_A64_EXE` naming the arm64 program, and renames `DYLD_*` to
+`X86SIM_A64_DYLD_*`. arm64host starts like any Darling process (native libSystem, TSD, darlingserver), loads the ELF
 library `libarm64jit.so` through Darling's elfcalls and hands over: dynarmic runs the arm64 `dyld_sim` and the program,
 while `libsystem_kernel`/`platform`/`pthread` stay the process's native x86 libraries.
 
@@ -58,17 +58,17 @@ Inside libarm64jit (`linux/arm64jit`):
   move arguments between the arm64 and System V conventions; `guest_callable()` gives native code a trampoline into a
   guest function.
 - `objc.cpp`: an inline x86 `objc_msgSend` cache probe emitted when `_objc_msgSend` is translated.
-- `dyldsim.cpp`: native shortcuts applied to `dyld_sim` before it runs (`X86CODE_A64_DYLD_NATIVE=0` turns them off).
-- `jitcache.cpp`: the persistent translation cache in `X86CODE_A64_JITCACHE_DIR` (default `$X86SIM_SCRATCH/jitcache`;
+- `dyldsim.cpp`: native shortcuts applied to `dyld_sim` before it runs (`X86SIM_A64_DYLD_NATIVE=0` turns them off).
+- `jitcache.cpp`: the persistent translation cache in `X86SIM_A64_JITCACHE_DIR` (default `$X86SIM_SCRATCH/jitcache`;
   runtimes other than 27.0 use `$X86SIM_SCRATCH/jc-<build>`), keyed by the dyld cache UUID and a build id that includes
   the codegen version and the placement table's hash. Per-process `.bin` files record what each program ran; the
-  `.aot` image holds pre-translated code and is loaded at process start (`X86CODE_A64_AOT=0` disables it).
+  `.aot` image holds pre-translated code and is loaded at process start (`X86SIM_A64_AOT=0` disables it).
 
 Non-cache Mach-Os (runtime binaries, apps) get fixed addresses from a placement table
 (`cli/libexec/arm64/placement-<build>.txt`, `mkplacement.py`), copied into the cache dir; the AOT image must be built
 with the same table.
 
-### Pre-translation (tools/launcher x86code-aot)
+### Pre-translation (tools/launcher x86sim-aot)
 
 `tools/launcher/core/src/aot.rs` builds the AOT image in chunks: one per dyld-cache dylib, placed runtime Mach-O or
 placed app executable. Each chunk is translated by libarm64jit's builder into its own slot of the code slab (translated
@@ -76,21 +76,21 @@ code is position dependent, so a slot is fixed once assigned and a rebuilt chunk
 (`<uuid>-<build>.aot`) is assembled from the chunk files. Layout under the cache dir: `placement.txt`,
 `aot/config.json`, `aot/manifest.json`, `aot/chunks/`, `aot/progress.json`. What goes in is chosen from training
 profiles: the install's own `.bin` files and the shipped `cli/libexec/arm64/training-<build>.x86t`. 90 s after a boot,
-`boot-a64.sh` runs `x86code-aot status` and notes in `$ST/aot-status.txt` how many chunks need rebuilding
-(`X86CODE_AOT_AUTOUPDATE=1` rebuilds them right away).
+`boot-a64.sh` runs `x86sim-aot status` and notes in `$ST/aot-status.txt` how many chunks need rebuilding
+(`X86SIM_AOT_AUTOUPDATE=1` rebuilds them right away).
 
 ## Booting: boot-a64.sh, simhost and launchd_sim
 
 `cli/libexec/arm64/boot-a64.sh` boots one device (`A64_DEVICE`, default `var/device-a64`; its iOS version is
 `<device>/runtime`, `A64_RUNTIME` overrides). It:
 
-1. starts this boot's mtlvk when `X86CODE_METAL` is not `0` (own socket and pidfile in the state dir), or shares a
+1. starts this boot's mtlvk when `X86SIM_METAL` is not `0` (own socket and pidfile in the state dir), or shares a
    running one (`A64_MTLVK_SOCKET`); an mtlvk other phones render through is never stopped;
 2. picks the job list (`A64_JOBS=min|slim|std|full`, default `std`; each job's reason is in a comment), applies the
    device's feature toggles (`<device>/features.json`, definitions in `cli/libexec/arm64/features-def.json`) and
    `A64_DROP`, and runs `cli/libexec/mksimdevice.py`;
 3. stops this prefix's previous container (its own processes only, found by exact checks), then starts
-   `linux/mdnsd/mdnsresponder.py`, `cli/libexec/jetsam.py` and, with `X86CODE_AUDIO=1`, `cli/libexec/simaudio.py`;
+   `linux/mdnsd/mdnsresponder.py`, `cli/libexec/jetsam.py` and, with `X86SIM_AUDIO=1`, `cli/libexec/simaudio.py`;
 4. runs `cli/libexec/arm64/boot-inner.sh` inside the systemd scope of `cli/libexec/limited.sh` (IO cap and memory cap
    `X86SIM_MEM_MAX`), which moves this phone's Darling processes into the scope and runs `darling shell` with
    `host/simhost/simhost`, which execs the runtime's `launchd_sim` with the device's environment.
@@ -105,7 +105,7 @@ holding-tank child). launchd_sim's log is in the prefix at
 `private/var/tmp/com.apple.CoreSimulator.SimDevice.<UDID>/launchd.log`.
 
 The launcher (`tools/launcher`, `core/src/sim.rs` and `instance.rs`) runs boot-a64.sh with `A64_KEEP=1`, the phone's
-`A64_DPREFIX` and `X86CODE_METAL`, finds a phone's processes by exact checks (its prefix's darlingserver and its
+`A64_DPREFIX` and `X86SIM_METAL`, finds a phone's processes by exact checks (its prefix's darlingserver and its
 descendants), and starts `simview.py` for its window.
 
 ## simshim (host/simshim)
@@ -114,7 +114,7 @@ descendants), and starts `simview.py` for its window.
 few host services a Linux host cannot provide, among them system power registration (no IOPMrootDomain), csops
 entitlement blobs (sent to Darling's syscall) and sandbox extensions (tokens issued and accepted; nothing is
 sandboxed). The arm64 build also includes the os_log formatter used by `x86sim log stream`. Optional diagnostic shims
-(`host/simshim/diag`, `X86CODE_INSERT=...`, built with `make mac-diag`) log specific subsystems.
+(`host/simshim/diag`, `X86SIM_INSERT=...`, built with `make mac-diag`) log specific subsystems.
 
 ## Jetsam: jetsam.py
 
@@ -128,7 +128,7 @@ backboardd loads `SimFramebuffer.framework` from `SIMULATOR_FRAMEBUFFER_FRAMEWOR
 built-in display named `LCD` (QuartzCore treats a main display with any other name as absent), gives CoreAnimation IOSurface
 swapchains and copies each completed present into a shared-memory ring ([protocols/SIMFB.md](protocols/SIMFB.md)), written under
 `/run/user/<uid>` (`SIMFB_RING` in `sim.env`) and linked from `/dev/shm` (`SIMFB_RING_LINUX`, default
-`/dev/shm/x86code-a64-simfb.ring`). Every publish wakes Linux readers through a futex on the ring's seq word
+`/dev/shm/x86sim-a64-simfb.ring`). Every publish wakes Linux readers through a futex on the ring's seq word
 (ring version 2), so they sleep while the screen doesn't change. Linux readers: `simview.py` (GTK4 window),
 `fb2png.py` (screenshots), `fpsmeter.py`, `framecheck.py`.
 
@@ -145,13 +145,13 @@ On a Mac, simulator processes' Metal goes through `MTLSimDriver` over XPC to the
 replays it on the Mac's GPU. Here `host/metalhostd` (a simulator job) loads the runtime's own `MTLSimImplementation`
 and gives it a Metal device implemented by `vkmtl.m`, which forwards every object and command buffer over a Unix
 socket (VKMTL protocol, [protocols/METAL.md](protocols/METAL.md)) to `linux/mtlvk`, a native Rust process that runs
-it on Vulkan with **metal2vulkan** (`external/metal2vulkan`, branch x86code: Metal API on Vulkan + AIR to SPIR-V
+it on Vulkan with **metal2vulkan** (`external/metal2vulkan`, branch x86sim: Metal API on Vulkan + AIR to SPIR-V
 translation). Buffer and texture memory is shared without copies: simulator memory is memfd-backed (darlingserver),
 metalhostd obtains the fd with syscall 599 and passes it with `SCM_RIGHTS`; mtlvk imports it
 (`VK_EXT_external_memory_host`). Render targets over IOSurfaces of the screen's size are the exception: mtlvk draws
 them in VRAM and copies them to the surface's pages once per command buffer (blending into host pages crossed PCIe
 for every layer). CoreAnimation's render server, the wallpaper and apps all use it
-(`X86CODE_METAL=all`, the launcher's default; `0` = software rendering, which is also boot-a64.sh's default when run
+(`X86SIM_METAL=all`, the launcher's default; `0` = software rendering, which is also boot-a64.sh's default when run
 by hand). Details: [METAL.md](METAL.md).
 
 ## Cross-process surfaces: iosurfaced
@@ -166,28 +166,28 @@ surfaces are shared anonymous memory (memfds in darlingserver) handed out as `xp
 The simulator resolves names through the host's mDNSResponder socket (`/var/run/mDNSResponder`).
 `linux/mdnsd/mdnsresponder.py` implements the dnssd_ipc protocol on Linux (real DNS via dnspython) at
 `$ST/mDNSResponder` (one server per boot, started by boot-a64.sh), linked into the container's `/var/run`
-(`X86CODE_MDNS=0`: none).
+(`X86SIM_MDNS=0`: none).
 Network state (what a Mac's configd publishes) comes from `linux/hostnet/hostnet.py` (the Linux default-route
 interface as Setup:/State: keys), loaded by `host/netconfig` into a second `configd_sim` registered as
-`com.apple.SystemConfiguration.configd` (`com.x86code.host-configd`), which the simulator's configd_sim mirrors. Sockets
+`com.apple.SystemConfiguration.configd` (`com.x86sim.host-configd`), which the simulator's configd_sim mirrors. Sockets
 and routing sockets themselves are Darling's (PF_ROUTE, socket options, EVFILT_SOCK).
 
 ## Host file services: fpsim2host
 
 FileProvider sends some operations to the Mac host's fileproviderd (`com.apple.FileProvider.sim2host`): open by file
 id, openat/mkdirat/... on behalf of extensions, package lookup, directory entries, dataless files.
-`host/fpsim2host` (job `com.x86code.fpsim2host`) serves that interface inside the simulator.
+`host/fpsim2host` (job `com.x86sim.fpsim2host`) serves that interface inside the simulator.
 
 ## Audio: simaudio
 
 `host/simaudio/arm64/libsimaudio.dylib`, injected into each process, provides the audio devices a Mac's CoreSimulator
 and coreaudiod would, and streams PCM over `simaudio.sock` to `cli/libexec/simaudio.py` (PipeWire), started by
-boot-a64.sh. Opt-in with `X86CODE_AUDIO=1` (see [WORKAROUNDS.md](WORKAROUNDS.md)).
+boot-a64.sh. Opt-in with `X86SIM_AUDIO=1` (see [WORKAROUNDS.md](WORKAROUNDS.md)).
 
 ## Test helpers inside the device
 
-`host/openurl` (job `com.x86code.openurl`) opens URLs and apps through FrontBoard (`x86sim openurl|app|launch`), reading
-requests from `<device>/data/tmp/x86code-openurl`. It also installs and removes apps (`x86sim install|uninstall`,
+`host/openurl` (job `com.x86sim.openurl`) opens URLs and apps through FrontBoard (`x86sim openurl|app|launch`), reading
+requests from `<device>/data/tmp/x86sim-openurl`. It also installs and removes apps (`x86sim install|uninstall`,
 `cli/libexec/appinstall.sh`), the way CoreSimulatorBridge does on a Mac: `+[IXAppInstallCoordinator
 installApplication:consumeSource:options:completion:]` -> installcoordinationd -> installd (copies the bundle into
 `data/Containers/Bundle/Application/<uuid>`) -> containermanagerd (data container) -> lsd (registration) ->
@@ -204,7 +204,7 @@ entitlements: FrontBoard's debug options (`__DebugOptions`: arguments, environme
 at a speed with updates by interval or distance, or one of the runtime's scenarios in CoreLocation.framework/Support/
 SimulationScenarios; nanoregistryd must run), `PHPhotoLibrary` change requests for `addmedia`.
 `--console-pty` passes a Linux pty's path (`/Volumes/SystemRoot/dev/pts/N`) as the app's stdout/stderr. `log stream --app` relaunches the app with
-`X86CODE_OSLOG`, which turns on libsimshim's built-in os_log formatter (`host/simshim/diag/oslogdiag.m` compiled in):
+`X86SIM_OSLOG`, which turns on libsimshim's built-in os_log formatter (`host/simshim/diag/oslogdiag.m` compiled in):
 messages go to `data/var/log/oslog.<prog>.<pid>.log` without logd/diagnosticd. `io recordVideo` encodes the frame
 ring with ffmpeg.
 
@@ -228,6 +228,6 @@ prefixes, JIT/AOT caches) are in `$X86SIM_SCRATCH`.
 | network state | hostnet.py | plist -> netconfig -> host-configd | configd_sim (SimulatorSupport) |
 | audio | libsimaudio | `simaudio.sock` | simaudio.py (PipeWire) |
 | host files | FileProvider | XPC `com.apple.FileProvider.sim2host` | fpsim2host |
-| install app | x86sim install (appinstall.sh copies the .app into `data/tmp/x86code-install`) | `<device>/data/tmp/x86code-openurl` | openurl job -> InstallCoordination -> installd |
-| open URL/app | x86sim openurl/app | `<device>/data/tmp/x86code-openurl` | openurl job -> FrontBoard |
-| simctl commands | x86sim launch/push/... (simctl.py) | `req <id> <json>` in `<device>/data/tmp/x86code-openurl`, `result` lines in its log | openurl job -> FrontBoard, UserNotifications, Photos, CoreLocation, LaunchServices |
+| install app | x86sim install (appinstall.sh copies the .app into `data/tmp/x86sim-install`) | `<device>/data/tmp/x86sim-openurl` | openurl job -> InstallCoordination -> installd |
+| open URL/app | x86sim openurl/app | `<device>/data/tmp/x86sim-openurl` | openurl job -> FrontBoard |
+| simctl commands | x86sim launch/push/... (simctl.py) | `req <id> <json>` in `<device>/data/tmp/x86sim-openurl`, `result` lines in its log | openurl job -> FrontBoard, UserNotifications, Photos, CoreLocation, LaunchServices |

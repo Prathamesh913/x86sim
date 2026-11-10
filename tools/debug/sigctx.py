@@ -36,7 +36,7 @@ def sym(maps, *addrs):
 
 def main():
     core, n = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 4000
-    maps = x86config.get("X86SIM_SCRATCH") + "/sigctx.maps"  # x86Code: not /tmp (small tmpfs)
+    maps = x86config.get("X86SIM_SCRATCH") + "/sigctx.maps"  # x86Sim: not /tmp (small tmpfs)
     with open(maps, "w") as f:
         f.write(subprocess.run(["sh", "-c", "readelf -n '%s' | awk '/Page size:/{print \"pagesize\", $3} /NT_FILE/{f=1} f && /^ +0x/ {s=$1; e=$2; o=$3; getline p; gsub(/^ +/,\"\",p); print s, e, o, p}'" % core],
                                capture_output=True, text=True).stdout)

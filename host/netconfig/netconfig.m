@@ -1,5 +1,5 @@
-// x86Code: loads the host's network configuration (linux/hostnet/hostnet.py's plist) into the dynamic store named
-// with kSCDynamicStoreUseHostServer when X86CODE_HOST_STORE is set (com.x86code.host-configd: the stand-in for the Mac's configd, which configd_sim's SimulatorSupport
+// x86Sim: loads the host's network configuration (linux/hostnet/hostnet.py's plist) into the dynamic store named
+// with kSCDynamicStoreUseHostServer when X86SIM_HOST_STORE is set (com.x86sim.host-configd: the stand-in for the Mac's configd, which configd_sim's SimulatorSupport
 // plugin mirrors into the simulator), or dumps a store: netconfig <plist> | netconfig -dump [delay s]
 #import <Foundation/Foundation.h>
 
@@ -19,10 +19,10 @@ int main(int argc, char **argv) {
 		if (argc > 2) sleep(atoi(argv[2]));  // -dump <seconds>: let the boot settle first
 		// the store's job may not be loaded yet this early in the boot: retry for 30 s
 		SCDynamicStoreRef s = NULL;
-		// -host: the host's store (com.apple.SystemConfiguration.configd, here com.x86code.host-configd), else the simulator's
-		BOOL host = getenv("X86CODE_HOST_STORE") != NULL;
+		// -host: the host's store (com.apple.SystemConfiguration.configd, here com.x86sim.host-configd), else the simulator's
+		BOOL host = getenv("X86SIM_HOST_STORE") != NULL;
 		NSDictionary *opts = host ? @{ (__bridge NSString *)kSCDynamicStoreUseHostServer: @YES } : nil;
-		for (int i = 0; i < 30 && !(s = SCDynamicStoreCreateWithOptions(NULL, CFSTR("x86code-netconfig"), (__bridge CFDictionaryRef)opts, NULL, NULL)); i++) sleep(1);
+		for (int i = 0; i < 30 && !(s = SCDynamicStoreCreateWithOptions(NULL, CFSTR("x86sim-netconfig"), (__bridge CFDictionaryRef)opts, NULL, NULL)); i++) sleep(1);
 		if (!s) { printf("netconfig: no store (SCError %d)\n", SCError()); return 1; }
 		if (argc > 1 && strcmp(argv[1], "-dump") == 0) {
 			NSArray *keys = CFBridgingRelease(SCDynamicStoreCopyKeyList(s, CFSTR("State:/Network/.*|Setup:/Network/.*")));

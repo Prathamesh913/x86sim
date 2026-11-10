@@ -1,4 +1,4 @@
-// x86Code: test app for the developer commands (tests/devtools.sh): prints its arguments and the environment variable
+// x86Sim: test app for the developer commands (tests/devtools.sh): prints its arguments and the environment variable
 // X86_HELLO to stdout, a counter to stdout/stderr every second (x86sim launch --console), os_log lines (x86sim log
 // stream), shows received notifications (x86sim push) and the location (x86sim location set) on screen and in the log.
 import UIKit
@@ -6,7 +6,7 @@ import UserNotifications
 import CoreLocation
 import os
 
-let log = Logger(subsystem: "com.x86code.devtools", category: "test")
+let log = Logger(subsystem: "com.x86sim.devtools", category: "test")
 
 func say(_ s: String) {
     print("devtools: \(s)")

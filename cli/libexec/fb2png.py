@@ -9,10 +9,10 @@ import x86config  # noqa: E402
 import fbring
 
 src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(x86config.data(), "framebuffer.bgra")
-dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86code")), "frame.png")
+dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.environ.get("X86SIM_SCRATCH", os.path.expanduser("~/scratch/x86sim")), "frame.png")
 div = int(sys.argv[3]) if len(sys.argv) > 3 else 1
-# x86Code: framebuffer.bgra is only rewritten every 2 s now; the ring has every frame.
-# Arm64 boots: pass /dev/shm/x86code-a64-simfb.ring (or set SIMFB_RING_LINUX and use "ring").
+# x86Sim: framebuffer.bgra is only rewritten every 2 s now; the ring has every frame.
+# Arm64 boots: pass /dev/shm/x86sim-a64-simfb.ring (or set SIMFB_RING_LINUX and use "ring").
 if src.endswith(".ring"):
     f = fbring.Ring(src).latest()
 elif src == "ring" or os.path.basename(src) == "framebuffer.bgra":
@@ -26,7 +26,7 @@ else:
     data = open(src, "rb").read()
     w, h, stride, seq = struct.unpack("<4I", data[:16])
     px = data[16:]
-# x86Code Speed 1c: never decode with width*4 when the ring/surface stride is larger. A Pillow
+# x86Sim Speed 1c: never decode with width*4 when the ring/surface stride is larger. A Pillow
 # frombuffer/frombytes that omits stride (or passes w*4) on a 1206-wide frame (tight 4824, stride
 # 4864) shifts every row by 40 bytes and looks like thin diagonal lines across the PNG. Require
 # enough bytes for stride*h and always pass the real stride into Pillow.

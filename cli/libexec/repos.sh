@@ -1,13 +1,13 @@
 #!/bin/bash
-# repos.sh: work across x86Code's submodules (every one is a fork in the x86code GitHub org).
+# repos.sh: work across x86Sim's submodules (every one is a fork in the x86sim GitHub org).
 #   repos status                     dirty / unpushed submodules, with their branch
 #   repos commit -m MSG [--dry-run]  commit tracked changes in every dirty submodule (deepest first) with MSG, push
-#                                    each to its branch, then commit and push the bumped pointers in x86code
+#                                    each to its branch, then commit and push the bumped pointers in x86sim
 #   repos upstream-sync [--apply] [PATH...]
-#                                    for each fork with an x86code branch: fetch the GitHub parent's default branch
-#                                    and rebase x86code onto it (dry run: report behind/ahead and conflicts only).
+#                                    for each fork with an x86sim branch: fetch the GitHub parent's default branch
+#                                    and rebase x86sim onto it (dry run: report behind/ahead and conflicts only).
 #                                    --apply rebases clean trees and pushes with --force-with-lease; a conflicting
-#                                    rebase is aborted and reported. Forks without an x86code branch get GitHub's
+#                                    rebase is aborted and reported. Forks without an x86sim branch get GitHub's
 #                                    "Sync fork" (merge-upstream) on their default branch.
 # Untracked files are never added; they are listed so they can be added (or ignored) by hand.
 set -u
@@ -35,7 +35,7 @@ cmd_status() {
 		[ -n "$(untracked "$p")" ] && printf '%-55s untracked: %s\n' "$p" "$(untracked "$p" | tr '\n' ' ')"
 	done < <(subs)
 	[ $n = 0 ] && echo "all submodules clean and pushed"
-	git status --short --ignore-submodules=all --untracked-files=no | sed 's/^/x86code: /'
+	git status --short --ignore-submodules=all --untracked-files=no | sed 's/^/x86sim: /'
 }
 
 cmd_commit() {
@@ -52,20 +52,20 @@ cmd_commit() {
 	while read -r p; do
 		dirty "$p" || unpushed "$p" || continue
 		b=$(git -C "$p" symbolic-ref -q --short HEAD) || {
-			echo "$p: has changes but is on a detached HEAD; check out its x86code branch first" >&2; return 1; }
+			echo "$p: has changes but is on a detached HEAD; check out its x86sim branch first" >&2; return 1; }
 		[ -n "$(untracked "$p")" ] && echo "$p: not adding untracked: $(untracked "$p" | tr '\n' ' ')"
 		if [ $dry = 1 ]; then echo "would commit+push $p ($b)"; continue; fi
 		if dirty "$p"; then git -C "$p" add -u && git -C "$p" commit -q -m "$msg" || return 1; fi
 		git -C "$p" push -q origin "$b" || { echo "$p: push failed" >&2; return 1; }
 		echo "$p: $(git -C "$p" log --oneline -1) -> origin/$b"
 	done < <(subs)
-	# x86code: only the submodule pointers (other changes in the main repo are left alone)
+	# x86sim: only the submodule pointers (other changes in the main repo are left alone)
 	local bumped; bumped=$(git diff --name-only --ignore-submodules=none | while read -r f; do
 		[ "$(git ls-files -s -- "$f" | cut -c1-6)" = 160000 ] && echo "$f"; done)
-	[ -z "$bumped" ] && { echo "x86code: no submodule pointers to bump"; return 0; }
-	if [ $dry = 1 ]; then echo "would bump in x86code: $(echo $bumped)"; return 0; fi
+	[ -z "$bumped" ] && { echo "x86sim: no submodule pointers to bump"; return 0; }
+	if [ $dry = 1 ]; then echo "would bump in x86sim: $(echo $bumped)"; return 0; fi
 	git add -- $bumped && git commit -q -m "$msg" -- $bumped && git push -q || return 1
-	echo "x86code: $(git log --oneline -1)"
+	echo "x86sim: $(git log --oneline -1)"
 }
 
 cmd_sync() {
@@ -79,39 +79,39 @@ cmd_sync() {
 		if [ ${#only[@]} -gt 0 ]; then printf '%s\n' "${only[@]}" | grep -qxF "$p" || continue; fi
 		url=$(git -C "$p" remote get-url origin) || continue
 		name=$(basename "$url" .git)
-		parent=$(gh api "repos/x86code/$name" --jq '.parent.full_name // empty' 2>/dev/null)
-		[ -n "$parent" ] || { echo "$p: x86code/$name has no GitHub parent; skipped"; continue; }
-		if ! git -C "$p" show-ref -q --verify refs/heads/x86code && \
-		   ! git -C "$p" ls-remote -q --exit-code origin refs/heads/x86code >/dev/null; then
+		parent=$(gh api "repos/x86sim/$name" --jq '.parent.full_name // empty' 2>/dev/null)
+		[ -n "$parent" ] || { echo "$p: x86sim/$name has no GitHub parent; skipped"; continue; }
+		if ! git -C "$p" show-ref -q --verify refs/heads/x86sim && \
+		   ! git -C "$p" ls-remote -q --exit-code origin refs/heads/x86sim >/dev/null; then
 			# unchanged fork: keep its default branch in sync on GitHub (the pinned commit is darling's choice)
 			if [ $apply = 1 ]; then
-				pb=$(gh api "repos/x86code/$name" --jq .default_branch)
-				gh api -X POST "repos/x86code/$name/merge-upstream" -f branch="$pb" --jq "\"$p: \(.message)\"" 2>/dev/null \
+				pb=$(gh api "repos/x86sim/$name" --jq .default_branch)
+				gh api -X POST "repos/x86sim/$name/merge-upstream" -f branch="$pb" --jq "\"$p: \(.message)\"" 2>/dev/null \
 					|| echo "$p: sync fork failed"
 			fi
 			continue
 		fi
 		pb=$(gh api "repos/$parent" --jq .default_branch)
 		git -C "$p" remote get-url upstream >/dev/null 2>&1 || git -C "$p" remote add upstream "https://github.com/$parent.git"
-		git -C "$p" fetch -q upstream "$pb" && git -C "$p" fetch -q origin x86code || { echo "$p: fetch failed"; continue; }
-		behind=$(git -C "$p" rev-list --count "origin/x86code..upstream/$pb")
-		ahead=$(git -C "$p" rev-list --count "upstream/$pb..origin/x86code")
+		git -C "$p" fetch -q upstream "$pb" && git -C "$p" fetch -q origin x86sim || { echo "$p: fetch failed"; continue; }
+		behind=$(git -C "$p" rev-list --count "origin/x86sim..upstream/$pb")
+		ahead=$(git -C "$p" rev-list --count "upstream/$pb..origin/x86sim")
 		if [ "$behind" = 0 ]; then echo "$p: up to date with $parent:$pb ($ahead ours)"; continue; fi
 		if [ $apply = 0 ]; then
-			if git -C "$p" merge-tree --write-tree "origin/x86code" "upstream/$pb" >/dev/null 2>&1; then
+			if git -C "$p" merge-tree --write-tree "origin/x86sim" "upstream/$pb" >/dev/null 2>&1; then
 				echo "$p: $behind behind $parent:$pb, $ahead ours, merges cleanly"
 			else
 				echo "$p: $behind behind $parent:$pb, $ahead ours, CONFLICTS:"
-				git -C "$p" merge-tree --write-tree --name-only "origin/x86code" "upstream/$pb" 2>/dev/null | sed -n '2,/^$/{/^$/!s/^/    /p}'
+				git -C "$p" merge-tree --write-tree --name-only "origin/x86sim" "upstream/$pb" 2>/dev/null | sed -n '2,/^$/{/^$/!s/^/    /p}'
 			fi
 			continue
 		fi
-		if [ "$(git -C "$p" symbolic-ref -q --short HEAD)" != x86code ] || dirty "$p"; then
-			echo "$p: not on a clean x86code branch; skipped"; continue
+		if [ "$(git -C "$p" symbolic-ref -q --short HEAD)" != x86sim ] || dirty "$p"; then
+			echo "$p: not on a clean x86sim branch; skipped"; continue
 		fi
-		git -C "$p" merge -q --ff-only origin/x86code 2>/dev/null
+		git -C "$p" merge -q --ff-only origin/x86sim 2>/dev/null
 		if git -C "$p" rebase -q "upstream/$pb" >/dev/null 2>&1; then
-			git -C "$p" push -q --force-with-lease=x86code origin x86code && echo "$p: rebased onto $parent:$pb (+$behind) and pushed"
+			git -C "$p" push -q --force-with-lease=x86sim origin x86sim && echo "$p: rebased onto $parent:$pb (+$behind) and pushed"
 		else
 			echo "$p: rebase onto $parent:$pb CONFLICTS (aborted):"
 			git -C "$p" diff --name-only --diff-filter=U | sed 's/^/    /'

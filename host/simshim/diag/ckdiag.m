@@ -1,9 +1,9 @@
-// x86Code: diagnostic shim (cloudd): what -[CKDXPCConnection getContainerScopedDaemonProxyCreatorForSetupInfo:
+// x86Sim: diagnostic shim (cloudd): what -[CKDXPCConnection getContainerScopedDaemonProxyCreatorForSetupInfo:
 // containerScopedClientProxy:completionHandler:] answers (CloudKit clients log "Ignoring failed attempt to get container
 // proxy ... (null)" and then trap on accountInfo (nil, nil)). Log: data/var/log/ckdiag.<pid>.log
-// X86CODE_INSERT=host/simshim/diag/libckdiag.dylib
+// X86SIM_INSERT=host/simshim/diag/libckdiag.dylib
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <execinfo.h>
@@ -13,7 +13,7 @@
 #include <dlfcn.h>
 static int logfd(void) {
 	static int fd = -1;
-	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86CODE_DATA_DIR "/var/log/ckdiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
+	if (fd < 0) { char p[200]; snprintf(p, sizeof p, X86SIM_DATA_DIR "/var/log/ckdiag.%d.log", getpid()); fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644); }
 	return fd;
 }
 static void bt(void) { void* f[24]; int n = backtrace(f, 24); backtrace_symbols_fd(f, n, logfd()); }

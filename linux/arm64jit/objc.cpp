@@ -3,8 +3,8 @@
 // Two modes (in preference order):
 //   1. Inline x86 probe in dynarmic (default): when a block at _objc_msgSend is translated,
 //      EmitInlineObjCMsgSend emits the cache lookup in x86 and FastDispatches to the IMP.
-//      No CallSVC, no HostCall spill. X86CODE_A64_INLINE_OBJC=0 disables.
-//   2. Legacy svc stub (X86CODE_A64_NATIVE_OBJC=1): patch entry to svc; host C++ probe;
+//      No CallSVC, no HostCall spill. X86SIM_A64_INLINE_OBJC=0 disables.
+//   2. Legacy svc stub (X86SIM_A64_NATIVE_OBJC=1): patch entry to svc; host C++ probe;
 //      SetPC(IMP). Kept for comparison; slower than guest A64 (~1.8×) because of the boundary.
 //
 // Layout verified against iOS 27.0 sim cache (dyld_sim_shared_cache_arm64):
@@ -115,8 +115,8 @@ void native_objc_prepare(const std::string &cache_path) {
     u64 bks_hi = 0;
     cache_exports(cache_path, "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices", nullptr,
                   &g_bks_text, &bks_hi);
-    // X86CODE_A64_GUEST_OBJC=1: leave guest A64 msgSend alone (baseline).
-    const char *guest = getenv("X86CODE_A64_GUEST_OBJC");
+    // X86SIM_A64_GUEST_OBJC=1: leave guest A64 msgSend alone (baseline).
+    const char *guest = getenv("X86SIM_A64_GUEST_OBJC");
     if (guest && *guest == '1') return;
 
     u64 text_lo = 0, text_hi = 0;
@@ -135,8 +135,8 @@ void native_objc_prepare(const std::string &cache_path) {
     g_tagged = g_msgsend + (kTaggedGetClass - kDefaultMsgSend);
 
     // Default: inline x86 probe. Opt out with INLINE_OBJC=0; legacy svc with NATIVE_OBJC=1.
-    const char *inline_env = getenv("X86CODE_A64_INLINE_OBJC");
-    const char *native_env = getenv("X86CODE_A64_NATIVE_OBJC");
+    const char *inline_env = getenv("X86SIM_A64_INLINE_OBJC");
+    const char *native_env = getenv("X86SIM_A64_NATIVE_OBJC");
     if (native_env && *native_env == '1') {
         g_svc_native = true;
         g_inline = false;
@@ -162,13 +162,13 @@ void native_objc_install() {
         }
         emit_stub((uint32_t *)addr, add_thunk("_objc_msgSend", h_objc_msgSend));
         mprotect((void *)page, len, PROT_READ | PROT_EXEC);
-        if (getenv("X86CODE_A64_STATS"))
+        if (getenv("X86SIM_A64_STATS"))
             logf("native objc: patched _objc_msgSend at %#lx (svc path; uncached %#lx)",
                  (unsigned long)addr, (unsigned long)g_uncached);
         return;
     }
     // Inline path: addresses are wired into each Jit's UserConfig in GuestThread().
-    if (g_inline && getenv("X86CODE_A64_STATS"))
+    if (g_inline && getenv("X86SIM_A64_STATS"))
         logf("native objc: inline x86 probe at %#lx (uncached %#lx tagged %#lx)",
              (unsigned long)g_msgsend, (unsigned long)g_uncached, (unsigned long)g_tagged);
 }
@@ -180,7 +180,7 @@ void native_objc_install() {
 // were freed while another thread was still scanning them: SpringBoard SIGSEGVs in lookUpImpOrForward /
 // _collecting_in_critical on garbage caches (count=1867017839, 1634885989), the "libobjc lookup crash" of
 // Speed 4. Make _collecting_in_critical return true: old buckets are never freed (they stay on objc's
-// garbage list; a bounded leak, at most the caches' cumulative growth). X86CODE_A64_OBJC_CACHE_GC=1 restores
+// garbage list; a bounded leak, at most the caches' cumulative growth). X86SIM_A64_OBJC_CACHE_GC=1 restores
 // Apple's behaviour.
 // Replace a shared-cache function's entry with `mov x0/w0, #ret; ret` when its first instruction matches (the
 // cache text is a private mapping), and drop any translation of it (persistent cache / AOT image included).
@@ -201,13 +201,13 @@ static bool patch_return(GuestThread &t, u64 addr, uint32_t expect, uint32_t mov
     mprotect((void *)page, len, PROT_READ | PROT_EXEC);
     g.unlock();
     t.jit->InvalidateCacheRange(addr, 8);
-    if (getenv("X86CODE_A64_STATS")) logf("patch %s at %#lx", what, (unsigned long)addr);
+    if (getenv("X86SIM_A64_STATS")) logf("patch %s at %#lx", what, (unsigned long)addr);
     return true;
 }
 
 constexpr u64 kCollectingInCritical = 0x1c005ae50ull;  // __ZL23_collecting_in_criticalv, iOS 27.0 24A434
 void objc_cache_gc_guard(GuestThread &t) {
-    if (const char *e = getenv("X86CODE_A64_OBJC_CACHE_GC"); e && atoi(e) == 1) return;
+    if (const char *e = getenv("X86SIM_A64_OBJC_CACHE_GC"); e && atoi(e) == 1) return;
     // sub sp, sp, #368 -> mov w0, #1
     patch_return(t, kCollectingInCritical, 0xd105c3ffu, 0x52800020u, "objc _collecting_in_critical -> true");
 }
@@ -223,12 +223,12 @@ void objc_cache_gc_guard(GuestThread &t) {
 // SpringBoard carries on with a dead connection, "backboardd must be exiting"). Under a cold JIT SpringBoard's
 // activate -> remoteTarget window is long enough for backboardd's reply to win, so cold boots restarted
 // SpringBoard 2-6 times. There is no server to reach in the simulator, so the overseer gets no remote target (what
-// it ends up with on a Mac too); mode pushes and queries go to nil. X86CODE_A64_UISENSOR=1 leaves it alone.
+// it ends up with on a Mac too); mode pushes and queries go to nil. X86SIM_A64_UISENSOR=1 leaves it alone.
 // Speed 24: as an offset into BackBoardServices' __TEXT (0x1c8e3e22c in 27.0, 0x1c8dec22c in 27.2, 0x1c8f2622c in
 // 27.1: the same code, the image moved); patch_return checks the prologue.
 constexpr u64 kUISensorConnect = 0xb22c;  // -[_BKSHIDUISensorOverseer _connectionLock_connectToRemoteServiceIfNeeded]
 void sim_service_patches(GuestThread &t) {
-    if (const char *e = getenv("X86CODE_A64_UISENSOR"); e && atoi(e) == 1) return;
+    if (const char *e = getenv("X86SIM_A64_UISENSOR"); e && atoi(e) == 1) return;
     if (!g_bks_text) {
         logf("patch BKS UI sensor connect: BackBoardServices not in the cache; not patched");
         return;
@@ -243,9 +243,9 @@ void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {
     c.inline_objc_uncached = g_uncached;
     c.inline_objc_tagged = g_tagged;
     // Perf 1f: the hit/miss counters were a `lock incq` on one shared word in every objc_msgSend, all threads (~3% of
-    // a cold Settings launch on the instruction after it), for a debug line (native_objc_stats, X86CODE_A64_STATS).
-    // X86CODE_A64_OBJC_COUNT=1 emits them again; the image is built without them, so only code translated live counts.
-    if (getenv("X86CODE_A64_OBJC_COUNT") && atoi(getenv("X86CODE_A64_OBJC_COUNT")) == 1) {
+    // a cold Settings launch on the instruction after it), for a debug line (native_objc_stats, X86SIM_A64_STATS).
+    // X86SIM_A64_OBJC_COUNT=1 emits them again; the image is built without them, so only code translated live counts.
+    if (getenv("X86SIM_A64_OBJC_COUNT") && atoi(getenv("X86SIM_A64_OBJC_COUNT")) == 1) {
         c.inline_objc_hit_counter = &fixed_data().objc_hits;
         c.inline_objc_miss_counter = &fixed_data().objc_misses;
     }

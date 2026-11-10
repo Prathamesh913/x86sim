@@ -1,4 +1,4 @@
-// x86Code Speed 25: native step for the Swift runtime's type lookup by mangled name, conformance-record fallback
+// x86Sim Speed 25: native step for the Swift runtime's type lookup by mangled name, conformance-record fallback
 // (_searchConformancesByMangledTypeName, libswiftCore, iOS 27.x).
 //
 // When swift_getTypeByMangledName / _findContextDescriptor misses its cache and the type-metadata records, it walks
@@ -15,8 +15,8 @@
 // only when the matcher certainly answers false: the node is a nominal type node whose name child is an Identifier,
 // the descriptor is a class/struct/enum descriptor without import info (its ABI name is its Name), and the two names
 // differ. Everything else still goes to the guest matcher.
-// X86CODE_A64_SWIFT_TYPE_NATIVE=0: off. X86CODE_A64_SWIFT_TYPE_FILTER=0: walk natively but call the matcher for every
-// descriptor. X86CODE_A64_SWIFT_TYPE_DEBUG=1: counters and the first nodes, logged.
+// X86SIM_A64_SWIFT_TYPE_NATIVE=0: off. X86SIM_A64_SWIFT_TYPE_FILTER=0: walk natively but call the matcher for every
+// descriptor. X86SIM_A64_SWIFT_TYPE_DEBUG=1: counters and the first nodes, logged.
 #include "a64.h"
 
 #include <atomic>
@@ -164,7 +164,7 @@ constexpr u64 kCallOff = 0x2c, kStepOff = 0x4c, kDoneOff = 0x80;
 
 bool enabled() {
     static const bool ok = [] {
-        const char *e = getenv("X86CODE_A64_SWIFT_TYPE_NATIVE");
+        const char *e = getenv("X86SIM_A64_SWIFT_TYPE_NATIVE");
         if (e && atoi(e) == 0) return false;
         kBase = swift_text_find(kLoop, kLoopMask, sizeof kLoop / 4);
         if (!kBase) { logf("swift type scan step: code not found in libswiftCore; not used"); return false; }
@@ -172,9 +172,9 @@ bool enabled() {
     }();
     return ok;
 }
-const bool g_dbg = getenv("X86CODE_A64_SWIFT_TYPE_DEBUG") != nullptr;
-const bool g_index = !(getenv("X86CODE_A64_SWIFT_TYPE_INDEX") && atoi(getenv("X86CODE_A64_SWIFT_TYPE_INDEX")) == 0);
-const bool g_filter = !(getenv("X86CODE_A64_SWIFT_TYPE_FILTER") && atoi(getenv("X86CODE_A64_SWIFT_TYPE_FILTER")) == 0);
+const bool g_dbg = getenv("X86SIM_A64_SWIFT_TYPE_DEBUG") != nullptr;
+const bool g_index = !(getenv("X86SIM_A64_SWIFT_TYPE_INDEX") && atoi(getenv("X86SIM_A64_SWIFT_TYPE_INDEX")) == 0);
+const bool g_filter = !(getenv("X86SIM_A64_SWIFT_TYPE_FILTER") && atoi(getenv("X86SIM_A64_SWIFT_TYPE_FILTER")) == 0);
 std::atomic<u64> g_steps{0}, g_recs{0}, g_calls{0}, g_dumps{0};
 
 void dump_node(u64 node) {

@@ -128,7 +128,7 @@ u64 g_vm_page_size = 16384, g_vm_page_mask = 16383;
 int g_vm_page_shift = 14;
 int g_cpu_caps = 0;
 double g_kernel_version_number = 12377.0;
-const char g_kernel_version_string[] = "@(#)VERSION:Darwin Kernel Version 26.0.0: x86Code arm64 under dynarmic";
+const char g_kernel_version_string[] = "@(#)VERSION:Darwin Kernel Version 26.0.0: x86Sim arm64 under dynarmic";
 const std::map<std::string, const void *> &guest_data() {
     static const std::map<std::string, const void *> m = {
         {"_vm_page_size", &g_vm_page_size}, {"_vm_page_mask", &g_vm_page_mask}, {"_vm_page_shift", &g_vm_page_shift},
@@ -152,7 +152,7 @@ std::string stub_real_copy(const std::string &install, const std::vector<uint8_t
     // /run/user is not the host's inside a phone's container. One file per library, written once: the bytes differ by
     // process (data exports point at this process's Darling variables), but only the path is used (open() of the
     // install name still returns this process's memfd), so naming it by content made one copy per process.
-    const char *jc = getenv("X86CODE_A64_JITCACHE_DIR");
+    const char *jc = getenv("X86SIM_A64_JITCACHE_DIR");
     if (!jc || jc[0] != '/') return "";
     const std::string dir = std::string(jc) + "/stubs", file = dir + "/" + install.substr(install.rfind('/') + 1);
     struct stat st;
@@ -249,7 +249,7 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
         }
         // special handlers that call the native function: without one they would call NULL
         if (h && !native && h != h_noop && h != h_zero && special_needs_native(name)) {
-            if (getenv("X86CODE_A64_STATS")) logf("%s: special handler but no native function (missing)", name.c_str());
+            if (getenv("X86SIM_A64_STATS")) logf("%s: special handler but no native function (missing)", name.c_str());
             h = h_missing;
         }
         if (!h) h = native ? h_generic : h_missing;
@@ -338,7 +338,7 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     lib.fd = memfd_create(install.c_str() + install.rfind('/') + 1, MFD_CLOEXEC);
     if (lib.fd < 0 || pwrite(lib.fd, f.data(), f.size(), 0) != (ssize_t)f.size()) die("cannot write the stub dylib for %s", install.c_str());
     lib.path = stub_real_copy(install, f);
-    if (g_trace || getenv("X86CODE_A64_STATS"))
+    if (g_trace || getenv("X86SIM_A64_STATS"))
         logf("%s: %d functions (%d not in Darling), %d data", install.c_str(), nfunc, nmissing, ndata);
     g_libs.push_back(lib);
     return lib;

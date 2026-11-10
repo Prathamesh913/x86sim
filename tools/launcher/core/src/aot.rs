@@ -1,7 +1,7 @@
 //! The chunked AOT image.
 //!
 //! One chunk per library / executable: a dyld-cache dylib, a placed runtime Mach-O, or (app tier) a placed app
-//! executable of the device. Each chunk is translated by libarm64jit's builder (X86CODE_A64_AOT_JOB, see
+//! executable of the device. Each chunk is translated by libarm64jit's builder (X86SIM_A64_AOT_JOB, see
 //! linux/arm64jit/jitcache.cpp) into its own *slot* of the code slab: translated code is slab-position dependent
 //! (rel32 to the prelude, RIP-relative constants), so a slot is fixed once assigned and a rebuilt chunk goes back into
 //! it. The image libarm64jit loads (`<uuid>-<build>.aot`, format A64JC06) is assembled here from the chunk files, so
@@ -61,7 +61,7 @@ pub fn repo_root() -> PathBuf {
 }
 
 pub fn scratch() -> PathBuf {
-    std::env::var("X86SIM_SCRATCH").map(PathBuf::from).unwrap_or_else(|_| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("scratch/x86code"))
+    std::env::var("X86SIM_SCRATCH").map(PathBuf::from).unwrap_or_else(|_| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("scratch/x86sim"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,7 +165,7 @@ impl Paths {
         Paths { jc: jc.to_path_buf(), aot: jc.join("aot") }
     }
     pub fn default_jc() -> PathBuf {
-        std::env::var("X86CODE_A64_JITCACHE_DIR").map(PathBuf::from).unwrap_or_else(|_| scratch().join("jitcache"))
+        std::env::var("X86SIM_A64_JITCACHE_DIR").map(PathBuf::from).unwrap_or_else(|_| scratch().join("jitcache"))
     }
     pub fn config(&self) -> PathBuf {
         self.aot.join("config.json")
@@ -291,7 +291,7 @@ fn stub_sources(p: &Paths, uuid: &str) -> Vec<discover::Source> {
         .map(|(i, n)| {
             let addr = STUB_BASE + i as u64 * STUB_SLOT;
             discover::Source {
-                name: format!("x86code-stubs/{n}.dylib"),
+                name: format!("x86sim-stubs/{n}.dylib"),
                 kind: Kind::Placed,
                 ident: hash.to_string(),
                 addr,
@@ -360,7 +360,7 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
         built.iter().map(|r| r.used).sum::<u64>() as f64 / built.iter().map(|r| r.blocks).sum::<u64>() as f64
     };
     let bpb: HashMap<String, f64> = built.iter().map(|r| (r.name.clone(), r.used as f64 / r.blocks as f64)).collect();
-    // a measurement (x86code-aot measure: every chunk translated without a size limit) gives real sizes
+    // a measurement (x86sim-aot measure: every chunk translated without a size limit) gives real sizes
     let measured: HashMap<String, (u64, u64)> = std::fs::read(p.aot.join("measure.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -482,7 +482,7 @@ fn trim_to_slab(chunks: &mut Vec<PlanChunk>) -> bool {
     chunks.retain(|c| !c.hot.is_empty() || whole_static(c));
     let after: usize = chunks.iter().map(|c| c.hot.len()).sum();
     eprintln!(
-        "x86code-aot: hot set wants {} MB, slab holds {} MB: kept {after} of {before} hot blocks (cut at {} programs{})",
+        "x86sim-aot: hot set wants {} MB, slab holds {} MB: kept {after} of {before} hot blocks (cut at {} programs{})",
         total >> 20,
         room >> 20,
         hot::exes(cut_rank),
@@ -756,7 +756,7 @@ fn write_entries(path: &Path, c: &PlanChunk, statics: &[u64]) -> Result<()> {
 pub fn build(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn FnMut(&Progress)) -> Result<Progress> {
     match build_once(p, cfg, opts, on_progress) {
         Err(e) if !opts.full && !opts.measure && e.to_string().contains(POOL_FULL) => {
-            eprintln!("x86code-aot: {POOL_FULL}: rebuilding everything");
+            eprintln!("x86sim-aot: {POOL_FULL}: rebuilding everything");
             let full = BuildOpts {
                 workers: opts.workers,
                 full: true,
@@ -879,7 +879,7 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
                     },
                 );
             }
-            eprintln!("x86code-aot: full build wants {} MB, slab holds {} MB: left out {} coldest library chunks", total >> 20, limit >> 20, drop.len());
+            eprintln!("x86sim-aot: full build wants {} MB, slab holds {} MB: left out {} coldest library chunks", total >> 20, limit >> 20, drop.len());
             todo = todo.into_iter().enumerate().filter(|(i, _)| !drop.contains(i)).map(|(_, c)| c).collect();
             prog.chunks_total = todo.len();
             write_json(&p.manifest(), &man)?;
@@ -929,7 +929,7 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
             }
         }
         if !clash.is_empty() {
-            eprintln!("x86code-aot: {} chunks had overlapping slots: moved", clash.len());
+            eprintln!("x86sim-aot: {} chunks had overlapping slots: moved", clash.len());
         }
         let heat = |n: &str, size: u64| -> f64 {
             let h: u64 = live_names.get(n).map(|c| c.hot.iter().map(|h| h.1 as u64).sum()).unwrap_or(0);
@@ -975,14 +975,14 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
                         lazy.push(c.src.name.clone());
                         break;
                     }
-                    bail!("the slab is full ({} MB used) and nothing is left to evict: run a full rebuild (x86code-aot build --full)", limit >> 20);
+                    bail!("the slab is full ({} MB used) and nothing is left to evict: run a full rebuild (x86sim-aot build --full)", limit >> 20);
                 };
                 let (_, _, n) = occ.remove(i);
                 evicted.push(n);
             }
         }
         if !lazy.is_empty() {
-            eprintln!("x86code-aot: slab full, {} library chunks stay lazy (colder than every chunk in the image): {}", lazy.len(), lazy.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+            eprintln!("x86sim-aot: slab full, {} library chunks stay lazy (colder than every chunk in the image): {}", lazy.len(), lazy.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
             todo.retain(|c| !lazy.contains(&c.src.name));
             prog.chunks_total = todo.len();
         }
@@ -1010,7 +1010,7 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
             }
             if n_back > 0 {
                 prog.chunks_total = todo.len();
-                eprintln!("x86code-aot: {n_back} evicted chunks re-admitted into freed space");
+                eprintln!("x86sim-aot: {n_back} evicted chunks re-admitted into freed space");
             }
         }
         // a chunk outside this image keeps no claim on its old slot once another chunk sits there (see above)
@@ -1038,7 +1038,7 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
                 r.state = "evicted".into();
             }
         }
-        eprintln!("x86code-aot: slab full, evicted {} coldest chunks: {}", evicted.len(), evicted.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+        eprintln!("x86sim-aot: slab full, evicted {} coldest chunks: {}", evicted.len(), evicted.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
         write_json(&p.manifest(), &man)?;
     }
 
@@ -1099,9 +1099,9 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
     let room = (POOL_TOTAL - (64 << 10)).saturating_sub(pool_base) / POOL_REGION;
     if (w as u64) > room {
         if room == 0 {
-            bail!("{POOL_FULL}: run a full rebuild (x86code-aot build --full)");
+            bail!("{POOL_FULL}: run a full rebuild (x86sim-aot build --full)");
         }
-        eprintln!("x86code-aot: constant pool room for {room} of {w} workers");
+        eprintln!("x86sim-aot: constant pool room for {room} of {w} workers");
         w = room as usize;
     }
 
@@ -1136,11 +1136,11 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
             // was 27.0 code under the other cache's UUID, and its processes jumped to garbage)
             .env("A64_RUNTIME", &cfg.runtime_root)
             .env("TIMEOUT", "86400")
-            .env("X86CODE_A64_AOT_BUILD", "1")
-            .env("X86CODE_A64_AOT_DEVICE_DATA", cfg.device.as_ref().map(|d| d.join("data")).unwrap_or_default())
-            .env("X86CODE_A64_AOT_JOB", &jp)
-            .env("X86CODE_A64_JITCACHE_DIR", &p.jc)
-            .env("X86CODE_A64_CODECACHE_MB", SLAB_MB.to_string())
+            .env("X86SIM_A64_AOT_BUILD", "1")
+            .env("X86SIM_A64_AOT_DEVICE_DATA", cfg.device.as_ref().map(|d| d.join("data")).unwrap_or_default())
+            .env("X86SIM_A64_AOT_JOB", &jp)
+            .env("X86SIM_A64_JITCACHE_DIR", &p.jc)
+            .env("X86SIM_A64_CODECACHE_MB", SLAB_MB.to_string())
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);

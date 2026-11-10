@@ -1,4 +1,4 @@
-//! x86Code: run MTLSimDriver's `astc` decode kernel (what the simulator uses for every ASTC texture) on the host
+//! x86Sim: run MTLSimDriver's `astc` decode kernel (what the simulator uses for every ASTC texture) on the host
 //! GPU through metal2vulkan, over a region of an ASTC 4x4 KTX file, and write the result as raw RGBA8.
 //! Compare with a CPU decoder (tools/debug/astccmp.py). Usage:
 //!   astctest <MTLSimDriver default.metallib> <file.ktx> <bx0> <by0> <blocks_w> <blocks_h> <out.rgba>

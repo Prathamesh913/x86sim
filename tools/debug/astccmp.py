@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: compare linux/mtlvk astctest's GPU decode (MTLSimDriver's astc kernel on metal2vulkan) with a
+"""x86Sim: compare linux/mtlvk astctest's GPU decode (MTLSimDriver's astc kernel on metal2vulkan) with a
 CPU ASTC decoder (texture2ddecoder, pip). Usage: astccmp.py <file.ktx> <bx0> <by0> <bw> <bh> <gpu.rgba> [out.png]"""
 import struct, sys
 import numpy as np, texture2ddecoder

@@ -107,7 +107,7 @@ fn uid() -> u32 {
 /// The ring path this instance should publish frames to (unique per phone)
 pub fn ring_for(id: &str) -> PathBuf {
     let tag = id.strip_prefix("device-").unwrap_or(id);
-    PathBuf::from(format!("/run/user/{}/x86code-{tag}-simfb.ring", uid()))
+    PathBuf::from(format!("/run/user/{}/x86sim-{tag}-simfb.ring", uid()))
 }
 
 /// A name for a phone made without one: "" -> "Main phone", "-probe" -> "Probe", "b" -> "Phone B"
@@ -269,7 +269,7 @@ pub fn summaries(sample_ms: u64) -> Vec<Summary> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BootSettings {
-    /// X86CODE_METAL: all | backboardd | 0
+    /// X86SIM_METAL: all | backboardd | 0
     pub metal: String,
     /// X86SIM_MEM_MAX
     pub mem_max: String,
@@ -560,7 +560,7 @@ pub fn start(inst: &Instance, others: &[Status]) -> Result<u32> {
     cmd.arg(boot_script())
         .current_dir(repo_root())
         .env("A64_KEEP", "1")
-        .env("X86CODE_METAL", &s.metal)
+        .env("X86SIM_METAL", &s.metal)
         .env("X86SIM_MEM_MAX", &s.mem_max)
         .env("A64_JOBS", &s.jobs)
         .env("SECS", "20")
@@ -568,7 +568,7 @@ pub fn start(inst: &Instance, others: &[Status]) -> Result<u32> {
         .env("A64_STATE", &inst.state_dir)
         .env("A64_DPREFIX", &inst.prefix)
         .env_remove("A64_RUNTIME")
-        .env_remove("X86CODE_A64_JITCACHE_DIR")
+        .env_remove("X86SIM_A64_JITCACHE_DIR")
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -635,7 +635,7 @@ pub fn stop_gpu_helper(state_dir: &Path) {
         return;
     }
     let sock = state_dir.join("mtlvk.sock");
-    let want = format!("X86CODE_MTLVK_SOCKET={}", sock.display());
+    let want = format!("X86SIM_MTLVK_SOCKET={}", sock.display());
     let used = std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
         let p = e.path();
         read(&format!("{}/comm", p.display())).trim() == "darlingserver" && read(&format!("{}/environ", p.display())).split('\0').any(|kv| kv == want)
@@ -689,7 +689,7 @@ pub fn log_sources(inst: &Instance, st: Option<&Status>) -> Vec<crate::logs::Src
     };
     vec![
         Src::Dir("System", inst.log_dir.clone()),
-        Src::Dir("Translator", prefix.join("private/var/tmp/x86code-a64")),
+        Src::Dir("Translator", prefix.join("private/var/tmp/x86sim-a64")),
         Src::File("Boot", "start", boot_log(inst)),
         Src::File("Boot", "launchd_sim", state_dir.join("lsim.out")),
         Src::File("Boot", "launchd", state_dir.join("launchd.log")),
@@ -784,9 +784,9 @@ pub fn needs_restart(inst: &Instance, st: Option<&Status>) -> bool {
 mod models2_tests {
     #[test]
     fn duo_inner_display() {
-        let d = super::inner_display("iPhone19,4", std::path::Path::new("/run/user/1/x86code-a64-d-simfb.ring")).expect("Duo has an inner screen");
+        let d = super::inner_display("iPhone19,4", std::path::Path::new("/run/user/1/x86sim-a64-d-simfb.ring")).expect("Duo has an inner screen");
         assert_eq!((d.id, d.size, d.rotation, d.upright()), (3, (2007, 2853), 270, (2853, 2007)));
-        assert_eq!(d.ring, std::path::PathBuf::from("/run/user/1/x86code-a64-d-simfb-3.ring"));
+        assert_eq!(d.ring, std::path::PathBuf::from("/run/user/1/x86sim-a64-d-simfb-3.ring"));
         assert!(super::inner_display("iPhone18,3", std::path::Path::new("/x.ring")).is_none());
     }
 }

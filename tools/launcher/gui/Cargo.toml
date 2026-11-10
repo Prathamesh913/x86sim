@@ -1,11 +1,11 @@
 [package]
-name = "x86code-launcher"
+name = "x86sim-launcher"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [dependencies]
-x86code-core = { path = "../core" }
+x86sim-core = { path = "../core" }
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 serde_json = "1"
 egui-phosphor = "0.11"

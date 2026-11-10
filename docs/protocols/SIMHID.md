@@ -11,7 +11,7 @@ Clients: `cli/libexec/simview.py` (mouse, keyboard; Ctrl/Shift+drag = two finger
 volume) and `cli/libexec/simtouch.py` (`x86sim tap|swipe|pinch|pan2|key|type|home|lock|raw`). Device pixel size comes
 from the live frame ring / `SIMULATOR_MAINSCREEN_*` (arm64 is 1206×2622).
 
-Arm64 notes: the touchscreen HID props must include `displayUUID` = `x86Code-main-display` (same as
+Arm64 notes: the touchscreen HID props must include `displayUUID` = `x86Sim-main-display` (same as
 `SFBDisplayGetDisplayUID`); `BKIOHIDService` copies that property into its displayUUID ivar, and without it
 `BKDisplayConvertCAScreenLocationToContext` drops every touch. Dispatch `_IOHIDServiceDispatchEvent` on the
 socket thread (not `dispatch_async`) and serialize `handle_line` with a mutex (`dispatch_sync` was a silent

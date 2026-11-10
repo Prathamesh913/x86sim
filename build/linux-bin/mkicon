@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# x86Code: Linux stand-in for tests/apps/icon-gen.swift (a macOS binary on the Mac): mkicon <out.png> <size> <letter> <rrggbb>
+# x86Sim: Linux stand-in for tests/apps/icon-gen.swift (a macOS binary on the Mac): mkicon <out.png> <size> <letter> <rrggbb>
 # Same picture: a solid square of the colour, the letter in white bold sans centred. Needs Pillow (python-pillow).
 import sys
 from PIL import Image, ImageDraw, ImageFont

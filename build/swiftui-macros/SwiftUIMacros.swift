@@ -1,4 +1,4 @@
-// x86Code: Linux stand-in for Apple's closed SwiftUIMacros compiler plugin (the macOS plugin in Xcode cannot be loaded by
+// x86Sim: Linux stand-in for Apple's closed SwiftUIMacros compiler plugin (the macOS plugin in Xcode cannot be loaded by
 // the Linux swift-frontend). Clean-room: written from the macro declarations in the SDK's SwiftUICore.swiftinterface
 // and the expansions Apple Swift 6.4.2 (swiftlang-6.4.2.1.9) prints with -Xfrontend -dump-macro-expansions; it emits the same source.
 // Covers the @State family (StateMacro and the helper macros its expansion uses). Not implemented (diagnosed as

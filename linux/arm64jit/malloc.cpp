@@ -261,7 +261,7 @@ const std::map<std::string, Handler> &handlers() {
 static bool g_native_malloc = false;
 
 void native_malloc_prepare(const std::string &cache) {
-    const char *e = getenv("X86CODE_A64_GUEST_MALLOC");  // =1: keep the guest's own xzone malloc
+    const char *e = getenv("X86SIM_A64_GUEST_MALLOC");  // =1: keep the guest's own xzone malloc
     if (e && *e == '1') return;
     g_names = cache_exports(cache, "/usr/lib/system/libsystem_malloc.dylib", &g_addrs, &g_text_lo, &g_text_hi);
     for (size_t k = 0; k < g_names.size(); k++) if (g_addrs[k] != ~0ull) g_exp[g_names[k]] = g_addrs[k];
@@ -318,7 +318,7 @@ void native_malloc_install() {
         targets[target] = fn;
         patch(target, name + " (target)", fn);
     }
-    if (getenv("X86CODE_A64_STATS")) logf("native malloc: %d libsystem_malloc exports patched (%d without a handler)", patched, unknown);
+    if (getenv("X86SIM_A64_STATS")) logf("native malloc: %d libsystem_malloc exports patched (%d without a handler)", patched, unknown);
 }
 
 }  // namespace a64

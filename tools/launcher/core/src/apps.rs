@@ -1,5 +1,5 @@
 //! Apps on a phone, as `xcrun simctl install|uninstall|launch|listapps`: the requests go to the phone's
-//! com.x86code.openurl job (host/openurl) through cli/x86sim (appinstall.sh / simctl.py), which installs through
+//! com.x86sim.openurl job (host/openurl) through cli/x86sim (appinstall.sh / simctl.py), which installs through
 //! InstallCoordination -> installd (LaunchServices registers the app, the home screen shows its icon) and launches
 //! through FrontBoard. Used by the launcher ("Install app…") and the MCP tools app_install / app_uninstall /
 //! app_launch / app_list.

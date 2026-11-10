@@ -1,6 +1,6 @@
-//! x86Code hub: every phone (var/device-a64*) as a card with its live screen, open one for its embedded screen with
+//! x86Sim hub: every phone (var/device-a64*) as a card with its live screen, open one for its embedded screen with
 //! touch and keyboard plus a fold-out panel (features, logs, performance, advanced); global pages for iOS versions,
-//! pre-translation (AOT) and settings. Logic lives in x86code-core; the GUI repaints only when a frame or a status
+//! pre-translation (AOT) and settings. Logic lives in x86sim-core; the GUI repaints only when a frame or a status
 //! changes.
 mod global;
 mod home;
@@ -15,14 +15,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use theme::*;
-use x86code_core::{host, instance, logs};
+use x86sim_core::{host, instance, logs};
 
 fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([900.0, 600.0]).with_title("x86Code").with_app_id("x86code").with_decorations(false),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([900.0, 600.0]).with_title("x86Sim").with_app_id("x86sim").with_decorations(false),
         ..Default::default()
     };
-    eframe::run_native("x86Code", opts, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+    eframe::run_native("x86Sim", opts, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }
 
 #[derive(Default)]
@@ -128,7 +128,7 @@ impl App {
                     // downloads: every poll while one runs, else every third (another /proc scan)
                     let fetches = if !g.fetches.is_empty() || n % 3 == 0 { host::fetches() } else { vec![] };
                     n += 1;
-                    let mut h = x86code_core::key::Fnv64::new();
+                    let mut h = x86sim_core::key::Fnv64::new();
                     for i in &insts {
                         h.str(&i.id);
                         h.str(&i.name);
@@ -170,26 +170,26 @@ impl App {
             *c2.lock().unwrap() = Some(v);
         });
         let aot = global::Aot::new(runtimes.iter().find(|r| r.present && r.restricted_to.is_empty()).map(|r| r.root.clone()));
-        // start view / open sections, for scripted screenshots: X86CODE_LAUNCHER_VIEW=ios|aot|settings|add|phone:<id>,
-        // X86CODE_LAUNCHER_OPEN=features,logs,perf,adv
-        let view = match std::env::var("X86CODE_LAUNCHER_VIEW").unwrap_or_default().as_str() {
+        // start view / open sections, for scripted screenshots: X86SIM_LAUNCHER_VIEW=ios|aot|settings|add|phone:<id>,
+        // X86SIM_LAUNCHER_OPEN=features,logs,perf,adv
+        let view = match std::env::var("X86SIM_LAUNCHER_VIEW").unwrap_or_default().as_str() {
             "ios" => View::Ios,
             "aot" => View::Aot,
             "settings" => View::Settings,
             "setup" => View::Setup,
             v if v.starts_with("phone:") => View::Phone(v[6..].to_string()),
-            _ if x86code_core::setup::needed() => View::Setup,
+            _ if x86sim_core::setup::needed() => View::Setup,
             _ => View::Home,
         };
         let mut open = HashSet::new();
-        for k in std::env::var("X86CODE_LAUNCHER_OPEN").unwrap_or_default().split(',') {
+        for k in std::env::var("X86SIM_LAUNCHER_OPEN").unwrap_or_default().split(',') {
             for key in ["features", "logs", "perf", "adv"] {
                 if k == key {
                     open.insert(key);
                 }
             }
         }
-        let add_on_start = std::env::var("X86CODE_LAUNCHER_VIEW").is_ok_and(|v| v == "add");
+        let add_on_start = std::env::var("X86SIM_LAUNCHER_VIEW").is_ok_and(|v| v == "add");
         let mut app = App {
             dialog: None,
             first_boot_retried: HashSet::new(),
@@ -203,7 +203,7 @@ impl App {
             updater: Default::default(),
             open,
             add: None,
-            models: x86code_core::sim::models(),
+            models: x86sim_core::sim::models(),
             message: String::new(),
             message_at: Instant::now(),
             logs: None,
@@ -222,7 +222,7 @@ impl App {
             gpu_helpers: 0,
             sizes: Arc::new(Mutex::new(HashMap::new())),
             measuring: false,
-            disk: host::disk(&x86code_core::aot::scratch()),
+            disk: host::disk(&x86sim_core::aot::scratch()),
             last_slow: Instant::now() - Duration::from_secs(60),
             setup: setup::Setup::default(),
             setup_checking: false,
@@ -393,9 +393,9 @@ impl eframe::App for App {
         if self.hub.check_updates {
             self.updater.check(ctx, false, &self.hub.channel);
         }
-        // X86CODE_LAUNCHER_FPS=1: frames per second on stderr (idle cost checks)
+        // X86SIM_LAUNCHER_FPS=1: frames per second on stderr (idle cost checks)
         static FPS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *FPS.get_or_init(|| std::env::var_os("X86CODE_LAUNCHER_FPS").is_some()) {
+        if *FPS.get_or_init(|| std::env::var_os("X86SIM_LAUNCHER_FPS").is_some()) {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             static T: Mutex<Option<Instant>> = Mutex::new(None);
             N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -410,10 +410,10 @@ impl eframe::App for App {
         self.shortcuts(ctx);
         if self.last_slow.elapsed() > Duration::from_secs(10) {
             self.last_slow = Instant::now();
-            self.disk = host::disk(&x86code_core::aot::scratch());
+            self.disk = host::disk(&x86sim_core::aot::scratch());
             if self.view == View::Settings {
                 self.gpu_helpers = host::mtlvk_pids().len();
-                self.simview_open = self.insts.iter().filter(|i| self.status.get(&i.id).is_some_and(|s| s.phase != instance::Phase::Off) && x86code_core::sim::simview_running_for(i)).map(|i| i.id.clone()).collect();
+                self.simview_open = self.insts.iter().filter(|i| self.status.get(&i.id).is_some_and(|s| s.phase != instance::Phase::Off) && x86sim_core::sim::simview_running_for(i)).map(|i| i.id.clone()).collect();
             }
             if self.view == View::Ios {
                 self.runtimes = host::runtimes();
@@ -462,7 +462,7 @@ impl eframe::App for App {
                     ui.add_space(2.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(egui::RichText::new("x86Code").size(T_LG).family(semibold()).color(INK));
+                        ui.label(egui::RichText::new("x86Sim").size(T_LG).family(semibold()).color(INK));
                         ui.label(muted("iPhone simulator").size(T_CAPTION));
                     });
                 });
@@ -591,7 +591,7 @@ fn title_bar(ctx: &egui::Context) {
             ui.painter().text(
                 rect.left_center() + egui::vec2(S4, 0.0),
                 egui::Align2::LEFT_CENTER,
-                "x86Code",
+                "x86Sim",
                 egui::FontId::new(T_BODY, medium()),
                 INK_2,
             );

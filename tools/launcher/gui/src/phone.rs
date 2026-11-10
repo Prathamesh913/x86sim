@@ -5,7 +5,7 @@ use crate::theme::*;
 use crate::{viewer, App, View};
 use eframe::egui;
 use std::time::{Duration, Instant};
-use x86code_core::{features, instance, instance::Phase, logs};
+use x86sim_core::{features, instance, instance::Phase, logs};
 
 /// Width of the tool bar right of the screen
 const TOOLBAR_W: f32 = 46.0;
@@ -192,7 +192,7 @@ impl App {
             let size = std::sync::Arc::new(std::sync::Mutex::new(None));
             let (s2, p2, ctx) = (size.clone(), paths.clone(), ui.ctx().clone());
             std::thread::spawn(move || {
-                let n: u64 = p2.iter().map(|p| if p.is_dir() { x86code_core::host::dir_size(p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }).sum();
+                let n: u64 = p2.iter().map(|p| if p.is_dir() { x86sim_core::host::dir_size(p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }).sum();
                 *s2.lock().unwrap() = Some(n);
                 ctx.request_repaint();
             });
@@ -688,7 +688,7 @@ impl App {
             });
         };
         ui.label(muted("These apply at the next start."));
-        field(ui, "Graphics", "X86CODE_METAL: GPU for everything (all), only the system (backboardd), or software rendering (0).");
+        field(ui, "Graphics", "X86SIM_METAL: GPU for everything (all), only the system (backboardd), or software rendering (0).");
         let opts = [("all", "GPU"), ("backboardd", "System only"), ("0", "Software")];
         let sel = opts.iter().position(|o| o.0 == s.metal);
         if let Some(i) = segmented(ui, &opts.map(|o| o.1), sel, true) {
@@ -717,7 +717,7 @@ impl App {
                 }
             });
         });
-        field(ui, "Extra environment", "A64_ENV: KEY=value pairs for launchd_sim, e.g. X86CODE_A64_TRACE=1");
+        field(ui, "Extra environment", "A64_ENV: KEY=value pairs for launchd_sim, e.g. X86SIM_A64_TRACE=1");
         if ui.add(egui::TextEdit::singleline(&mut s.extra_env).font(egui::TextStyle::Monospace).hint_text(egui::RichText::new("KEY=value …").color(INK_3)).desired_width(ui.available_width()).margin(egui::Margin::symmetric(8, 6))).lost_focus() {
             save = true;
         }
@@ -740,14 +740,14 @@ impl App {
         row(ui, "Frame ring", inst.ring.display().to_string());
         row(ui, "Input", inst.sock.display().to_string());
         row(ui, "Runtime", inst.runtime_root.display().to_string());
-        row(ui, "Cache", x86code_core::sim::jc_for(&inst.runtime_root).display().to_string());
+        row(ui, "Cache", x86sim_core::sim::jc_for(&inst.runtime_root).display().to_string());
         row(ui, "UDID", inst.udid.clone());
         row(ui, "Model id", inst.model_id.clone());
         ui.spacing_mut().item_spacing.y = S2;
         ui.add_space(S3);
         ui.horizontal(|ui| {
             if ui.add(Btn::secondary("Own window").icon(icon::APP_WINDOW).small()).on_hover_text("This phone's screen in a separate window, with its logs (simview)").clicked() {
-                match x86code_core::sim::show_phone(inst) {
+                match x86sim_core::sim::show_phone(inst) {
                     Ok(()) => self.say(format!("Opened {} in its own window", inst.name)),
                     Err(e) => self.say(format!("Couldn't open the window: {e:#}")),
                 }

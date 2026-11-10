@@ -1,4 +1,4 @@
-# x86Code release build environment (the same packages as CI's ubuntu-24.04 runner, build/release/deps-ubuntu.sh).
+# x86Sim release build environment (the same packages as CI's ubuntu-24.04 runner, build/release/deps-ubuntu.sh).
 # Local check of the CI build: build/release/docker-build.sh
 FROM ubuntu:24.04
 COPY deps-ubuntu.sh /tmp/deps-ubuntu.sh

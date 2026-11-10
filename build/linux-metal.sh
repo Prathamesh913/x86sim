@@ -1,11 +1,11 @@
 #!/bin/bash
-# x86Code: Linux drop-in for `xcrun -sdk iphonesimulator metal` / `metallib`, served from Mac-built artifacts.
+# x86Sim: Linux drop-in for `xcrun -sdk iphonesimulator metal` / `metallib`, served from Mac-built artifacts.
 #
 # There is no faithful way to produce Apple AIR on Linux: the Metal Shading Language front end exists only in Apple's
 # toolchain, and AIR bitcode re-encoded by upstream LLVM (23) is rejected by Apple's MTLCompilerService (it loads as a
 # library, every pipeline build crashes the compiler service), while the metallib container itself is easy to write.
 # So this tool is a content-addressed cache: the key is the tool, its flags and the bytes of every input; a hit
-# copies the byte-identical Mac output, a miss fails (or, with X86CODE_METAL_RECORD=1, runs the real tool on
+# copies the byte-identical Mac output, a miss fails (or, with X86SIM_METAL_RECORD=1, runs the real tool on
 # $X86SIM_MAC once and stores the result under build/metal-cache/, which is committed).
 #
 # Usage (same arguments the Mac invocations use; a leading `-sdk <sdk>` is accepted and ignored):
@@ -17,7 +17,7 @@
 # Also works when symlinked as `metal` / `metallib`.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
-CACHE=${X86CODE_METAL_CACHE:-$ROOT/build/metal-cache}
+CACHE=${X86SIM_METAL_CACHE:-$ROOT/build/metal-cache}
 
 inspect() {
 	python3 -I - "$@" <<'PY'
@@ -78,7 +78,7 @@ parse() {
 run() {
 	parse "$@"
 	hit="$CACHE/$key.$ext"
-	if [ ! -f "$hit" ] && [ "${X86CODE_METAL_RECORD:-0}" = 1 ]; then
+	if [ ! -f "$hit" ] && [ "${X86SIM_METAL_RECORD:-0}" = 1 ]; then
 		. "$ROOT/build/mac-env.sh"
 		# Mac-side names: flatten inputs into one dir (the tools see basenames only; #include of siblings is not handled)
 		args=(); for f in "${flags[@]}"; do args+=("$(printf %q "$f")"); done
@@ -96,7 +96,7 @@ run() {
 	if [ ! -f "$hit" ]; then
 		echo "linux-metal: no Mac-built artifact for: $tool ${flags[*]} ${inputs[*]} (key $key.$ext)." >&2
 		echo "  Metal shaders cannot be compiled on Linux; the source or flags changed since the last Mac build." >&2
-		echo "  Re-record on the Mac: X86CODE_METAL_RECORD=1 $0 $tool ${flags[*]} ${inputs[*]} -o $out" >&2
+		echo "  Re-record on the Mac: X86SIM_METAL_RECORD=1 $0 $tool ${flags[*]} ${inputs[*]} -o $out" >&2
 		exit 1
 	fi
 	cp "$hit" "$out"

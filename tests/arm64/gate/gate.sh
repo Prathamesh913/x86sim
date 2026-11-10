@@ -21,9 +21,9 @@ if [ "${SKIPBOOT:-0}" != 1 ]; then
 	reset_scene_state com.apple.Maps com.apple.Preferences
 	# RAM 3: and an open request nobody consumed (a test that ran while no phone was up: r3k3's boot hung, mapsroute's
 	# three "app com.apple.Maps" waited in the trigger file and the next boot opened Maps over the home check, r3l1)
-	rm -f "$DEV"/data/tmp/x86code-openurl "$DEV"/data/tmp/x86code-openurl.new
+	rm -f "$DEV"/data/tmp/x86sim-openurl "$DEV"/data/tmp/x86sim-openurl.new
 	OLDSB=$(pids_of SpringBoard | tr '\n' ' ')
-	A64_KEEP=1 X86CODE_METAL=all SECS=20 A64_DEVICE="$DEV" setsid cli/libexec/arm64/boot-a64.sh > "$O/boot.log" 2>&1 < /dev/null &
+	A64_KEEP=1 X86SIM_METAL=all SECS=20 A64_DEVICE="$DEV" setsid cli/libexec/arm64/boot-a64.sh > "$O/boot.log" 2>&1 < /dev/null &
 	for i in $(seq 1 60); do sleep 2; sb=$(pids_of SpringBoard | grep -vw -e "${OLDSB:-x}" | head -1); [ -n "$sb" ] && break; done
 fi
 mark_logs

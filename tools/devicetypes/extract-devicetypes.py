@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""x86Code: regenerate cli/lib/devicetypes-a64.json and cli/lib/devicetype-<model>.json from a Mac's Xcode.
+"""x86Sim: regenerate cli/lib/devicetypes-a64.json and cli/lib/devicetype-<model>.json from a Mac's Xcode.
 
     tools/devicetypes/extract-devicetypes.py [--mac user@host] [--runtime 27.2] [--include-unsupported]
 

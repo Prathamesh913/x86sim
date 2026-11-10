@@ -14,7 +14,7 @@
 // block ("bvx$") the whole stream is decoded at once, then handed out as dst has room (END when all is out). Other
 // streams run libcompression (entry instructions "cmp w2, #0x890" / "ldr x8, [x0, #0x20]" emulated).
 //
-// X86CODE_A64_LZFSE_NATIVE=0: libcompression's own decode; =verify: decodes natively into a side buffer, runs
+// X86SIM_A64_LZFSE_NATIVE=0: libcompression's own decode; =verify: decodes natively into a side buffer, runs
 // libcompression, and compares the two when the call returns (logs mismatches).
 #include "a64.h"
 extern "C" {
@@ -44,7 +44,7 @@ std::atomic<u64> g_native{0}, g_fallback{0}, g_mismatch{0}, g_bytes{0};
 
 int mode() {  // 0 off, 1 native, 2 verify
     static const int m = [] {
-        const char *e = getenv("X86CODE_A64_LZFSE_NATIVE");
+        const char *e = getenv("X86SIM_A64_LZFSE_NATIVE");
         if (!e) return 1;
         if (!strcmp(e, "verify")) return 2;
         return atoi(e) == 0 ? 0 : 1;

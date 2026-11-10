@@ -1,6 +1,6 @@
 # IOSurface "Remote" protocol (iOS simulator)
 
-Implemented by `iosurfaced.m` here (x86Code stage 5; on by default, `X86CODE_IOSURFACE=0` for emulation). Test:
+Implemented by `iosurfaced.m` here (x86Sim stage 5; on by default, `X86SIM_IOSURFACE=0` for emulation). Test:
 the probe (the x86_64 one, since removed) (two processes, 14 checks). Answers to the open questions below: a sim-side listener decodes the
 client's messages once simshim skips `xpc_connection_enable_sim2host_4sim` for this name, and `xpc_shmem_map` of the
 server's `MAP_SHARED|MAP_ANON` memory gives every process the same pages (darlingserver memfd).
@@ -138,7 +138,7 @@ Every reply also carries `ErrorCode` (u64), and for methods ≥ 4 also `SurfaceS
 | 6 | GetPlaneState | `SurfaceID`, `PlaneIndex` u64 | `PlaneState` data[0x48]. Error 0xE00002C2 if index ≥ planeCount (index 0 with planeCount 0 is allowed by the host check `planeCount >= idx`) |
 | 7 | BindAccel | `AcceleratorID` u64, `AcceleratorField` u64 | — |
 | 8 | NeedsBindAccel | `AcceleratorID`, `AcceleratorField` | `NeedsBindAccelerator` bool |
-| 9 | SetValue | `PropertiesDictionary` data = serialized `{"key": key, "value": value}` (IOSurfaceSetValue), or `{"isSetValues": true, "value": dict}` (IOSurfaceSetValues with key NULL: merge the dict) **[C]** (checked against `_IOSurfaceClientSetValue`'s CFSTRs, x86Code stage 5) | — (server: `IOSurfaceClientSetValue(surface, dict)`; error 0xE00002C2 if it can't be deserialized) |
+| 9 | SetValue | `PropertiesDictionary` data = serialized `{"key": key, "value": value}` (IOSurfaceSetValue), or `{"isSetValues": true, "value": dict}` (IOSurfaceSetValues with key NULL: merge the dict) **[C]** (checked against `_IOSurfaceClientSetValue`'s CFSTRs, x86Sim stage 5) | — (server: `IOSurfaceClientSetValue(surface, dict)`; error 0xE00002C2 if it can't be deserialized) |
 | 10 | CopyAllValues | — | `PropertiesDictionary` data (serialized dict of all values) |
 | 11 | RemoveValue | `PropertyKey` string | — |
 | 12 | RemoveAllValues | — | — |

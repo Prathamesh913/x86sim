@@ -6,7 +6,7 @@
 # SIGKILLs Spotlight before each open (PRE s before it).
 D=$(cd "$(dirname "$0")/../../.." && pwd); cd "$D"
 P=${PHONE:+-$PHONE}
-export SIMFB_RING_LINUX=/run/user/$(id -u)/x86code-a64$P-simfb.ring SIMHID_SOCKET=$D/var/device-a64$P/data/simhid.sock A64_DEVICE=$D/var/device-a64$P
+export SIMFB_RING_LINUX=/run/user/$(id -u)/x86sim-a64$P-simfb.ring SIMHID_SOCKET=$D/var/device-a64$P/data/simhid.sock A64_DEVICE=$D/var/device-a64$P
 . tests/arm64/gate/lib.sh 2>/dev/null; DEV=$A64_DEVICE
 fr() { python3 cli/libexec/fbring.py | sed -n 's/.*frame \([0-9]*\).*/\1/p'; }
 apps=(Preferences:com.apple.Preferences MobileSafari:com.apple.mobilesafari Maps:com.apple.Maps MobileCal:com.apple.mobilecal News:com.apple.news)
@@ -14,8 +14,8 @@ for i in $(seq 1 "${1:-40}"); do
 	a=${apps[$((i % ${#apps[@]}))]}; p=${a%%:*}; id=${a#*:}
 	[ -n "$KILLSPOT" ] && for q in $(pids_of Spotlight); do kill -9 "$q"; done && sleep "${PRE:-0}"
 	app "$id"; t0=$(date +%s)
-	while [ -e "$DEV/data/tmp/x86code-openurl" ] && [ $(( $(date +%s) - t0 )) -lt 60 ]; do sleep 0.5; done
-	if [ -e "$DEV/data/tmp/x86code-openurl" ]; then echo "$(date +%T) $i WEDGE: the open of $p was not taken in 60 s"; exit 1; fi
+	while [ -e "$DEV/data/tmp/x86sim-openurl" ] && [ $(( $(date +%s) - t0 )) -lt 60 ]; do sleep 0.5; done
+	if [ -e "$DEV/data/tmp/x86sim-openurl" ]; then echo "$(date +%T) $i WEDGE: the open of $p was not taken in 60 s"; exit 1; fi
 	fo=$(fr); sleep "${HOLD:-6}"
 	if [ "$(fr)" = "$fo" ]; then
 		sleep 20

@@ -1,5 +1,5 @@
 #!/bin/bash
-# x86Code arm64: keep memory down for "home + one app" by reclaiming on-demand helpers
+# x86Sim arm64: keep memory down for "home + one app" by reclaiming on-demand helpers
 # SpringBoard starts that are not needed for a static home screen (Spotlight search host,
 # WidgetRenderer, pkd plug-in kit when no extensions are installed). A64_JOBS=slim also
 # omits sleepd + usernotificationsd (~400 MB RSS each); std keeps them for cold-boot BKS.
@@ -11,7 +11,7 @@ set -euo pipefail
 INTERVAL=${A64_SLIM_SECS:-5}
 # comm names (kernel TASK_COMM_LEN=16 including NUL → 15 visible chars)
 TARGETS='Spotlight WidgetRenderer_ pkd'
-PREFIX=${A64_DPREFIX:-${X86SIM_SCRATCH:-$HOME/scratch/x86code}/a64prefix}
+PREFIX=${A64_DPREFIX:-${X86SIM_SCRATCH:-$HOME/scratch/x86sim}/a64prefix}
 LOG=${A64_STATE:-${X86SIM_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}/var/run-a64}/slim-reaper.log
 mkdir -p "$(dirname "$LOG")"
 echo "$(date -Iseconds) slim-reaper start interval=${INTERVAL}s targets=$TARGETS" >>"$LOG"
@@ -19,7 +19,7 @@ echo "$(date -Iseconds) slim-reaper start interval=${INTERVAL}s targets=$TARGETS
 is_a64_guest() {
 	local p=$1
 	[ -r "/proc/$p/environ" ] || return 1
-	grep -qaz X86CODE_A64 "/proc/$p/environ" 2>/dev/null
+	grep -qaz X86SIM_A64 "/proc/$p/environ" 2>/dev/null
 }
 
 while true; do

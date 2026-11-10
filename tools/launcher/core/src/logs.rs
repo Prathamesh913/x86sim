@@ -41,7 +41,7 @@ pub struct Tail {
 fn tag(p: &std::path::Path) -> String {
     let n = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let n = n.strip_suffix(".log").or_else(|| n.strip_suffix(".out")).or_else(|| n.strip_suffix(".txt")).unwrap_or(&n).to_string();
-    let n = n.strip_prefix("com.apple.").or_else(|| n.strip_prefix("com.x86code.")).unwrap_or(&n).to_string();
+    let n = n.strip_prefix("com.apple.").or_else(|| n.strip_prefix("com.x86sim.")).unwrap_or(&n).to_string();
     // a trailing pid
     match n.rsplit_once('.') {
         Some((a, b)) if !a.is_empty() && b.chars().all(|c| c.is_ascii_digit()) => a.to_string(),

@@ -1,4 +1,4 @@
-# x86Code: sourced by build/mac-build-*.sh. The simulator-side binaries (host/, tests/) are Mach-O for the arm64 iOS
+# x86Sim: sourced by build/mac-build-*.sh. The simulator-side binaries (host/, tests/) are Mach-O for the arm64 iOS
 # simulator (simhost: macOS x86_64, Darling's host side) and are compiled on a Mac with Xcode over ssh ($X86SIM_MAC, x86sim.env):
 # the sources go there by stdin/tar, the binaries come back the same way. Nothing else is kept on the Mac.
 X86SIM_ROOT=${X86SIM_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}; . "$X86SIM_ROOT/cli/lib/config.sh"

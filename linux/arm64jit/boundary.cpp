@@ -67,10 +67,10 @@ static void set_result(GuestThread &t, const NRet &r) {
     t.set_x(0, r.rax); t.set_x(1, r.rdx); t.set_d(0, r.xmm0); t.set_d(1, r.xmm1);
 }
 
-// X86CODE_A64_BIGCOPY=<bytes> (debug): memmove/memcpy/memset/bzero/memset_pattern calls of at least that size are
+// X86SIM_A64_BIGCOPY=<bytes> (debug): memmove/memcpy/memset/bzero/memset_pattern calls of at least that size are
 // summed per (function, guest return address, caller one frame up); touching $X86SIM_SCRATCH-style path
-// X86CODE_A64_BIGCOPY_DUMP (a Linux path) makes the process log its top 20 by bytes and reset (who fills/copies bitmaps)
-static const u64 g_bigcopy = getenv("X86CODE_A64_BIGCOPY") ? strtoull(getenv("X86CODE_A64_BIGCOPY"), nullptr, 0) : 0;
+// X86SIM_A64_BIGCOPY_DUMP (a Linux path) makes the process log its top 20 by bytes and reset (who fills/copies bitmaps)
+static const u64 g_bigcopy = getenv("X86SIM_A64_BIGCOPY") ? strtoull(getenv("X86SIM_A64_BIGCOPY"), nullptr, 0) : 0;
 static void bigcopy(GuestThread &t, u32 i, const u64 *ints) {
     const std::string &n = g_thunks[i].name;
     const bool bz = n.find("bzero") != std::string::npos;
@@ -86,7 +86,7 @@ static void bigcopy(GuestThread &t, u32 i, const u64 *ints) {
     const time_t now = time(nullptr);
     if (now == last) return;
     last = now;
-    const char *dp = getenv("X86CODE_A64_BIGCOPY_DUMP");
+    const char *dp = getenv("X86SIM_A64_BIGCOPY_DUMP");
     struct stat st;
     if (!dp || stat(dp, &st) != 0 || now - st.st_mtime > 2) return;
     std::vector<std::pair<u64, decltype(agg)::const_iterator>> v;

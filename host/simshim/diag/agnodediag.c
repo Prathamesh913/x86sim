@@ -1,7 +1,7 @@
-// x86Code: diagnostic shim (Speed 30, arm64): one AttributeGraph attribute's life. AGNODE_ID=<decimal attribute id>
+// x86Sim: diagnostic shim (Speed 30, arm64): one AttributeGraph attribute's life. AGNODE_ID=<decimal attribute id>
 // (the id in "attribute failed to set an initial value: <id>"). Logs the guest return addresses (raw, unslid cache
 // addresses: symbolicate with `ipsw dyld a2s`) of AGGraphCreateAttribute calls that return it, of AGGraphSetValue /
-// AGGraphCreateOffsetAttribute2 on it, and a count of creations. Log: /private/var/tmp/x86code-a64/agnode.<prog>.<pid>.log (next to the JIT logs)
+// AGGraphCreateOffsetAttribute2 on it, and a count of creations. Log: /private/var/tmp/x86sim-a64/agnode.<prog>.<pid>.log (next to the JIT logs)
 // Loaded with DYLD_INSERT_LIBRARIES (e.g. per process through libarm64jit's a64-penv file).
 #include "diagpath.h"
 #include <stdio.h>
@@ -79,7 +79,7 @@ __attribute__((constructor)) static void agnode_init(void)
 	if (!e) return;
 	want = (uint32_t) strtoul(e, NULL, 0);
 	char p[512];
-	snprintf(p, sizeof(p), "/private/var/tmp/x86code-a64/agnode.%s.%d.log", getprogname(), getpid());
+	snprintf(p, sizeof(p), "/private/var/tmp/x86sim-a64/agnode.%s.%d.log", getprogname(), getpid());
 	lfd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	lg("agnode loaded, watching %u", want);
 }

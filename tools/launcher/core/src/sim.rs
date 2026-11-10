@@ -252,7 +252,7 @@ pub fn show() -> Result<()> {
         return Ok(());
     }
     let st = Command::new("systemd-run")
-        .args(["--user", "--unit", "x86sim-simview", "--collect", "-E", "DISPLAY=:0", "-E", "SIMFB_RING_LINUX=/dev/shm/x86code-a64-simfb.ring", "-p"])
+        .args(["--user", "--unit", "x86sim-simview", "--collect", "-E", "DISPLAY=:0", "-E", "SIMFB_RING_LINUX=/dev/shm/x86sim-a64-simfb.ring", "-p"])
         .arg(format!("WorkingDirectory={}", repo_root().display()))
         .args(["/usr/bin/python3", "cli/libexec/simview.py"])
         .stdout(Stdio::null())
@@ -368,7 +368,7 @@ pub fn status(sample_ms: u64) -> SimStatus {
 pub fn home_frame() -> bool {
     Command::new("python3")
         .arg(repo_root().join("cli/libexec/framecheck.py"))
-        .arg("/dev/shm/x86code-a64-simfb.ring")
+        .arg("/dev/shm/x86sim-a64-simfb.ring")
         .arg("home")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

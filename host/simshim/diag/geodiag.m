@@ -1,8 +1,8 @@
-// x86Code: diagnostic shim (Maps "No Internet Connection" banner): logs GEONetworkObserver's path updates and its
-// reachability every 5 s. X86CODE_INSERT=host/simshim/diag/libgeodiag.dylib, GEODIAG_PROGS (default Maps,geod).
+// x86Sim: diagnostic shim (Maps "No Internet Connection" banner): logs GEONetworkObserver's path updates and its
+// reachability every 5 s. X86SIM_INSERT=host/simshim/diag/libgeodiag.dylib, GEODIAG_PROGS (default Maps,geod).
 // Log: data/var/log/geodiag.<prog>.<pid>.log
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <fcntl.h>
@@ -13,7 +13,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[220];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/geodiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/geodiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;

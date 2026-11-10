@@ -1,22 +1,38 @@
 #!/bin/sh
-# x86Code AppImage entry. The AppImage's own files are read-only and mounted only while this runs, but phones outlive
+# x86Sim AppImage entry. The AppImage's own files are read-only and mounted only while this runs, but phones outlive
 # the launcher (systemd-run units), so the payload is copied once per version into the data dir and everything runs
 # from there:
-#   $XDG_DATA_HOME/x86code (default ~/.local/share/x86code): X86SIM_ROOT, laid out like the repo checkout:
+#   $XDG_DATA_HOME/x86sim (default ~/.local/share/x86sim): X86SIM_ROOT, laid out like the repo checkout:
 #     cli host linux tools tests -> app/<version>/...   (relative links: they resolve inside Darling's view too)
-#     darling-prefix -> /opt/x86code/darling             (installed by the setup wizard's privileged step)
+#     darling-prefix -> /opt/x86sim/darling             (installed by the setup wizard's privileged step)
 #     runtimes/  var/  x86sim.env                        (user data, kept across versions)
-#   $XDG_CACHE_HOME/x86code (default ~/.cache/x86code): X86SIM_SCRATCH (AOT images, logs, per-boot Darling prefixes)
-# Usage: x86code.AppImage [launcher|aot|mcp|x86sim|shell|setup-helper|version] [args]
+#   $XDG_CACHE_HOME/x86sim (default ~/.cache/x86sim): X86SIM_SCRATCH (AOT images, logs, per-boot Darling prefixes)
+# Usage: x86sim.AppImage [launcher|aot|mcp|x86sim|shell|setup-helper|version] [args]
 set -e
 HERE=$(dirname "$(readlink -f "$0")")
-S=$HERE/usr/share/x86code
+S=$HERE/usr/share/x86sim
 VER=$(cat "$S/VERSION")
-DATA=${X86CODE_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/x86code}
-CACHE=${X86CODE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/x86code}
+DATA=${X86SIM_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/x86sim}
+CACHE=${X86SIM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/x86sim}
+# Releases up to 0.1.0-pre8 were called x86Code and kept their files in .../x86code: moved over once (same file system,
+# a rename: the runtime download and the pre-translated image come along). Not while a phone of the old version still
+# runs from there: this run uses the old directories and the next start moves them.
+legacy() {
+	old=$(dirname "$2")/x86code
+	if [ -z "$1" ] && [ -d "$old" ] && [ ! -e "$2" ]; then
+		if pgrep -u "$(id -u)" -f "$old/" > /dev/null 2>&1; then echo "$old"; return; fi
+		mv "$old" "$2" 2>/dev/null && { echo "x86sim: moved $old to $2" >&2; echo "$2"; return; }
+		echo "$old"; return
+	fi
+	echo "$2"
+}
+DATA=$(legacy "${X86SIM_DATA:-}" "$DATA")
+CACHE=$(legacy "${X86SIM_CACHE:-}" "$CACHE")
+# the old version's settings used X86CODE_* names
+[ -f "$DATA/x86sim.env" ] && grep -q X86CODE_ "$DATA/x86sim.env" && sed -i 's/X86CODE_/X86SIM_/g' "$DATA/x86sim.env"
 APP=$DATA/app/$VER
 mkdir -p "$DATA/app" "$DATA/runtimes" "$DATA/var" "$CACHE"
-if [ ! -f "$APP/.complete" ] || [ -n "${X86CODE_REFRESH_PAYLOAD:-}" ]; then
+if [ ! -f "$APP/.complete" ] || [ -n "${X86SIM_REFRESH_PAYLOAD:-}" ]; then
 	rm -rf "$APP.tmp"
 	mkdir -p "$APP.tmp"
 	cp -a "$S/payload/." "$APP.tmp/"
@@ -31,14 +47,14 @@ for d in cli host linux tools tests; do
 	[ -e "$APP/$d" ] || continue
 	if [ -L "$DATA/$d" ] || [ ! -e "$DATA/$d" ]; then ln -sfn "app/$VER/$d" "$DATA/$d"; fi
 done
-# Darling: "system" = installed by the setup wizard into /opt/x86code (bin/darling setuid root, one password prompt);
-# "userns" = no root at all, through an unprivileged user namespace (darling-userns.sh). X86CODE_DARLING_MODE picks one;
+# Darling: "system" = installed by the setup wizard into /opt/x86sim (bin/darling setuid root, one password prompt);
+# "userns" = no root at all, through an unprivileged user namespace (darling-userns.sh). X86SIM_DARLING_MODE picks one;
 # auto: system when this build is installed there, else userns when the kernel allows it, else system (the wizard
 # then asks to install).
 DID=$(cat "$S/DARLING_ID")
-mode=${X86CODE_DARLING_MODE:-auto}
+mode=${X86SIM_DARLING_MODE:-auto}
 if [ "$mode" = auto ]; then
-	if [ -u /opt/x86code/darling/bin/darling ] && [ "$(cat /opt/x86code/darling/.x86code-complete 2>/dev/null)" = "$DID" ]; then
+	if [ -u /opt/x86sim/darling/bin/darling ] && [ "$(cat /opt/x86sim/darling/.x86sim-complete 2>/dev/null)" = "$DID" ]; then
 		mode=system
 	elif unshare -r -m true 2>/dev/null; then
 		mode=userns
@@ -47,10 +63,10 @@ if [ "$mode" = auto ]; then
 	fi
 fi
 if [ "$mode" = userns ]; then
-	if [ ! -f "$APP/darling/.x86code-copied" ]; then
+	if [ ! -f "$APP/darling/.x86sim-copied" ]; then
 		rm -rf "$APP/darling.tmp"
 		cp -a "$S/darling" "$APP/darling.tmp"
-		touch "$APP/darling.tmp/.x86code-copied"
+		touch "$APP/darling.tmp/.x86sim-copied"
 		mv "$APP/darling.tmp" "$APP/darling"
 	fi
 	U=$APP/darling-userns
@@ -58,18 +74,18 @@ if [ "$mode" = userns ]; then
 	cp "$S/darling-userns.sh" "$U/bin/darling"
 	ln -sfn ../../darling/bin/darlingserver "$U/bin/darlingserver"
 	ln -sfn ../darling/libexec "$U/libexec"
-	echo "$DID" > "$U/.x86code-complete"
-	: > "$U/.x86code-userns"
+	echo "$DID" > "$U/.x86sim-complete"
+	: > "$U/.x86sim-userns"
 	target=app/$VER/darling-userns
 else
-	target=$(realpath -m --relative-to="$DATA" /opt/x86code/darling)
+	target=$(realpath -m --relative-to="$DATA" /opt/x86sim/darling)
 fi
 # relative (as every link here): Darling sees these paths under /Volumes/SystemRoot, where an absolute target would
 # resolve against the container's own root
 if [ -L "$DATA/darling-prefix" ] || [ ! -e "$DATA/darling-prefix" ]; then ln -sfn "$target" "$DATA/darling-prefix"; fi
-export X86CODE_DARLING_MODE=$mode
-export X86SIM_ROOT="$DATA" X86SIM_SCRATCH="$CACHE" X86CODE_APP="$APP" X86CODE_VERSION="$VER"
-export X86CODE_DARLING_ID="$(cat "$APP/DARLING_ID")" X86CODE_DARLING_STAGE="$S/darling" X86CODE_PYLIB="$APP/pylib"
+export X86SIM_DARLING_MODE=$mode
+export X86SIM_ROOT="$DATA" X86SIM_SCRATCH="$CACHE" X86SIM_APP="$APP" X86SIM_VERSION="$VER"
+export X86SIM_DARLING_ID="$(cat "$APP/DARLING_ID")" X86SIM_DARLING_STAGE="$S/darling" X86SIM_PYLIB="$APP/pylib"
 # the Darling build tree is not shipped: nothing to heal the prefix from
 export A64_PREFIX_HEAL=0
 # ipsw and 7-Zip for the runtime download (a system copy is used only when the bundled one is missing)
@@ -77,11 +93,11 @@ export PATH="$APP/bin:$PATH"
 B=$APP/tools/launcher/target/release
 cmd=${1:-launcher}
 case "$cmd" in
-launcher) [ $# -gt 0 ] && shift; exec "$B/x86code-launcher" "$@" ;;
-aot) shift; exec "$B/x86code-aot" "$@" ;;
-mcp) shift; exec "$B/x86code-mcp" "$@" ;;
+launcher) [ $# -gt 0 ] && shift; exec "$B/x86sim-launcher" "$@" ;;
+aot) shift; exec "$B/x86sim-aot" "$@" ;;
+mcp) shift; exec "$B/x86sim-mcp" "$@" ;;
 x86sim) shift; exec "$APP/cli/x86sim" "$@" ;;
 shell) shift; cd "$DATA"; exec "${SHELL:-/bin/sh}" "$@" ;;
-version) echo "x86Code $VER (Darling $X86CODE_DARLING_ID, $mode mode)"; echo "data $DATA"; echo "cache $CACHE" ;;
-*) exec "$B/x86code-launcher" "$@" ;;
+version) echo "x86Sim $VER (Darling $X86SIM_DARLING_ID, $mode mode)"; echo "data $DATA"; echo "cache $CACHE" ;;
+*) exec "$B/x86sim-launcher" "$@" ;;
 esac

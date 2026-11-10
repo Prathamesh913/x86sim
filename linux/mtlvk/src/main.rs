@@ -1,4 +1,4 @@
-//! mtlvk: the native Linux half of x86Code's Metal stand-in for the iOS simulator.
+//! mtlvk: the native Linux half of x86Sim's Metal stand-in for the iOS simulator.
 //!
 //! metalhostd (a Darling process running Apple's MTLSimImplementation over our MTLDevice classes) connects
 //! here over a Unix socket and forwards Metal objects and command buffers in the VKMTL protocol
@@ -23,7 +23,7 @@ extern "C" fn on_usr1(_: libc::c_int) {
     conn::STATS_REQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// x86Code RAM 2: what the phone's Metal needs of the device, and no more of the driver's memory.
+/// x86Sim RAM 2: what the phone's Metal needs of the device, and no more of the driver's memory.
 /// - Ray tracing withheld (VK_KHR_acceleration_structure, VK_KHR_ray_query and
 ///   VK_KHR_deferred_host_operations): VKMTL has no acceleration structure, and NVIDIA's driver
 ///   loads libnvidia-rtcore and allocates ~60 MB PSS (37 MB of it malloc) for them in vkCreateDevice
@@ -47,7 +47,7 @@ fn device_options() -> metal2vulkan_runtime::DeviceOptions {
     o
 }
 
-/// x86Code RAM 2: every MTLVK_TRIM_EVERY seconds (default 5; 0 = never), give back what the device's spare
+/// x86Sim RAM 2: every MTLVK_TRIM_EVERY seconds (default 5; 0 = never), give back what the device's spare
 /// command pools and descriptor pools hold past MTLVK_TRIM_IDLE seconds unused (default 10): NVIDIA keeps a command
 /// pool's 2 MB chunks of pinned system memory until the pool is reset with RELEASE_RESOURCES, so the spares held
 /// the busiest moment's command buffers for good (~2 MB per spare pool).
@@ -74,7 +74,7 @@ fn start_trim(device: Device) {
                 }
             }
             let (pools, descriptors) = device.trim_idle(std::time::Duration::from_secs_f64(idle));
-            // x86Code RAM 8: pipelines nothing used for MTLVK_PIPELINE_IDLE s (default 300; 0 = never): graphics
+            // x86Sim RAM 8: pipelines nothing used for MTLVK_PIPELINE_IDLE s (default 300; 0 = never): graphics
             // pipeline libraries no new key claimed, and the VkPipelines kept for released variants
             let (libraries, kept) = match pipeline_idle {
                 Some(idle) => device.trim_idle_pipelines(idle),
@@ -116,7 +116,7 @@ impl Drop for ConnGuard {
 
 /// Darlingservers (one per running phone) whose environment names `sock` as their phone's mtlvk.
 fn phone_users(sock: &str) -> usize {
-    let want = format!("X86CODE_MTLVK_SOCKET={sock}");
+    let want = format!("X86SIM_MTLVK_SOCKET={sock}");
     let rd = |p: &std::path::Path, f: &str| std::fs::read(p.join(f)).unwrap_or_default();
     std::fs::read_dir("/proc")
         .into_iter()
@@ -127,11 +127,11 @@ fn phone_users(sock: &str) -> usize {
         .count()
 }
 
-/// x86Code RAM 5: an mtlvk lives as long as its phones. Every stop path (launcher GUI, x86code-aot, boot-a64.sh's
+/// x86Sim RAM 5: an mtlvk lives as long as its phones. Every stop path (launcher GUI, x86sim-aot, boot-a64.sh's
 /// A64_STOP_ONLY, a phone that crashed or was restarted onto another mtlvk) used to have to find and end it, and a
 /// shared one whose last phone stopped through a path that did not look (or a phone that moved to a new mtlvk) stayed
 /// up for good (~250-600 MB). Now mtlvk ends itself once it has had no client connection and no running phone naming
-/// its socket (a darlingserver's X86CODE_MTLVK_SOCKET) for MTLVK_IDLE_EXIT seconds (default 30; 0 = never; a boot's
+/// its socket (a darlingserver's X86SIM_MTLVK_SOCKET) for MTLVK_IDLE_EXIT seconds (default 30; 0 = never; a boot's
 /// darlingserver exists ~1 s after mtlvk, and a restart's new darlingserver names the socket before its old one is
 /// gone or within seconds). The socket is unlinked first, so a boot that looks for it starts a fresh mtlvk.
 fn start_idle_exit(sock: String) {
@@ -165,7 +165,7 @@ fn start_idle_exit(sock: String) {
     });
 }
 
-/// x86Code RAM 8: glibc malloc for a long-lived process whose driver compiles. NVIDIA's compiler takes large
+/// x86Sim RAM 8: glibc malloc for a long-lived process whose driver compiles. NVIDIA's compiler takes large
 /// short-lived blocks on the threads that make pipelines, beside the pipelines' small long-lived objects; glibc
 /// raises its mmap threshold to each large block freed (up to 32 MB), so later ones came from the arenas and left
 /// them holed around the long-lived objects (after a gate run: 110 MB free in the arenas, malloc_trim returning
@@ -189,10 +189,10 @@ fn tune_malloc() {
 
 fn main() {
     tune_malloc();
-    // x86Code Speed 7: SIGUSR1 -> per-connection object counts on stderr (next request)
+    // x86Sim Speed 7: SIGUSR1 -> per-connection object counts on stderr (next request)
     unsafe { libc::signal(libc::SIGUSR1, on_usr1 as libc::sighandler_t) };
     let arg = std::env::args().nth(1);
-    // x86Code RAM 2: the device as the phone needs it (see device_options).
+    // x86Sim RAM 2: the device as the phone needs it (see device_options).
     let device = match Device::system_default_with(&device_options()) {
         Ok(d) => d,
         Err(e) => {

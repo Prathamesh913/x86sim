@@ -1,9 +1,9 @@
-// x86Code: diagnostic shim (status-bar clock stops): logs SpringBoardUIServices' SBUIPreciseClockTimer display-link
+// x86Sim: diagnostic shim (status-bar clock stops): logs SpringBoardUIServices' SBUIPreciseClockTimer display-link
 // ticks (first 20, then every 50th) and frame-interval changes, and the display link's state every 10 s.
-// X86CODE_INSERT=host/simshim/diag/libclkdiag.dylib, CLKDIAG_PROGS (default SpringBoard).
+// X86SIM_INSERT=host/simshim/diag/libclkdiag.dylib, CLKDIAG_PROGS (default SpringBoard).
 // Log: data/var/log/clkdiag.<prog>.<pid>.log
 #import <Foundation/Foundation.h>
-#include "diagpath.h" // x86Code: X86CODE_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
+#include "diagpath.h" // x86Sim: X86SIM_DATA_DIR (the device data directory, set by build/mac-build-diag.sh)
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <fcntl.h>
@@ -15,7 +15,7 @@ static int logfd(void) {
 	static int fd = -1;
 	if (fd < 0) {
 		char p[220];
-		snprintf(p, sizeof(p), X86CODE_DATA_DIR "/var/log/clkdiag.%s.%d.log", getprogname(), getpid());
+		snprintf(p, sizeof(p), X86SIM_DATA_DIR "/var/log/clkdiag.%s.%d.log", getprogname(), getpid());
 		fd = open(p, O_WRONLY | O_CREAT | O_APPEND, 0644);
 	}
 	return fd;
