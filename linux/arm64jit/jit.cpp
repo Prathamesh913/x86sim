@@ -791,6 +791,18 @@ GuestThread::GuestThread() {
     c.link_import_stubs = !(getenv("X86CODE_A64_STUBLINK") && atoi(getenv("X86CODE_A64_STUBLINK")) == 0);
     // Perf 9: forward block links skip the halt check (X86CODE_A64_HALT_ALL=1: every link checks; code-shaping, debug only)
     c.halt_check_all_links = getenv("X86CODE_A64_HALT_ALL") && atoi(getenv("X86CODE_A64_HALT_ALL")) == 1;
+    // Perf 14: guest registers kept in r12/r13/r14/rbp across blocks (X86CODE_A64_PIN="32,0,8": NZCV, x0, x8; up to 4;
+    // "-1": none; code-shaping, so the image builder must use the same)
+    {
+        const char *pin = getenv("X86CODE_A64_PIN");
+        if (!pin) pin = "32,0,8";  // NZCV (32), then the most loaded/stored guest registers in a cold Settings launch
+        int i = 0;
+        for (const char *q = pin; *q && i < 4;) {
+            c.pinned_regs[i++] = (int8_t)atoi(q);
+            while (*q && *q != ',') q++;
+            if (*q == ',') q++;
+        }
+    }
     // Perf 8: the stub dylibs' svc thunk blocks are persisted (same code in every process: stub_code_hash)
     if (stub_fixed_address("/usr/lib/system/libsystem_kernel.dylib")) {
         c.persist_svc_lo = kStubBase;
