@@ -1327,7 +1327,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
 
 // Speed 29 debug: per-process environment from a file, applied before every other static initializer of this library
 // (many knobs are read once into static consts). File: $X86CODE_A64_PENV_FILE or <scratch_dir()>/a64-penv,
-// lines "<program basename> K=V [K=V...]" ('#' comments). Used to bisect one app's knobs without rebooting the phone.
+// lines "<program basename> K=V [K=V...]" ("*" for every program; '#' comments). Used to bisect one app's knobs without rebooting the phone.
 __attribute__((constructor(101))) static void a64_penv() {
     // (g_penv_applied: declared above main's environment loop)
     const char *exe = getenv("X86CODE_A64_EXE");
@@ -1340,7 +1340,7 @@ __attribute__((constructor(101))) static void a64_penv() {
     char line[1024];
     while (fgets(line, sizeof line, f)) {
         char *save = nullptr, *tok = strtok_r(line, " \t\n", &save);
-        if (!tok || *tok == '#' || strcmp(tok, b) != 0) continue;
+        if (!tok || *tok == '#' || (strcmp(tok, b) != 0 && strcmp(tok, "*") != 0)) continue;  // "*": every program
         while ((tok = strtok_r(nullptr, " \t\n", &save)))
             if (char *eq = strchr(tok, '=')) { *eq = 0; setenv(tok, eq + 1, 1); g_penv_applied = true; }
     }
@@ -1355,5 +1355,10 @@ __attribute__((constructor(101))) static void a64_penv() {
 __attribute__((constructor(102))) static void a64_no_thp() {
     const char *e = getenv("X86CODE_A64_THP");
     if (e && atoi(e) == 1) return;
+    // Perf 12: with the AOT image's huge-page copy (X86CODE_A64_AOT_HUGE=1), except what asks for it: this prctl had
+    // silently refused the copy's 2 MB mappings (MADV_HUGEPAGE). PR_THP_DISABLE_EXCEPT_ADVISED is Linux 6.18+; on older
+    // kernels, or without the copy, everything off as before.
+    const char *h = getenv("X86CODE_A64_AOT_HUGE");
+    if (h && atoi(h) == 1 && prctl(PR_SET_THP_DISABLE, 1, 1 << 1 /* PR_THP_DISABLE_EXCEPT_ADVISED */, 0, 0) == 0) return;
     prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0);
 }

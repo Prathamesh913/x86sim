@@ -52,7 +52,9 @@ static int take_marker(const char *mk) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3) { fprintf(stderr, "usage: a64hugecopy MAP HP\n"); return 2; }
+    // Perf 12: optional PAD: bytes before the copy of MAP, so HP's offsets match the image's addresses modulo 2 MB
+    if (argc != 3 && argc != 4) { fprintf(stderr, "usage: a64hugecopy MAP HP [PAD]\n"); return 2; }
+    const unsigned long long pad = argc == 4 ? strtoull(argv[3], NULL, 10) : 0;
     // Guests run with PR_SET_THP_DISABLE (host.cpp, RAM 1), which a child inherits: it also kept this copy off
     // 2 MB pages (every boot logged "mostly small pages"). The copy is the one place huge pages are wanted.
     prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0);
@@ -71,7 +73,7 @@ int main(int argc, char **argv) {
     int mfd = open(map, O_RDONLY | O_CLOEXEC);
     struct stat ms, hs;
     if (mfd < 0 || fstat(mfd, &ms) != 0 || ms.st_size <= 0) { logf_("no map %s%llu%llu", map, 0, 0); return 1; }
-    const unsigned long long len = (unsigned long long)ms.st_size;
+    const unsigned long long len = (unsigned long long)ms.st_size + pad;
     if (access(small, F_OK) == 0) return 0;
     if (stat(hp, &hs) == 0 && (unsigned long long)hs.st_size == len) return 0;
     // detach: libarm64jit waits for this process (a clone child without SIGCHLD); the copy runs in a grandchild
@@ -100,9 +102,10 @@ int main(int argc, char **argv) {
         unsigned char *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, w, 0);
         if (m != MAP_FAILED) {
             madvise(m, len, MADV_HUGEPAGE);
+            done = pad;
             while (done < len) {
                 size_t want = len - done < (64ull << 20) ? len - done : (64ull << 20);
-                ssize_t n = pread(mfd, m + done, want, (off_t)done);
+                ssize_t n = pread(mfd, m + done, want, (off_t)(done - pad));
                 if (n <= 0) break;
                 done += (unsigned long long)n;
             }
