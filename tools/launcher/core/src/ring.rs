@@ -16,6 +16,38 @@ pub struct Frame {
     pub bgra: Vec<u8>,
 }
 
+impl Frame {
+    /// The frame upright as an RGB PNG. `rot`: the panel's mounting (as hid::unrotate; the viewer's convert turns it
+    /// the same way): 270 = shown a quarter clockwise, 90 = counter-clockwise.
+    pub fn png(&self, rot: u32) -> anyhow::Result<Vec<u8>> {
+        let (w, h, s) = (self.w as usize, self.h as usize, self.stride as usize);
+        let px = |x: usize, y: usize| {
+            let o = y * s + x * 4;
+            [self.bgra[o + 2], self.bgra[o + 1], self.bgra[o]]
+        };
+        let (ow, oh) = if rot % 180 == 90 { (h, w) } else { (w, h) };
+        let mut rgb = Vec::with_capacity(ow * oh * 3);
+        for yo in 0..oh {
+            for xo in 0..ow {
+                rgb.extend_from_slice(&match rot % 360 {
+                    270 => px(yo, h - 1 - xo),
+                    90 => px(w - 1 - yo, xo),
+                    180 => px(w - 1 - xo, h - 1 - yo),
+                    _ => px(xo, yo),
+                });
+            }
+        }
+        let mut out = Vec::new();
+        {
+            let mut e = png::Encoder::new(&mut out, ow as u32, oh as u32);
+            e.set_color(png::ColorType::Rgb);
+            e.set_depth(png::BitDepth::Eight);
+            e.write_header()?.write_image_data(&rgb)?;
+        }
+        Ok(out)
+    }
+}
+
 pub struct Ring {
     pub path: PathBuf,
     mm: Option<Mmap>,
@@ -178,5 +210,28 @@ impl Ring {
         let n = n.max(1) as f64;
         let dark_f = dark as f64 / n;
         dark_f < 0.98 && (sat_sum / n > 25.0 || bright as f64 / n > 0.05)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Frame;
+
+    fn decode(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        let mut r = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        let info = r.next_frame(&mut buf).unwrap();
+        (info.width, info.height, buf[..info.buffer_size()].to_vec())
+    }
+
+    #[test]
+    fn png_upright_and_rotated() {
+        // 2x1 BGRA, stride 12 (padding): left pixel red, right pixel blue
+        let f = Frame { w: 2, h: 1, stride: 12, seq: 1, t_ns: 0, bgra: vec![0, 0, 255, 255, 255, 0, 0, 255, 9, 9, 9, 9] };
+        assert_eq!(decode(&f.png(0).unwrap()), (2, 1, vec![255, 0, 0, 0, 0, 255]));
+        // 270 (the viewer's convert): framebuffer x runs down the picture
+        assert_eq!(decode(&f.png(270).unwrap()), (1, 2, vec![255, 0, 0, 0, 0, 255]));
+        assert_eq!(decode(&f.png(90).unwrap()), (1, 2, vec![0, 0, 255, 255, 0, 0]));
+        assert_eq!(decode(&f.png(180).unwrap()), (2, 1, vec![0, 0, 255, 255, 0, 0]));
     }
 }

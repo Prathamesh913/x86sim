@@ -1,5 +1,5 @@
 //! One phone: a top bar (breadcrumb with a phone switcher, state, Start/Stop/Restart), its screen (touch + keyboard)
-//! with a small toolbar (Home, Lock, typing state, gesture help), and the inspector: Overview, then fold-out Features,
+//! with a vertical tool bar right of it (Home, Lock, volume, Siri, screenshot, gesture help), and the inspector: Overview, then fold-out Features,
 //! Logs, Performance, Advanced.
 use crate::theme::*;
 use crate::{viewer, App, View};
@@ -7,7 +7,9 @@ use eframe::egui;
 use std::time::{Duration, Instant};
 use x86code_core::{features, instance, instance::Phase, logs};
 
-const GESTURES: &str = "Click the screen to tap, drag to swipe.\nDrag in from an edge for system gestures (Home, Control Center, back).\nCtrl + drag to pinch, Shift + drag to scroll with two fingers.\nF1 Home · F2 Lock · F3/F4 volume";
+/// Width of the tool bar right of the screen
+const TOOLBAR_W: f32 = 46.0;
+const GESTURES: &str ="Click the screen to tap, drag to swipe.\nDrag in from an edge for system gestures (Home, Control Center, back).\nCtrl + drag to pinch, Shift + drag to scroll with two fingers.\nF1 Home · F2 Lock · F3/F4 volume";
 
 impl App {
     pub fn phone_view(&mut self, ctx: &egui::Context, id: &str) {
@@ -147,14 +149,21 @@ impl App {
                 Phase::Stopping => "Stopping…",
                 Phase::Running => "Waiting for the screen…",
             };
-            let avail = ui.available_size() - egui::vec2(0.0, 52.0);
-            ui.vertical_centered(|ui| {
+            // the screen and, to its right, the tools (as Simulator's side buttons): centred together
+            let avail = ui.available_size() - egui::vec2(TOOLBAR_W + S3, 0.0);
+            let rid = egui::Id::new(("screen-row", id));
+            let w: f32 = ui.data(|d| d.get_temp(rid)).unwrap_or(avail.x);
+            let r = ui.horizontal_top(|ui| {
+                ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+                let start = ui.cursor().min.x;
                 if let Some(v) = self.viewer(id) {
                     v.show(ui, avail, live, placeholder, true, viewer::FULL);
                 }
                 ui.add_space(S3);
                 self.screen_toolbar(ui, id, live);
+                ui.min_rect().right() - start
             });
+            ui.data_mut(|d| d.insert_temp(rid, r.inner));
         });
     }
 
@@ -290,55 +299,69 @@ impl App {
         }
     }
 
-    /// Home / Lock, typing state and gesture help, centred under the screen.
+    /// The tools, a vertical bar right of the screen: the hardware buttons Simulator has (Home, side button, volume,
+    /// Siri), Save Screen, the hinge of a two-screen phone, gesture help. Simulator's rotate and shake have no simhid
+    /// command (no orientation or motion events), so they are not offered.
     fn screen_toolbar(&mut self, ui: &mut egui::Ui, id: &str, live: bool) {
-        let tid = egui::Id::new(("toolbar-w", id));
-        let w: f32 = ui.data(|d| d.get_temp(tid)).unwrap_or(320.0);
-        let focused = self.viewers.get(id).is_some_and(|v| v.focused);
-        let compact = ui.available_width() < 420.0;
-        let r = ui.horizontal(|ui| {
-            ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
-            egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(8).inner_margin(4).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    if ui.add_enabled(live, Btn::ghost(if compact { "" } else { "Home" }).icon(icon::HOUSE)).on_hover_text("F1").clicked() {
+        let name = self.inst(id).map(|i| i.name.clone()).unwrap_or_else(|| id.to_string());
+        let hinge = self.inst(id).filter(|i| i.inner.is_some()).map(|i| i.inner_active());
+        egui::Frame::new().fill(CARD).stroke(egui::Stroke::new(1.0_f32, BORDER)).corner_radius(8).inner_margin(4).show(ui, |ui| {
+            ui.set_width(TOOLBAR_W - 10.0);
+            ui.vertical_centered(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                fn tool_btn(ui: &mut egui::Ui, live: bool, ic: &'static str, tip: &str) -> bool {
+                    ui.add_enabled(live, Btn::ghost("").icon(ic)).on_hover_text(tip).on_disabled_hover_text("Not running").clicked()
+                }
+                let tool = |ui: &mut egui::Ui, ic: &'static str, tip: &str| tool_btn(ui, live, ic, tip);
+                let sep = |ui: &mut egui::Ui| {
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(TOOLBAR_W - 10.0, 9.0), egui::Sense::hover());
+                    ui.painter().hline(r.x_range().shrink(6.0), r.center().y, egui::Stroke::new(1.0_f32, BORDER));
+                };
+                let mut press = None;
+                if tool(ui, icon::HOUSE, "Home (F1)") {
+                    press = Some("home");
+                }
+                if tool(ui, icon::LOCK, "Lock: the side button (F2)") {
+                    press = Some("lock");
+                }
+                if tool(ui, icon::SPEAKER_HIGH, "Volume up (F3)") {
+                    press = Some("volup");
+                }
+                if tool(ui, icon::SPEAKER_LOW, "Volume down (F4)") {
+                    press = Some("voldown");
+                }
+                if tool(ui, icon::MICROPHONE, "Siri: holds the side button") {
+                    if let Some(v) = self.viewer(id) {
+                        v.hold("lock", 2500);
+                    }
+                }
+                if let Some(b) = press {
+                    if let Some(v) = self.viewer(id) {
+                        v.press(b);
+                    }
+                }
+                sep(ui);
+                if tool(ui, icon::CAMERA, "Save a screenshot to Pictures") {
+                    let r = self.viewer(id).map(|v| v.screenshot(&name));
+                    match r {
+                        Some(Ok(f)) => self.say(format!("Screenshot saved: {}", f.display())),
+                        Some(Err(e)) => self.say(format!("Couldn't save a screenshot: {e}")),
+                        None => {}
+                    }
+                }
+                // Models 2: a two-screen phone (iPhone Duo) opens and closes like one: the hinge
+                if let Some(open) = hinge {
+                    let (ic, tip) = if open { (icon::DEVICE_MOBILE, "Fold: close the phone, the outer screen") } else { (icon::BOOK_OPEN, "Unfold: open the phone flat, the inner screen") };
+                    if tool(ui, ic, tip) {
                         if let Some(v) = self.viewer(id) {
-                            v.press("home");
+                            v.hinge(if open { 0.0 } else { 180.0 });
                         }
                     }
-                    if ui.add_enabled(live, Btn::ghost(if compact { "" } else { "Lock" }).icon(icon::LOCK)).on_hover_text("F2").clicked() {
-                        if let Some(v) = self.viewer(id) {
-                            v.press("lock");
-                        }
-                    }
-                    // Models 2: a two-screen phone (iPhone Duo) opens and closes like one: the hinge
-                    if let Some(open) = self.inst(id).filter(|i| i.inner.is_some()).map(|i| i.inner_active()) {
-                        let (label, ic, tip) = if open { ("Fold", icon::DEVICE_MOBILE, "Close the phone: the outer screen") } else { ("Unfold", icon::BOOK_OPEN, "Open the phone flat: the inner screen") };
-                        if ui.add_enabled(live, Btn::ghost(if compact { "" } else { label }).icon(ic)).on_hover_text(tip).clicked() {
-                            if let Some(v) = self.viewer(id) {
-                                v.hinge(if open { 0.0 } else { 180.0 });
-                            }
-                        }
-                    }
-                    let (sep, _) = ui.allocate_exact_size(egui::vec2(13.0, H_MD), egui::Sense::hover());
-                    ui.painter().vline(sep.center().x, sep.y_range().shrink(6.0), egui::Stroke::new(1.0_f32, BORDER));
-                    let (t, c) = if !live { ("Not running", INK_3) } else if focused { ("Typing goes to the phone", ACCENT_INK) } else { ("Click the screen to type", INK_3) };
-                    ui.add_space(6.0);
-                    let k = ui.label(egui::RichText::new(icon::KEYBOARD).size(15.0).color(c));
-                    if compact {
-                        k.on_hover_text(t);
-                    } else {
-                        ui.label(egui::RichText::new(t).size(T_SMALL).color(if c == ACCENT_INK { INK } else { INK_2 }));
-                    }
-                    ui.add_space(4.0);
-                    ui.add(Btn::tool(icon::INFO)).on_hover_text(GESTURES);
-                });
-            })
-            .response
-            .rect
-            .width()
+                }
+                sep(ui);
+                ui.add(Btn::tool(icon::INFO)).on_hover_text(GESTURES);
+            });
         });
-        ui.data_mut(|d| d.insert_temp(tid, r.inner));
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui, inst: &instance::Instance, st: Option<&instance::Status>) {

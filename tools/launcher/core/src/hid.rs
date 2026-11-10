@@ -103,6 +103,18 @@ impl Hid {
         std::thread::sleep(Duration::from_millis(80));
         self.button(name, false);
     }
+
+    /// Holds a button for `ms` without blocking the caller: its own connection on a thread (the side button held
+    /// 2.5 s is Siri, as tests/arm64/gate/gate.sh presses it).
+    pub fn hold(&self, name: &str, ms: u64) {
+        let (path, name) = (self.path.clone(), name.to_string());
+        std::thread::spawn(move || {
+            let mut h = Hid::new(&path);
+            h.button(&name, true);
+            std::thread::sleep(Duration::from_millis(ms));
+            h.button(&name, false);
+        });
+    }
 }
 
 /// The edge a touch at normalized (x, y) begins on, for a screen of w x h device pixels.

@@ -438,6 +438,26 @@ impl Viewer {
     pub fn press(&mut self, button: &str) {
         self.hid.press(button);
     }
+
+    pub fn hold(&self, button: &str, ms: u64) {
+        self.hid.hold(button, ms);
+    }
+
+    /// Saves the screen at full resolution, upright, as Simulator's File > Save Screen does: "<name> <date> at
+    /// <time>.png" in the Pictures folder (xdg-user-dir PICTURES, else ~/Pictures). Returns the file.
+    pub fn screenshot(&self, name: &str) -> Result<std::path::PathBuf, String> {
+        let path = self.shared.ring.lock().unwrap().clone();
+        let f = Ring::new(&path).latest().ok_or("no picture from the phone yet")?;
+        let png = f.png(self.shared.rot.load(Ordering::Relaxed)).map_err(|e| e.to_string())?;
+        let run = |c: &str, a: &[&str]| std::process::Command::new(c).args(a).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty());
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let dir = run("xdg-user-dir", &["PICTURES"]).map(std::path::PathBuf::from).filter(|d| d != &home).unwrap_or_else(|| home.join("Pictures"));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let when = run("date", &["+%Y-%m-%d at %H.%M.%S"]).unwrap_or_else(|| f.seq.to_string());
+        let file = dir.join(format!("{} {when}.png", name.replace('/', "-")));
+        std::fs::write(&file, png).map_err(|e| format!("{}: {e}", file.display()))?;
+        Ok(file)
+    }
 }
 
 /// egui key -> (HID usage, needs shift)

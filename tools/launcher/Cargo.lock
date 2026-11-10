@@ -2870,6 +2870,7 @@ dependencies = [
  "anyhow",
  "libc",
  "memmap2",
+ "png",
  "serde",
  "serde_json",
 ]
