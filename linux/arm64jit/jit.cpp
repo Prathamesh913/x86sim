@@ -789,6 +789,8 @@ GuestThread::GuestThread() {
     c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;
     // Speed 17: guarded direct links for import stubs (X86CODE_A64_STUBLINK=0: off)
     c.link_import_stubs = !(getenv("X86CODE_A64_STUBLINK") && atoi(getenv("X86CODE_A64_STUBLINK")) == 0);
+    // Perf 9: forward block links skip the halt check (X86CODE_A64_HALT_ALL=1: every link checks; code-shaping, debug only)
+    c.halt_check_all_links = getenv("X86CODE_A64_HALT_ALL") && atoi(getenv("X86CODE_A64_HALT_ALL")) == 1;
     // Perf 8: the stub dylibs' svc thunk blocks are persisted (same code in every process: stub_code_hash)
     if (stub_fixed_address("/usr/lib/system/libsystem_kernel.dylib")) {
         c.persist_svc_lo = kStubBase;
