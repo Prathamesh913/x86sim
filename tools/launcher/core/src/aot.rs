@@ -272,6 +272,36 @@ pub fn shipped_training(p: &Paths) -> Option<PathBuf> {
     Some(repo_root().join(format!("cli/libexec/arm64/training-{build}.x86t")))
 }
 
+/// Perf 8: libarm64jit maps the libsystem stub dylibs it generates at fixed addresses at the top of the cache window
+/// (linux/arm64jit/a64.h kStubBase, kStubSlot), so their blocks belong in the image (the cache's import stubs link to
+/// them). One chunk each, trained blocks only (no file to scan); identity = the stubs' code hash that the first process
+/// of the image key recorded in `<image key>.stubs`.
+const STUB_BASE: u64 = 0x2_FFF0_0000;
+const STUB_SLOT: u64 = 0x4_0000;
+fn stub_sources(p: &Paths, uuid: &str) -> Vec<discover::Source> {
+    let image = key::image_name(uuid, key::build_id(&p.placement()));
+    let hash = std::fs::read_to_string(p.jc.join(image.replace(".aot", ".stubs"))).unwrap_or_default();
+    let hash = hash.trim();
+    if hash.is_empty() {
+        return vec![];
+    }
+    ["libsystem_kernel", "libsystem_platform", "libsystem_pthread"]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let addr = STUB_BASE + i as u64 * STUB_SLOT;
+            discover::Source {
+                name: format!("x86code-stubs/{n}.dylib"),
+                kind: Kind::Placed,
+                ident: hash.to_string(),
+                addr,
+                ranges: vec![(addr, addr + STUB_SLOT)],
+                code_bytes: STUB_SLOT,
+            }
+        })
+        .collect()
+}
+
 /// Discover the chunk sources, the hot set and the scope (no translation).
 pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     // the placement table is part of the image's key: a phone's first boot copies the committed one into the cache dir
@@ -317,6 +347,7 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
             sources.push(pf.source);
         }
     }
+    sources.extend(stub_sources(p, &uuid));
     let man0 = p.load_manifest();
     let ratio = man0.static_ratio.unwrap_or(DEFAULT_STATIC_RATIO);
     // RAM 2 (JIT): x86 bytes per hot block from the chunks built so far (per library, else the image's mean) instead

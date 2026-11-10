@@ -233,9 +233,23 @@ static void set_guest_errno(int e) {
     if (derr) *derr() = e;
 }
 
+// Perf 8: the libsystem stub dylibs go to a fixed address just below the cache window in every process (they went
+// anywhere, so every cache GOT entry for libsystem held a different value in each process and the builder). With one
+// address, A64StubLinkPass links the cache's libsystem import stubs straight to the stub (guarded), in the image too.
+// X86CODE_A64_STUB_FIXED=0: anywhere.
+static thread_local u64 tl_stub_addr;
+u64 stub_fixed_address(const char *install) {
+    static const bool on = !(getenv("X86CODE_A64_STUB_FIXED") && atoi(getenv("X86CODE_A64_STUB_FIXED")) == 0);
+    if (!on) return 0;
+    if (!strcmp(install, "/usr/lib/system/libsystem_kernel.dylib")) return kStubBase;
+    if (!strcmp(install, "/usr/lib/system/libsystem_platform.dylib")) return kStubBase + kStubSlot;
+    if (!strcmp(install, "/usr/lib/system/libsystem_pthread.dylib")) return kStubBase + 2 * kStubSlot;
+    return 0;
+}
 static void h_helper_open(GuestThread &t, u32) {
     const char *path = (const char *)t.x(0);
     int fd = stub_fd_for_path(path);
+    tl_stub_addr = fd >= 0 ? stub_fixed_address(path) : 0;
     if (fd < 0 && dyld_hides(path)) {
         if (g_trace) logf("dyld_sim open %s -> hidden (cache image)", path);
         set_guest_errno(2);  // ENOENT
@@ -262,6 +276,16 @@ static void h_helper_open(GuestThread &t, u32) {
     t.set_x(0, (u64)(int64_t)fd);
 }
 static u64 place_reservation(u64 size, int prot) {
+    if (u64 a = tl_stub_addr) {
+        tl_stub_addr = 0;
+        if (size && size <= kStubSlot) {
+            void *p = mmap((void *)a, size, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);  // in the reserved window
+            if (p == (void *)a) return a;
+            if (p != MAP_FAILED) munmap(p, size);
+        }
+        if (getenv("X86CODE_A64_STATS")) logf("stub dylib not at %#lx (reserve %#lx)", (unsigned long)a, (unsigned long)size);
+        return 0;
+    }
     const Placement *pl = tl_open_place;
     tl_open_place = nullptr;
     if (!pl || !size || size > pl->slot || !placement_claim(pl, tl_open_fd)) {

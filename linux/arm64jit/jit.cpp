@@ -789,6 +789,11 @@ GuestThread::GuestThread() {
     c.fuse_svc_ret = getenv("X86CODE_A64_FUSE_SVC") && atoi(getenv("X86CODE_A64_FUSE_SVC")) == 1;
     // Speed 17: guarded direct links for import stubs (X86CODE_A64_STUBLINK=0: off)
     c.link_import_stubs = !(getenv("X86CODE_A64_STUBLINK") && atoi(getenv("X86CODE_A64_STUBLINK")) == 0);
+    // Perf 8: the stub dylibs' svc thunk blocks are persisted (same code in every process: stub_code_hash)
+    if (stub_fixed_address("/usr/lib/system/libsystem_kernel.dylib")) {
+        c.persist_svc_lo = kStubBase;
+        c.persist_svc_hi = kStubBase + 3 * kStubSlot;
+    }
     native_objc_configure_jit(c);
     // Per-thread caches (X86CODE_A64_SHARED=0): a full cache is cleared, which also drops its block metadata (in
     // glibc malloc, ~3x the code). 16 MB bounds a thread at ~60 MB.

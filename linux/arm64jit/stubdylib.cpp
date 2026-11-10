@@ -140,6 +140,7 @@ const std::map<std::string, const void *> &guest_data() {
 }
 
 std::vector<StubLib> g_libs;
+u64 g_stub_code_hash = 0xcbf29ce484222325ull;  // FNV-1a over each stub's install name and __TEXT
 
 // A real file with the stub's bytes, for F_GETPATH. dyld_sim records an image's path from F_GETPATH on the fd it
 // opened; Darling answers that from /proc/self/fd, which for the memfd is "memfd:libsystem_kernel.dylib (deleted)", and
@@ -331,6 +332,8 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     memcpy(f.data() + le_off, trie.data(), trie.size());
     f[str_off] = ' ';
 
+    for (size_t k = 0; k < install.size() + text_size; k++)
+        g_stub_code_hash = (g_stub_code_hash ^ (k < install.size() ? (uint8_t)install[k] : f[k - install.size()])) * 0x100000001b3ull;
     StubLib lib; lib.install_name = install; lib.size = f.size();
     lib.fd = memfd_create(install.c_str() + install.rfind('/') + 1, MFD_CLOEXEC);
     if (lib.fd < 0 || pwrite(lib.fd, f.data(), f.size(), 0) != (ssize_t)f.size()) die("cannot write the stub dylib for %s", install.c_str());
@@ -340,6 +343,8 @@ StubLib build_stub_dylib(const std::string &install, const std::vector<std::stri
     g_libs.push_back(lib);
     return lib;
 }
+
+u64 stub_code_hash() { return g_stub_code_hash; }
 
 const char *stub_path_for_fd(int fd) {
     struct stat a, b;

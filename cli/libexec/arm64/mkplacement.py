@@ -11,7 +11,7 @@
 # Any change of the table changes the JIT cache key (rebuild the AOT image afterwards).
 import os, struct, sys
 
-LO, HI = 0x2AC000000, 0x300000000  # RAM 13: HI was 0x2C0000000 (libarm64jit kCacheHi)
+LO, HI = 0x2AC000000, 0x2FFF00000  # RAM 13: HI was 0x2C0000000 (libarm64jit kCacheHi). Perf 8: the top 1 MB holds the libsystem stub dylibs (a64.h kStubBase)
 GUARD = 0x10000
 
 

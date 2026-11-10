@@ -225,6 +225,12 @@ size_t emit_guest_code(const std::string &name, uint32_t *out, u32 slow_thunk); 
 // ---- stub dylibs ------------------------------------------------------------------------------------------------
 // path: a real copy of the file as Darling sees it (/Volumes/SystemRoot<jitcache dir>/stubs/<name>),
 // the answer to F_GETPATH on fd; empty if it could not be written
+// Perf 8: fixed addresses of the libsystem stub dylibs (host.cpp stub_fixed_address): the top 1 MB of the cache window
+// (cli/libexec/arm64/mkplacement.py places files below it), so their blocks are in the image and the cache's import
+// stubs link to them there. Their code is the same in every process (stub_code_hash checks it, jitcache.cpp).
+constexpr u64 kStubBase = 0x2FFF00000ull, kStubSlot = 0x40000ull;
+u64 stub_code_hash();
+u64 stub_fixed_address(const char *install);  // 0: anywhere (X86CODE_A64_STUB_FIXED=0)
 struct StubLib { std::string install_name; int fd = -1; size_t size = 0; std::string path; };
 // Builds the arm64 stub dylib for one host library (exports from the cache placeholder's export trie).
 StubLib build_stub_dylib(const std::string &install_name, const std::vector<std::string> &exports);
