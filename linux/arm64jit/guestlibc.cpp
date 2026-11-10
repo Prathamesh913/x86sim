@@ -43,16 +43,41 @@ static const uint32_t kStrlen[] = {
     0xdac01063u, 0x8b430c21u, 0xcb000020u, 0xd65f03c0u,
 };
 
+// Perf 15: the next hottest platform calls of a cold Settings launch (strncmp ~820K, memchr ~210K, strchr ~210K;
+// strnlen) as byte loops (memchr scans 64 bytes, then hands the rest to the native function), and os_unfair_lock's uncontended paths
+// (~2M lock/unlock calls): one exclusive pair on the lock word with the owner value libplatform uses (TSD slot 3, the
+// thread's mach port, shared by the guest and native TSD); contention, waiters or a foreign owner go native (svc #0).
+// Sources: tests/arm64/guestlibc/{strncmp,memchr,strchr,strnlen,unfair_lock,unfair_unlock}.s.
+// X86CODE_A64_GUEST_LOCKS=0 keeps the lock functions native.
+static const uint32_t kStrncmp[] = {0xb4000102u, 0x38401403u, 0x38401424u, 0x6b040065u, 0x540000c1u, 0x34000063u,
+                                    0xf1000442u, 0x54ffff41u, 0x52800000u, 0xd65f03c0u, 0x2a0503e0u, 0xd65f03c0u};
+static const uint32_t kMemchr[] = {0x12001c21u, 0xb4000182u, 0xd2800804u, 0x39400003u, 0x6b01007fu, 0x54000120u, 0x91000400u, 0xf1000442u, 0x540000a0u, 0xf1000484u, 0x54ffff21u, 0xd4000001u, 0xd65f03c0u, 0xd2800000u, 0xd65f03c0u};
+static const uint32_t kStrchr[] = {0x12001c21u, 0x39400003u, 0x6b01007fu, 0x540000a0u, 0x34000063u,
+                                   0x91000400u, 0x17fffffbu, 0xd2800000u, 0xd65f03c0u};
+static const uint32_t kStrnlen[] = {0xaa0003e2u, 0xb40000c1u, 0x39400043u, 0x34000083u, 0x91000442u,
+                                    0xf1000421u, 0x54ffff81u, 0xcb000040u, 0xd65f03c0u};
+static const uint32_t kUnfairLock[] = {0xd53bd068u, 0xb9401909u, 0x885ffc0au, 0x3500008au, 0x880b7c09u,
+                                       0x35ffffabu, 0xd65f03c0u, 0xd5033f5fu, 0xd4000001u, 0xd65f03c0u};
+static const uint32_t kUnfairUnlock[] = {0xd53bd068u, 0xb9401909u, 0x885f7c0au, 0x6b09015fu, 0x54000081u, 0x880bfc1fu,
+                                         0x35ffff8bu, 0xd65f03c0u, 0xd5033f5fu, 0xd4000001u, 0xd65f03c0u};
+
 struct GuestFn { const char *name; const uint32_t *code; size_t n; };
 static const GuestFn kFns[] = {
     {"__platform_memmove", kMemmove, sizeof kMemmove / 4}, {"__platform_memcpy", kMemmove, sizeof kMemmove / 4},
     {"__platform_bzero", kBzero, sizeof kBzero / 4},       {"__platform_strcmp", kStrcmp, sizeof kStrcmp / 4},
     {"__platform_memcmp", kMemcmp, sizeof kMemcmp / 4},     {"__platform_strlen", kStrlen, sizeof kStrlen / 4},
+    {"__platform_strncmp", kStrncmp, sizeof kStrncmp / 4}, {"__platform_memchr", kMemchr, sizeof kMemchr / 4},
+    {"__platform_strchr", kStrchr, sizeof kStrchr / 4},     {"__platform_strnlen", kStrnlen, sizeof kStrnlen / 4},
+    {"_os_unfair_lock_lock", kUnfairLock, sizeof kUnfairLock / 4},
+    {"_os_unfair_lock_lock_with_options", kUnfairLock, sizeof kUnfairLock / 4},
+    {"_os_unfair_lock_unlock", kUnfairUnlock, sizeof kUnfairUnlock / 4},
 };
 
 static const GuestFn *find(const std::string &n) {
     static const bool on = !(getenv("X86CODE_A64_GUEST_LIBC") && atoi(getenv("X86CODE_A64_GUEST_LIBC")) == 0);
     if (!on) return nullptr;
+    static const bool locks = !(getenv("X86CODE_A64_GUEST_LOCKS") && atoi(getenv("X86CODE_A64_GUEST_LOCKS")) == 0);
+    if (!locks && n.rfind("_os_unfair_lock", 0) == 0) return nullptr;
     for (const auto &f : kFns) if (n == f.name) return &f;
     return nullptr;
 }
@@ -77,8 +102,8 @@ void svc_bench(GuestThread &t) {
                                      0xd63f0260u, 0xf10006b5u, 0x54ffffa1u, 0xa9417bf5u, 0xa8c253f3u, 0xd65f03c0u};
     auto *page = (uint32_t *)mmap(nullptr, 0x10000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     memcpy(page, kLoop, sizeof kLoop);
-    u64 at[8]{};
-    for (size_t k = 0; k < 6; k++) {
+    u64 at[16]{};
+    for (size_t k = 0; k < 10; k++) {
         const void *nat = dsym(kFns[k].name + 1);
         at[k] = (u64)(page + 64 * (k + 1));
         emit_guest_libc(kFns[k].name, page + 64 * (k + 1), nat ? add_thunk(kFns[k].name, h_generic, nat) : 0);
@@ -131,6 +156,20 @@ void svc_bench(GuestThread &t) {
                 memset(ref + a, 0, n);
                 t.call(at[2], (u64[]){(u64)(buf + a), n}, 2);
                 if (memcmp(ref, buf, 0x10000)) { bad++; fprintf(stderr, "bzero mismatch %#lx %zu\n", (unsigned long)a, n); }
+            }
+            {  // Perf 15: strncmp, memchr, strchr, strnlen
+                const size_t m = random() % 48;
+                long r = (int)t.call(at[6], (u64[]){(u64)(buf + a), (u64)(buf + b), m}, 3).rax;
+                if (sgn(r) != sgn(strncmp((char *)buf + a, (char *)buf + b, m))) { bad++; fprintf(stderr, "strncmp mismatch %#lx %#lx %zu\n", (unsigned long)a, (unsigned long)b, m); }
+                const int c = random() % 2 ? 'a' + random() % 3 : 0;
+                if (a + n < 0x10000) {
+                    u64 r2 = t.call(at[7], (u64[]){(u64)(buf + a), (u64)c, n}, 3).rax;
+                    if (r2 != (u64)memchr(buf + a, c, n)) { bad++; fprintf(stderr, "memchr mismatch %#lx %d %zu\n", (unsigned long)a, c, n); }
+                }
+                u64 r3 = t.call(at[8], (u64[]){(u64)(buf + a), (u64)c}, 2).rax;
+                if (r3 != (u64)strchr((char *)buf + a, c)) { bad++; fprintf(stderr, "strchr mismatch %#lx %d\n", (unsigned long)a, c); }
+                u64 r4 = t.call(at[9], (u64[]){(u64)(buf + a), m}, 2).rax;
+                if (r4 != strnlen((char *)buf + a, m)) { bad++; fprintf(stderr, "strnlen mismatch %#lx %zu\n", (unsigned long)a, m); }
             }
             if (bad > 10) break;
         }
