@@ -7,6 +7,12 @@
 // kept, malloc_destroy_zone leaks). Zones the guest builds itself and registers are called through their own guest
 // function pointers. Introspection enumerates nothing.
 #include "a64.h"
+#include "macho.h"
+#include <algorithm>
+#ifndef LC_FUNCTION_STARTS
+#define LC_FUNCTION_STARTS 0x26
+#endif
+#include <cstring>
 #include <cstdio>
 #include <map>
 #include <mutex>
@@ -54,8 +60,12 @@ void *aligned(size_t align, size_t size) { return gh_memalign(align, size); }
 void nfree(void *p) { gh_free(p); }
 
 // ---- plain API ----
-void h_malloc(GuestThread &t, u32) { t.set_x(0, (u64)n.malloc(t.x(0))); }
-void h_calloc(GuestThread &t, u32) { t.set_x(0, (u64)n.calloc(t.x(0), t.x(1))); }
+// Perf 16: the guest-code fast paths find this thread's gheap cache through TSD slot kHeapTsdSlot, set here (the first
+// call on a thread is always native)
+static bool g_fast_malloc;
+static inline void arm_fast(GuestThread &t) { if (g_fast_malloc && !t.tsd[kHeapTsdSlot]) t.tsd[kHeapTsdSlot] = (u64)gheap_thread_cache(); }
+void h_malloc(GuestThread &t, u32) { arm_fast(t); t.set_x(0, (u64)n.malloc(t.x(0))); }
+void h_calloc(GuestThread &t, u32) { arm_fast(t); t.set_x(0, (u64)n.calloc(t.x(0), t.x(1))); }
 void h_realloc(GuestThread &t, u32) { t.set_x(0, (u64)n.realloc((void *)t.x(0), t.x(1))); }
 void h_reallocf(GuestThread &t, u32) {
     void *p = n.realloc((void *)t.x(0), t.x(1));
@@ -74,7 +84,7 @@ void h_reallocarrayf(GuestThread &t, u32) {
     if (!p && s) nfree((void *)t.x(0));
     t.set_x(0, (u64)p);
 }
-void h_free(GuestThread &t, u32) { nfree((void *)t.x(0)); }
+void h_free(GuestThread &t, u32) { arm_fast(t); nfree((void *)t.x(0)); }
 void h_valloc(GuestThread &t, u32) { t.set_x(0, (u64)aligned(16384, t.x(0))); }
 void h_aligned_alloc(GuestThread &t, u32) { t.set_x(0, (u64)aligned(t.x(0), t.x(1))); }
 void h_posix_memalign(GuestThread &t, u32) {  // (void **, align, size)
@@ -290,11 +300,112 @@ void native_malloc_install() {
     for (auto &[name, addr] : g_exp)
         if (is_text(addr)) text[addr] = name;
         else if (handlers().count(name)) logf("native malloc: %s is not in __TEXT", name.c_str());
+    // Perf 16: malloc/calloc/free (and their malloc_type_ forms) get a guest-code fast path instead of the 2-word stub
+    // where the function has room for it (up to its next function start, LC_FUNCTION_STARTS); its `svc #0` slow path
+    // becomes this export's thunk. X86SIM_A64_GUEST_MALLOC=0: stubs only (code-shaping: the AOT image holds the patched
+    // code, so the builder must use the same setting; debug only).
+    static const uint32_t kFastMalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000269u, 0xf140201fu, 0x54000228u, 0x91003c0au,
+        0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu,
+        0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastCalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb40002c9u, 0x9bc17c08u, 0xb5000288u, 0x9b017c08u,
+        0xf140211fu, 0x54000228u, 0x91003d0au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu,
+        0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u,
+        0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastFree[] = {0xb4000540u, 0xd53bd069u, 0xf94bfd29u, 0xb4000509u, 0xd2c0006au, 0xeb0a000bu,
+        0x540004a3u, 0xd354fd6bu, 0xd2998010u, 0xeb10017fu, 0x54000422u, 0xf940f52cu, 0x386b698du, 0x340003cdu, 0x510005adu,
+        0xd289ec6fu, 0xf2a14f6fu, 0xf2d1c3afu, 0xf2ebe58fu, 0xf940040eu, 0xeb0f01dfu, 0x540002c0u, 0xf940fd30u, 0xb86d7a10u,
+        0x91050131u, 0xb86d7a28u, 0x6b10011fu, 0x54000202u, 0xf940f930u, 0xb86d7a10u, 0x7104021fu, 0x54000188u, 0xaa0003eeu,
+        0xa8817ddfu, 0x71004210u, 0x54ffffc1u, 0xf900040fu, 0xf86d792eu, 0xf900000eu, 0xf82d7920u, 0x11000508u, 0xb82d7a28u,
+        0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    g_fast_malloc = gheap_zeroes() && n.malloc == gh_malloc && !(getenv("X86SIM_A64_GUEST_MALLOC") && atoi(getenv("X86SIM_A64_GUEST_MALLOC")) == 0);
+    std::vector<u64> starts;  // libsystem_malloc's function starts (LC_FUNCTION_STARTS of the image in the cache)
+    if (g_fast_malloc) {
+        const auto *mh = (const mach_header_64 *)g_text_lo;
+        const uint8_t *lc = (const uint8_t *)(mh + 1);
+        u64 le = 0, text_vm = g_text_lo; uint32_t fs_off = 0, fs_size = 0;
+        for (uint32_t k = 0; k < mh->ncmds; k++, lc += ((const load_command *)lc)->cmdsize) {
+            auto *sg = (const segment_command_64 *)lc;
+            if (sg->cmd == LC_SEGMENT_64 && !strcmp(sg->segname, "__LINKEDIT")) le = sg->vmaddr - sg->fileoff;
+            if (sg->cmd == LC_FUNCTION_STARTS) { fs_off = ((const linkedit_data_command *)lc)->dataoff; fs_size = ((const linkedit_data_command *)lc)->datasize; }
+        }
+        const uint8_t *p = (const uint8_t *)(le + fs_off), *e = p + fs_size;
+        u64 a = text_vm;
+        while (le && fs_size && p < e) {
+            u64 v = 0; int sh = 0;
+            while (p < e) { uint8_t b = *p++; v |= (u64)(b & 0x7f) << sh; sh += 7; if (!(b & 0x80)) break; }
+            if (!v) break;
+            a += v; starts.push_back(a);
+        }
+        if (starts.empty()) g_fast_malloc = false;
+    }
+    // A fast path longer than its function (free's tail-call target has 84 bytes, malloc/calloc 20-24) goes into dead
+    // space: libsystem_malloc's internal functions that are neither an export nor the tail-call target of one (every
+    // way into this image is patched, so their code never runs). The function itself gets `b` to it. Taken in address
+    // order, so every process (and the AOT builder) writes the same code to the same places.
+    std::vector<std::pair<u64, u64>> pool;  // [start, end) of dead functions
+    if (g_fast_malloc) {
+        std::set<u64> live;
+        for (auto &[addr, name] : text) {
+            live.insert(addr);
+            uint32_t ins = *(uint32_t *)addr;
+            if ((ins & 0xFC000000u) == 0x14000000u) live.insert(addr + (u64)((int64_t)((int32_t)(ins << 6) >> 6) * 4));
+        }
+        for (size_t k = 0; k + 1 < starts.size(); k++)
+            if (!live.count(starts[k]) && starts[k + 1] - starts[k] >= 64) pool.push_back({starts[k], starts[k + 1]});
+    }
+    size_t pool_i = 0;
+    auto pool_take = [&](size_t bytes) -> u64 {
+        for (; pool_i < pool.size(); pool_i++)
+            if (pool[pool_i].second - pool[pool_i].first >= bytes) {
+                const u64 a = pool[pool_i].first;
+                pool[pool_i].first = (a + bytes + 15) & ~15ull;
+                return a;
+            }
+        return 0;
+    };
+    int fast = 0;
     auto patch = [&](u64 addr, const std::string &name, Handler h) {
-        u64 page = addr & ~0xfffull, len = ((addr + 8 + 0xfff) & ~0xfffull) - page;
+        const uint32_t *fc = nullptr; size_t fn = 0;
+        if (g_fast_malloc) {
+            if (h == h_malloc || h == ht_malloc) { fc = kFastMalloc; fn = sizeof kFastMalloc / 4; }
+            else if (h == h_calloc || h == ht_calloc) { fc = kFastCalloc; fn = sizeof kFastCalloc / 4; }
+            else if (h == h_free) { fc = kFastFree; fn = sizeof kFastFree / 4; }
+            if (fc && std::find(starts.begin(), starts.end(), addr) == starts.end()) fc = nullptr;
+        }
+        u64 at = addr;  // where the fast path goes
+        if (fc) {
+            auto nx = std::upper_bound(starts.begin(), starts.end(), addr);
+            if (nx == starts.end() || *nx - addr < fn * 4) {
+                at = pool_take(fn * 4);
+                if (!at || (int64_t)(at - addr) >= (128 << 20) || (int64_t)(addr - at) > (128 << 20)) { at = addr; fc = nullptr; }
+            }
+        }
+        if (fc && at != addr) {  // the fast path in dead space, a branch to it here
+            u64 page = at & ~0xfffull, len = ((at + fn * 4 + 0xfff) & ~0xfffull) - page;
+            std::lock_guard g(g_text_patch_mu);
+            if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) die("native malloc: mprotect %#lx", (unsigned long)page);
+            const u32 idx = add_thunk(name, h);
+            for (size_t k = 0; k < fn; k++) ((uint32_t *)at)[k] = fc[k] == 0xd4000001u ? 0xd4000001u | idx << 5 : fc[k];
+            mprotect((void *)page, len, PROT_READ | PROT_EXEC);
+            u64 page2 = addr & ~0xfffull, len2 = ((addr + 4 + 0xfff) & ~0xfffull) - page2;
+            if (mprotect((void *)page2, len2, PROT_READ | PROT_WRITE | PROT_EXEC)) die("native malloc: mprotect %#lx", (unsigned long)page2);
+            *(uint32_t *)addr = 0x14000000u | (uint32_t)(((int64_t)(at - addr) >> 2) & 0x3ffffff);  // b at
+            mprotect((void *)page2, len2, PROT_READ | PROT_EXEC);
+            fast++;
+            patched++;
+            return;
+        }
+        const size_t bytes = fc ? fn * 4 : 8;
+        u64 page = addr & ~0xfffull, len = ((addr + bytes + 0xfff) & ~0xfffull) - page;
         std::lock_guard g(g_text_patch_mu);
         if (mprotect((void *)page, len, PROT_READ | PROT_WRITE | PROT_EXEC)) die("native malloc: mprotect %#lx", (unsigned long)page);
-        emit_stub((uint32_t *)addr, add_thunk(name, h));
+        const u32 idx = add_thunk(name, h);
+        if (fc) {
+            for (size_t k = 0; k < fn; k++) ((uint32_t *)addr)[k] = fc[k] == 0xd4000001u ? 0xd4000001u | idx << 5 : fc[k];
+            fast++;
+        } else {
+            emit_stub((uint32_t *)addr, idx);
+        }
         mprotect((void *)page, len, PROT_READ | PROT_EXEC);
         patched++;
     };
@@ -318,7 +429,7 @@ void native_malloc_install() {
         targets[target] = fn;
         patch(target, name + " (target)", fn);
     }
-    if (getenv("X86SIM_A64_STATS")) logf("native malloc: %d libsystem_malloc exports patched (%d without a handler)", patched, unknown);
+    if (getenv("X86SIM_A64_STATS")) logf("native malloc: %d libsystem_malloc exports patched (%d without a handler, %d with a guest fast path)", patched, unknown, fast);
 }
 
 }  // namespace a64

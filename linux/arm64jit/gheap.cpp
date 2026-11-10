@@ -66,9 +66,16 @@ struct Native {
     size_t (*size)(const void *);
 } d;
 
+uint32_t g_limit[kClasses];  // limit_for(c), for the guest-code fast paths
 struct Cache {
+    // Perf 16: the first fields are read and written by the guest-code malloc/calloc/free fast paths
+    // (tests/arm64/guestmalloc/*.s; guest TSD slot kHeapTsdSlot points here): offsets fixed below.
     FreeBlock *head[kClasses] = {};
     uint32_t count[kClasses] = {};
+    const uint8_t *class_of = g_class_of;
+    const uint8_t *chunk_class = g_chunk_class;
+    const uint32_t *class_size = g_class_size;
+    const uint32_t *limit = g_limit;
     uint8_t fills[kClasses] = {};  // refills so far (the batch doubles from 1 block)
     Cache *next = nullptr, **prev = nullptr;  // all thread caches (stats)
     Cache();
@@ -82,6 +89,8 @@ Cache::Cache() {
     if (g_caches) g_caches->prev = &next;
     g_caches = this;
 }
+static_assert(offsetof(Cache, count) == 320 && offsetof(Cache, class_of) == 480 && offsetof(Cache, chunk_class) == 488 &&
+              offsetof(Cache, class_size) == 496 && offsetof(Cache, limit) == 504, "guest-code malloc offsets");
 thread_local Cache t_cache;
 void start_scavenger();
 
@@ -97,6 +106,7 @@ void init_classes() {
     for (uint32_t base = 128; base < kMaxSmall; base *= 2)
         for (int k = 1; k <= 4; k++) g_class_size[c++] = base + base / 4 * k;
     if (c != kClasses) die("gheap: %d classes", c);
+    for (int k = 0; k < kClasses; k++) g_limit[k] = limit_for(k);
     for (size_t q = 0, k = 0; q <= kMaxSmall / 16; q++) {
         while (g_class_size[k] < q * 16) k++;
         g_class_of[q] = (uint8_t)k;
@@ -229,6 +239,9 @@ void *large_alloc(size_t size, size_t align) {
 }  // namespace
 
 void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *)) { d.free = nfree; d.size = nsize; }
+
+void *gheap_thread_cache() { return &t_cache; }
+bool gheap_zeroes() { return g_zero; }
 
 size_t gh_size(const void *p) {
     int c = class_of_ptr((u64)p);
