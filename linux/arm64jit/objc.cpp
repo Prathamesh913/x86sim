@@ -242,8 +242,13 @@ void native_objc_configure_jit(Dynarmic::A64::UserConfig &c) {
     c.inline_objc_msgsend = g_msgsend;
     c.inline_objc_uncached = g_uncached;
     c.inline_objc_tagged = g_tagged;
-    c.inline_objc_hit_counter = &fixed_data().objc_hits;
-    c.inline_objc_miss_counter = &fixed_data().objc_misses;
+    // Perf 1f: the hit/miss counters were a `lock incq` on one shared word in every objc_msgSend, all threads (~3% of
+    // a cold Settings launch on the instruction after it), for a debug line (native_objc_stats, X86CODE_A64_STATS).
+    // X86CODE_A64_OBJC_COUNT=1 emits them again; the image is built without them, so only code translated live counts.
+    if (getenv("X86CODE_A64_OBJC_COUNT") && atoi(getenv("X86CODE_A64_OBJC_COUNT")) == 1) {
+        c.inline_objc_hit_counter = &fixed_data().objc_hits;
+        c.inline_objc_miss_counter = &fixed_data().objc_misses;
+    }
 }
 
 void native_objc_stats() {

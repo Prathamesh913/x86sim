@@ -11,7 +11,9 @@
 #include "macho.h"
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <optional>
+#include <unordered_map>
 
 namespace a64 {
 
@@ -96,10 +98,51 @@ const char *install_name(u64 mh, size_t &len) {
     return "";
 }
 
-// 1 match, 0 no match, -1 the guest must do this one
-int matches(u64 ld, const char *path, size_t plen) {
+// Perf 3: a loader's path and install name (its LC_ID_DYLIB) as length + hash, computed once per loader: the scan
+// compared every loader's full path with strcmp (simulator paths share a ~150-byte prefix) and walked a dylib's load
+// commands for its install name, per loader, per lookup (~1300 loaders, thousands of lookups per process). The hashes
+// only skip loaders that cannot match; a candidate is still compared in full, so the answer is the same. An entry is
+// recomputed when the address holds a different loader (its mach header or flags word differ: reuse after dlclose).
+u64 str_hash(const char *s, size_t n) {
+    u64 h = 0xcbf29ce484222325ull;
+    for (size_t i = 0; i < n; i++) h = (h ^ (uint8_t)s[i]) * 0x100000001b3ull;
+    return h;
+}
+struct LdInfo {
+    u64 mh, f, path_hash, in_hash;
+    const char *in;
+    uint32_t path_len, in_len;
+};
+std::mutex g_ld_mu;  // held for a whole dyld_scan_step
+std::unordered_map<u64, LdInfo> g_ld;
+const bool g_ld_cache = !(getenv("X86CODE_A64_DYLD_SCAN_CACHE") && atoi(getenv("X86CODE_A64_DYLD_SCAN_CACHE")) == 0);
+const LdInfo &ld_info(u64 ld, u64 f) {
+    const u64 mh = *(const u64 *)(ld + 0x20);
+    LdInfo &e = g_ld[ld];
+    if (e.mh != mh || e.f != f || !e.path_len) {
+        const char *p = (const char *)(ld + (f & 0xffff));
+        const size_t pl = strlen(p);
+        e = LdInfo{mh, f, str_hash(p, pl), 0, "", (uint32_t)pl, 0};
+        if (f & (1u << 20)) {
+            size_t n;
+            e.in = install_name(mh, n);
+            e.in_len = (uint32_t)n;
+            e.in_hash = str_hash(e.in, n);
+        }
+    }
+    return e;
+}
+
+// 1 match, 0 no match, -1 the guest must do this one. ph: str_hash(path, plen)
+int matches(u64 ld, const char *path, size_t plen, u64 ph) {
     if (*(const uint32_t *)ld != kJitLoaderMagic) return -1;
     const u64 f = *(const u64 *)(ld + 0x28);
+    if (g_ld_cache) {
+        const LdInfo &e = ld_info(ld, f);
+        if (e.path_len == plen && e.path_hash == ph && !memcmp(path, (const char *)(ld + (f & 0xffff)), plen)) return 1;
+        if ((f & (1u << 20)) && e.in_len == plen && e.in_hash == ph && !memcmp(e.in, path, plen)) return 1;
+        return *(const u64 *)(ld + 0x68) ? -1 : 0;
+    }
     if (!strcmp(path, (const char *)(ld + (f & 0xffff)))) return 1;
     if (f & (1u << 20)) {
         size_t n;
@@ -127,8 +170,10 @@ void dyld_scan_step(GuestThread &t, bool b) {
     const char *path = (const char *)t.x(b ? 19 : 21);
     const u64 state = *(const u64 *)(t.x(b ? 20 : 19) + 0x38);
     const size_t plen = strlen(path);
+    const u64 ph = g_ld_cache ? str_hash(path, plen) : 0;
     const int rc = b ? 27 : 26, rn = b ? 22 : 28;
     u64 cur = t.x(rc), left = t.x(rn);
+    std::lock_guard<std::mutex> lk(g_ld_mu);
     for (;;) {
         if (*(const uint32_t *)(vec + (b ? 0x20 : 0x40)) != gen) {
             t.set_x(rc, cur), t.set_x(rn, left);
@@ -136,7 +181,7 @@ void dyld_scan_step(GuestThread &t, bool b) {
             return;
         }
         const u64 ld = *(const u64 *)cur;
-        const int m = matches(ld, path, plen);
+        const int m = matches(ld, path, plen, ph);
         if (m < 0) {
             t.set_x(rc, cur), t.set_x(rn, left);
             t.jit->SetPC(head + 0xc);
@@ -161,12 +206,38 @@ void dyld_scan_step(GuestThread &t, bool b) {
     }
 }
 
+// Perf 1: dyld4::APIs::dyld_shared_cache_some_image_overridden() returns RuntimeState's overridden-cached-dylib count
+// != 0 (JustInTimeLoader::make counts every image loaded from outside the cache at a path the cache has). Our
+// libsystem_kernel/platform/pthread stub dylibs (stubdylib.cpp: the native host libraries) are three such images by
+// design, so it was always true, and libswiftCore then registers every shared-cache image's conformance section
+// (addImageProtocolConformanceBlockCallbackUnsafe) instead of using the cache's precomputed conformance tables:
+// swift_conformsToProtocol misses walked 612 cache sections (~346K records) on top of the dyld lookups, ~6M native
+// round trips in a cold Settings launch. The stubs carry no Swift conformances and no ObjC classes, so the cache's
+// Swift and ObjC tables stay exact for them; every other on-disk copy of a cached image is hidden from dyld_sim
+// (host.cpp dyld_hides), so these stubs are the only overrides left. Its "ldr w19, [x0, #0x418]" (the count) reads
+// "mov w19, #0". X86CODE_A64_DYLD_OVERRIDES=1 keeps dyld's answer.
+// Applied by the AOT builder too (jitcache.cpp), so the image's dyld_sim chunk is translated from the same words.
+constexpr uint32_t kOverriddenCount[] = {0xb9441813u /* ldr w19, [x0, #0x418] */, 0xf9400408u /* ldr x8, [x0, #8] */};
+
+static void patch_overridden(u64 slide) {
+    if (const char *e = getenv("X86CODE_A64_DYLD_OVERRIDES"); e && atoi(e) == 1) return;
+    for (u64 a = kSearchLo; a + 8 < kSearchHi; a += 4) {
+        auto *q = (uint32_t *)(slide + a);
+        if (q[0] == kOverriddenCount[0] && q[1] == kOverriddenCount[1]) {
+            q[0] = 0x52800013u;  // mov w19, #0
+            return;
+        }
+    }
+    logf("dyld_sim some_image_overridden: count load not found; not patched");
+}
+
 void dyld_sim_patches(u64 slide) {
     if (const char *e = getenv("X86CODE_A64_DYLD_SCAN"); !e || atoi(e) != 0) {
         g_loop_a = find_loop(slide, kLoopA, sizeof kLoopA / 4);
         g_loop_b = find_loop(slide, kLoopB, sizeof kLoopB / 4);
         if (!g_loop_a || !g_loop_b) logf("dyld_sim loader scan: loops not found (%#llx %#llx)", (unsigned long long)g_loop_a, (unsigned long long)g_loop_b);
     }
+    patch_overridden(slide);
     if (const char *e = getenv("X86CODE_A64_DYLD_NATIVE"); e && atoi(e) == 0) return;
     // bl Loader::image; add x0, sp, #8; bl Header::installName  ->  bl kInstallName; nop; nop
     uint32_t *p = nullptr;

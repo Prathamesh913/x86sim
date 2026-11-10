@@ -5,6 +5,7 @@
 #include <malloc.h>
 #include <thread>
 #include <map>
+#include <unordered_set>
 #include <array>
 #include <mutex>
 #include <string>
@@ -180,9 +181,69 @@ static void map_commpage() {
 // placement table goes to that file's slot instead (file size/mtime checked; once per process).
 static thread_local const Placement *tl_open_place;
 static thread_local int tl_open_fd = -1;
+
+// Perf 1: the sim cache records no inode/mtime for its images (all 0) and expects them on disk, so dyld_sim takes any
+// file at a cached image's path for a root: it loads that copy instead of the cache's and counts an overridden cached
+// dylib, which turns off libswiftCore's use of the cache's precomputed conformance tables in every process (see
+// dyldsim.cpp patch_overridden). ensure-metal-framework.sh puts such a copy at Metal.framework/Metal (CFBundle and the
+// MTLCompilerService XPC lookup need the file; dyld must not use it). dyld_sim's stat and open answer ENOENT for every
+// path under the runtime root that names an image of the cache, so dyld takes the cache's copy (one copy of Metal's
+// ObjC classes, already translated in the image); everything else in the process (CFBundle, xpc) uses the native calls
+// and still finds the file. The libsystem stub dylibs are answered before this (stub_fd_for_path).
+// X86CODE_A64_DYLD_HIDE_CACHED=0 shows those files to dyld_sim again.
+static std::string g_sim_root;
+static std::unordered_set<std::string> g_cached_paths;
+static void load_cached_paths(const std::string &cache, const std::string &root) {
+    if (const char *e = getenv("X86CODE_A64_DYLD_HIDE_CACHED"); e && atoi(e) == 0) return;
+    int fd = d_open(cache.c_str(), O_RDONLY);
+    if (fd < 0) return;
+    uint8_t h[0x200];
+    if (pread(fd, h, sizeof h, 0) == (ssize_t)sizeof h) {
+        uint32_t io, ic;  // dyld_cache_header.imagesOffset / imagesCount (0x1c0 / 0x1c4)
+        memcpy(&io, h + 0x1c0, 4);
+        memcpy(&ic, h + 0x1c4, 4);
+        if (io && ic && ic < 20000) {
+            std::vector<uint8_t> raw((size_t)ic * 32);
+            if (pread(fd, raw.data(), raw.size(), io) == (ssize_t)raw.size()) {
+                g_cached_paths.reserve(ic);
+                for (uint32_t i = 0; i < ic; i++) {
+                    uint32_t po;  // dyld_cache_image_info.pathFileOffset
+                    memcpy(&po, raw.data() + (size_t)i * 32 + 24, 4);
+                    char p[512];
+                    ssize_t n = pread(fd, p, sizeof p - 1, po);
+                    if (n <= 0) continue;
+                    p[n] = 0;
+                    g_cached_paths.emplace(p);
+                }
+            }
+        }
+    }
+    close(fd);
+    if (!g_cached_paths.empty()) g_sim_root = root;
+}
+// path names a shared-cache image under the runtime root (the cache's own copy is used, not this file)
+static bool dyld_hides(const char *path) {
+    if (g_sim_root.empty() || strncmp(path, g_sim_root.c_str(), g_sim_root.size()) != 0) return false;
+    const char *rel = path + g_sim_root.size();
+    while (rel[0] == '/' && rel[1] == '/') rel++;
+    return *rel == '/' && g_cached_paths.count(rel);
+}
+static void set_guest_errno(int e) {
+    static auto *derr = (int *(*)())dsym("__error");
+    if (derr) *derr() = e;
+}
+
 static void h_helper_open(GuestThread &t, u32) {
     const char *path = (const char *)t.x(0);
     int fd = stub_fd_for_path(path);
+    if (fd < 0 && dyld_hides(path)) {
+        if (g_trace) logf("dyld_sim open %s -> hidden (cache image)", path);
+        set_guest_errno(2);  // ENOENT
+        tl_open_place = nullptr;
+        tl_open_fd = -1;
+        t.set_x(0, (u64)(int64_t)-1);
+        return;
+    }
     if (fd < 0) fd = d_open(path, (int)t.x(1), (int)t.stack_slot(0));
     if (g_trace) logf("dyld_sim open %s -> %d", path, fd);
     tl_open_place = fd >= 0 ? placement_find(path) : nullptr;
@@ -235,6 +296,7 @@ static void h_helper_stat(GuestThread &t, u32) {
     int fd = stub_fd_for_path((const char *)t.x(0));
     int r;
     if (fd >= 0) { r = dfstat(fd, (void *)t.x(1)); close(fd); }
+    else if (dyld_hides((const char *)t.x(0))) { set_guest_errno(2); r = -1; }  // ENOENT: dyld uses the cache's copy
     else r = dstat((const char *)t.x(0), (void *)t.x(1));
     t.set_x(0, (u64)(int64_t)r);
 }
@@ -1191,6 +1253,7 @@ extern "C" __attribute__((visibility("default"))) int a64_host_main(int argc, ch
     ax_euid_prepare(cache);  // libAccessibility's root check (handlers.cpp h_geteuid)
     jitcache_prepare(cache, exe);
     read_const_mappings(cache);
+    load_cached_paths(cache, root);  // Perf 1: on-disk copies of cache images hidden from dyld_sim
     double t_stubs = ms_since(g_t0);
 
     // Keep the cache's fixed range free for dyld_sim's MAP_FIXED mappings (RAM 13: and placed files up to 0x300000000).

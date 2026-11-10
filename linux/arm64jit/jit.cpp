@@ -40,7 +40,8 @@ static Dynarmic::ExclusiveMonitor *monitor() {
 }
 static std::atomic<size_t> g_next_cpu{0};
 static std::atomic<int> g_live_threads{0};  // GuestThreads alive (profiling)
-static thread_local GuestThread *t_self;
+// Perf 1: initial-exec (GuestThread::self() runs on every native call; 8 bytes of glibc's static TLS surplus)
+static thread_local GuestThread *t_self __attribute__((tls_model("initial-exec")));
 static thread_local struct Owner { GuestThread *t = nullptr; ~Owner() { delete t; } } t_owner;
 
 // Darling's threads end without running the ELF's thread_local destructors: a native (Darling) TSD key with a
@@ -796,6 +797,7 @@ GuestThread::GuestThread() {
     auto rss = [] { long v = 0; if (FILE *f = fopen("/proc/self/statm", "r")) { long a, b, c2; if (fscanf(f, "%ld %ld %ld", &a, &b, &c2) == 3) v = (b - c2) * 4; fclose(f); } return v; };
     long before = rss_debug ? rss() : 0;
     jit = make_jit(c);
+    st = jit->GetStatePointers();
     if (rss_debug) { struct mallinfo2 mi = mallinfo2(); logf("new Jit: anon RSS +%ld kB; glibc mmapped %zu MB in %zu blocks, arena %zu MB", rss() - before, mi.hblkhd >> 20, mi.hblks, mi.arena >> 20); }
     g_live_threads++;
     stack_size = 8u << 20;
@@ -810,6 +812,7 @@ void GuestThread::reset_after_unwind() {
     depth = 0; done = nullptr; in_thunk = -1; native = false;
     (void)jit.release();
     jit = make_jit(cfg);
+    st = jit->GetStatePointers();
 }
 GuestThread::~GuestThread() { gbt_forget(this); susp_thread_fini(*this); gsample_forget(this); g_live_threads--; munmap((void *)stack_base, stack_size); free(tsd); }
 
@@ -883,9 +886,26 @@ static void profile_tick() {
     timespec c; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &c);
     Dynarmic::A64::Jit::SharedStats st{};
     if (shared_translations()) st = Dynarmic::A64::Jit::GetSharedStats(*shared_code(GuestThread::self().cfg));
-    logf("profile: wall %.1fs cpu %.1fs translate %.1fs blocks %llu insns %llu code %.1f MB lookups %llu threads %d",
+    logf("profile: wall %.1fs cpu %.1fs translate %.1fs blocks %llu insns %llu code %.1f MB lookups %llu threads %d"
+         " | getblock %llu thunk %llu l0 %llu probe %llu lf %llu",
          (now - start) / 1e9, c.tv_sec + c.tv_nsec / 1e9, st.translate_ns / 1e9, (unsigned long long)st.blocks,
-         (unsigned long long)st.guest_instructions, st.code_bytes / 1048576.0, (unsigned long long)st.lookups, g_live_threads.load());
+         (unsigned long long)st.guest_instructions, st.code_bytes / 1048576.0, (unsigned long long)st.lookups, g_live_threads.load(),
+         (unsigned long long)st.getblock, (unsigned long long)st.thunk, (unsigned long long)st.l0_hits,
+         (unsigned long long)st.probe_hits, (unsigned long long)st.lf_hits);
+    std::string top;
+    for (const auto &[n, pc] : Dynarmic::A64::Jit::TopThunkTargets(12)) {
+        char b[48];
+        snprintf(b, sizeof b, " %#llx:%llu", (unsigned long long)pc, (unsigned long long)n);
+        top += b;
+    }
+    if (!top.empty()) logf("profile: dispatcher lookups by pc:%s", top.c_str());
+    top.clear();
+    for (const auto &[n, ra] : Dynarmic::A64::Jit::TopThunkTargets(8, true)) {
+        char b[48];
+        snprintf(b, sizeof b, " %#llx:%llu", (unsigned long long)ra, (unsigned long long)n);
+        top += b;
+    }
+    if (!top.empty()) logf("profile: dispatcher lookups by emitted call site:%s", top.c_str());
 }
 
 // RAM 4 (host.cpp file trim): fn(arg) under the shared emitter lock; false when there is no shared cache (yet).
@@ -918,7 +938,7 @@ void memlog_shared_stats() {
 }
 
 void GuestThread::CallSVC(uint32_t swi) {
-    const u64 pc0 = jit->GetPC();  // svc+4
+    const u64 pc0 = *st.pc;  // svc+4 (Perf 1e: direct)
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kSwiftConfSvc) { swiftconf_step(*this); return; }
     if (swi == kSwiftConfVerifySvc) { swiftconf_verify(*this); return; }

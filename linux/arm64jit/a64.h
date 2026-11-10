@@ -45,6 +45,8 @@ using Handler = void (*)(GuestThread &, u32 index);
 // process-wide translation cache.
 struct GuestThread final : Dynarmic::A64::UserCallbacks {
     std::unique_ptr<Dynarmic::A64::Jit> jit;
+    // Perf 1e: jit's register storage (Jit::GetStatePointers), refreshed whenever jit is (re)created
+    Dynarmic::A64::Jit::StatePointers st{};
     u64 stack_base = 0, stack_size = 0;
     u64 tpidr = 0, tpidrro = 0;
     static constexpr int kGuestTsdSlots = 768;
@@ -81,11 +83,12 @@ struct GuestThread final : Dynarmic::A64::UserCallbacks {
     NRet call(u64 pc, const u64 *ints, int nints, const u64 *fps = nullptr, int nfps = 0);
     u64 call(u64 pc, std::initializer_list<u64> args) { std::vector<u64> v(args); return call(pc, v.data(), (int)v.size()).rax; }
 
-    u64 x(int i) { return jit->GetRegister(i); }
-    void set_x(int i, u64 v) { jit->SetRegister(i, v); }
-    u64 d(int i) { return jit->GetVector(i)[0]; }
-    void set_d(int i, u64 bits) { jit->SetVector(i, {bits, 0}); }
-    u64 sp() { return jit->GetSP(); }
+    // Perf 1e: direct reads/writes of the Jit's state (same semantics as GetRegister & co: index 31 is SP)
+    u64 x(int i) { return i == 31 ? *st.sp : st.reg[i]; }
+    void set_x(int i, u64 v) { if (i == 31) *st.sp = v; else st.reg[i] = v; }
+    u64 d(int i) { return st.vec[2 * i]; }
+    void set_d(int i, u64 bits) { st.vec[2 * i] = bits; st.vec[2 * i + 1] = 0; }
+    u64 sp() { return *st.sp; }
     u64 stack_slot(int i) { return *(u64 *)(sp() + 8 * i); }
 
     // Top-byte-ignore: Darwin arm64 code dereferences pointers with tag bits in the top byte (Swift's _StringObject
