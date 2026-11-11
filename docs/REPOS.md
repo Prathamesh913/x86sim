@@ -107,5 +107,38 @@ git push origin upstream/<main|master>:refs/heads/<main|master>   # keep the mir
 For the top-level darling, after merging upstream re-check `.gitmodules` (new upstream submodules
 come in with relative URLs and must be made absolute) and our submodule pointers.
 
+Merge, don't rebase, once `x86sim` is pushed: this repo's history pins submodule commits by SHA, and a rebased
+`x86sim` leaves them unreachable (`repos.sh upstream-sync --apply` rebases; use its dry run for the report only).
+After a merge, check our own lines survived (`git diff -U0 <base> <ours>`: every `+` line still in the tree) and
+the lines upstream deleted in files we changed: git drops a base line upstream removed without a conflict even when
+our code relies on it (libkqueue's `kqueue_closed_fd` lost its four deletes that way). Picked upstream commits can
+bump submodule pointers without moving the checkouts; `git submodule status` shows `+` for those, and a later
+`commit -a` would record the old checkout again.
+
+### Upstream sync 2026-11-10
+
+Upstream Darling became very active (2026-11-06..09: arm64 Linux hosts, launcher hardening, many fixes). darling,
+darling-xnu and darlingserver were not merged: upstream xnu and mldr call darlingserver RPCs ours lacks (code
+signing, file refs, pthread cancel, system config, platform identity), xnu moves libkqueue into libsystem_kernel,
+and the launcher hardening breaks the userns mode (`setgroups` EPERM) and drops darlingserver's `X86SIM_*` and
+`DSERVER_*` environment. Fixes that need none of that were cherry-picked (`-x`, so `git log --grep 'cherry picked
+from'` lists them):
+- **darlingserver** (19): SIGPIPE from dead clients, task_info on dying tasks, truncated datagrams dropped, a reply
+  failing for one destination dropped, reply-push pipe closed, descriptor index checks, fork() woken only by its
+  fork child's check-in (plus EINTR retry), psynch_cvwait timeout saturation, thread_get/setstatus, fd soft limit,
+  physical core count, small duct-tape stubs.
+- **darling-xnu** (37): psynch generation numbers and errno, recvfrom flags, lstat, thread_switch without the 1 ms
+  sleep, clock_gettime through the host vDSO, signal re-raise on the faulting thread (not the process group),
+  signals on threads without a server connection, spawn's CLOEXEC_DEFAULT sparing Darling's descriptors, fork
+  failure, pselect timespec, SO_SNDTIMEO, ptrace, vchroot host symlinks, statfs/semctl/futimes/fclonefileat, sysctls.
+- **darling** (39): mldr RPC socket and lifetime-pipe placement, CPUID capability bits from the right registers,
+  read-only commpage, thread stack guards, segment tail pages, launchd job fixes and XPC opcode-0 routines,
+  shellspawn (taken whole up to 40887b5d8, before it waits for the system configuration), wrapgen vector registers,
+  libm exp10, clang/MIG/DESTDIR build fixes. CTest stays off (its `test` target collides with shell_cmds').
+Merged from upstream: metal2vulkan (all), libkqueue (all but 64f45f2, which needs xnu's signal watch), iokitd
+(power assertions, registry/MIG fixes; our no-EGL IOSurfaceRoot, IO master port and MIG deallocate kept; no platform
+identity), libxpc, libplatform (AVX2 string routines), libpthread, libunwind, objc4 (now a release build), sqlite,
+dyld up to b15ee64 (the hardened-runtime commits after it need xnu's system config and sealing calls).
+
 Pushing needs SSH: the gh OAuth token lacks the `workflow` scope, so HTTPS pushes of upstream
 history containing `.github/workflows` are rejected.
