@@ -95,7 +95,7 @@ void h_posix_memalign(GuestThread &t, u32) {  // (void **, align, size)
     *(void **)t.x(0) = p;
     t.set_x(0, 0);
 }
-void h_size(GuestThread &t, u32) { t.set_x(0, n.size((void *)t.x(0))); }
+void h_size(GuestThread &t, u32) { arm_fast(t); t.set_x(0, n.size((void *)t.x(0))); }
 void h_good_size(GuestThread &t, u32) { arm_fast(t); t.set_x(0, n.good_size(t.x(0))); }
 void h_claimed(GuestThread &t, u32) { t.set_x(0, n.size((void *)t.x(0)) != 0); }
 
@@ -321,9 +321,14 @@ void native_malloc_install() {
     // Perf 17: the zone API for the default zone, malloc_default_zone and malloc_good_size (tests/arm64/guestmalloc)
     static const uint32_t kFastDefaultZone[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000089u, 0xf941012au, 0xf9400140u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
     static const uint32_t kFastGoodSize[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000149u, 0xf140201fu, 0x54000108u, 0x91003c0au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0xf940f92bu, 0xb86a7960u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
-    static const uint32_t kFastZoneMalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb40002e9u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x54000261u, 0xf140203fu, 0x54000228u, 0x91003c2au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
-    static const uint32_t kFastZoneCalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000349u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x540002c1u, 0x9bc27c28u, 0xb5000288u, 0x9b027c28u, 0xf140211fu, 0x54000228u, 0x91003d0au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
-    static const uint32_t kFastZoneFree[] = {0xd53bd069u, 0xf94bfd29u, 0xb40005a9u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x54000521u, 0xb40004e1u, 0xd2c0006au, 0xeb0a002bu, 0x540004a3u, 0xd354fd6bu, 0xd2998010u, 0xeb10017fu, 0x54000422u, 0xf940f52cu, 0x386b698du, 0x340003cdu, 0x510005adu, 0xd289ec6fu, 0xf2a14f6fu, 0xf2d1c3afu, 0xf2ebe58fu, 0xf940042eu, 0xeb0f01dfu, 0x540002c0u, 0xf940fd30u, 0xb86d7a10u, 0x91050131u, 0xb86d7a28u, 0x6b10011fu, 0x54000202u, 0xf940f930u, 0xb86d7a10u, 0x7104021fu, 0x54000188u, 0xaa0103eeu, 0xa8817ddfu, 0x71004210u, 0x54ffffc1u, 0xf900042fu, 0xf86d792eu, 0xf900002eu, 0xf82d7921u, 0x11000508u, 0xb82d7a28u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastZoneMalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000389u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x540000c0u, 0xb40002e0u, 0xf9400c0bu, 0xf9400d4au, 0xeb0a017fu, 0x54000261u, 0xf140203fu, 0x54000228u, 0x91003c2au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u
+};
+    static const uint32_t kFastZoneCalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb40003e9u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x540000c0u, 0xb4000340u, 0xf9400c0bu, 0xf9400d4au, 0xeb0a017fu, 0x540002c1u, 0x9bc27c28u, 0xb5000288u, 0x9b027c28u, 0xf140211fu, 0x54000228u, 0x91003d0au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u
+};
+    static const uint32_t kFastMallocSize[] = {0xd53bd069u, 0xf94bfd29u, 0xb40001e9u, 0xd2c0006au, 0xeb0a000bu, 0x54000183u, 0xd354fd6bu, 0xd2998010u, 0xeb10017fu, 0x54000102u, 0xf940f52cu, 0x386b698du, 0x340000adu, 0x510005adu, 0xf940f930u, 0xb86d7a00u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u
+};  // Perf 22
+    static const uint32_t kFastZoneFree[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000649u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x540000c0u, 0xb40005a0u, 0xf9400c0bu, 0xf9400d4au, 0xeb0a017fu, 0x54000521u, 0xb40004e1u, 0xd2c0006au, 0xeb0a002bu, 0x540004a3u, 0xd354fd6bu, 0xd2998010u, 0xeb10017fu, 0x54000422u, 0xf940f52cu, 0x386b698du, 0x340003cdu, 0x510005adu, 0xd289ec6fu, 0xf2a14f6fu, 0xf2d1c3afu, 0xf2ebe58fu, 0xf940042eu, 0xeb0f01dfu, 0x540002c0u, 0xf940fd30u, 0xb86d7a10u, 0x91050131u, 0xb86d7a28u, 0x6b10011fu, 0x54000202u, 0xf940f930u, 0xb86d7a10u, 0x7104021fu, 0x54000188u, 0xaa0103eeu, 0xa8817ddfu, 0x71004210u, 0x54ffffc1u, 0xf900042fu, 0xf86d792eu, 0xf900002eu, 0xf82d7921u, 0x11000508u, 0xb82d7a28u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u
+};
     g_fast_malloc = gheap_zeroes() && n.malloc == gh_malloc && !(getenv("X86SIM_A64_GUEST_MALLOC") && atoi(getenv("X86SIM_A64_GUEST_MALLOC")) == 0);
     std::vector<u64> starts;  // libsystem_malloc's function starts (LC_FUNCTION_STARTS of the image in the cache)
     if (g_fast_malloc) {
@@ -382,6 +387,7 @@ void native_malloc_install() {
             else if (h == hz_calloc || h == hz_type_calloc) { fc = kFastZoneCalloc; fn = sizeof kFastZoneCalloc / 4; }
             else if (h == h_default_zone) { fc = kFastDefaultZone; fn = sizeof kFastDefaultZone / 4; }
             else if (h == h_good_size) { fc = kFastGoodSize; fn = sizeof kFastGoodSize / 4; }
+            else if (h == h_size) { fc = kFastMallocSize; fn = sizeof kFastMallocSize / 4; }
             if (fc && std::find(starts.begin(), starts.end(), addr) == starts.end()) fc = nullptr;
         }
         u64 at = addr;  // where the fast path goes

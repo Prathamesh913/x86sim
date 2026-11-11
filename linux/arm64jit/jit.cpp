@@ -766,6 +766,10 @@ GuestThread::GuestThread() {
     tsd = (u64 *)calloc(kGuestTsdSlots, 8);
     native_tsd = (u64 *)gs;
     if (gs) memcpy(tsd, (void *)gs, 10 * 8);
+    {  // Perf 22: guest TSD slot 766 = 1 on the main thread, 2 elsewhere (pthread_main_np's guest code; 0: ask natively)
+        static auto *main_np = (void *(*)())dsym("pthread_main_thread_np");
+        if (gs && main_np) tsd[766] = tsd[0] == (u64)main_np() ? 1 : 2;
+    }
     tpidrro = (u64)tsd;
     Dynarmic::A64::UserConfig &c = cfg;
     c.callbacks = this;

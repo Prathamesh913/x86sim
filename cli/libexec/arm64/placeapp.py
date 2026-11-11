@@ -4,7 +4,8 @@
 # key would shift every System/ slot and force their image chunks to rebuild). New keys go after the highest slot; a
 # reinstalled file (other size/mtime) keeps its slot when it still fits. Afterwards `x86sim-aot update` builds the
 # app tier's chunks (one per file, keyed by the Mach-O UUID + a hash of the file + its slot).
-#   placeapp.py JC_DIR APP_DIR...   (APP_DIR: <device>/data/Containers/Bundle/Application/<UUID>/<Name>.app)
+#   placeapp.py JC_DIR APP_DIR...   (APP_DIR: <device>/data/Containers/Bundle/Application/<UUID>/<Name>.app, or a
+#                                   single Mach-O file, e.g. a RuntimeRoot framework outside the dyld cache)
 #   placeapp.py --prune JC_DIR [DATA_DIR]   (Speed 35, uninstall: drop every Containers/ row whose container exists on
 #                                           no phone; exit 0 = placement changed, 3 = nothing pruned)
 import os, sys
@@ -54,7 +55,9 @@ def main():
             changed += 1
             print(f"placeapp: pruned stale {r[4]}")
     for app in apps:
-        for d, _, fs in os.walk(os.path.realpath(app)):
+        rp = os.path.realpath(app)  # Perf 22: a file names itself (RuntimeRoot frameworks a process loads)
+        walk = [(os.path.dirname(rp), [], [os.path.basename(rp)])] if os.path.isfile(rp) else os.walk(rp)
+        for d, _, fs in walk:
             for n in sorted(fs):
                 p = os.path.join(d, n)
                 if os.path.islink(p) or not os.path.isfile(p):

@@ -43,7 +43,8 @@ static void h_key_create(GuestThread &t, u32 i) {  // int pthread_key_create(pth
     u64 fps[8] = {}; NRet r;
     a64_ncall(g_thunks[i].native, ints, fps, &r);
     if ((int)r.rax == 0 && key_ptr) set_guest_key_destructor(*(u64 *)key_ptr, dtor);
-    if ((int)r.rax == 0 && key_ptr && *(u64 *)key_ptr == (u64)kHeapTsdSlot) logf("pthread_key_create: key %d is the guest-code malloc's TSD slot", kHeapTsdSlot);
+    if ((int)r.rax == 0 && key_ptr && (*(u64 *)key_ptr == (u64)kHeapTsdSlot || *(u64 *)key_ptr == 766))
+        logf("pthread_key_create: key %lu is a slot the guest-code fast paths use", (unsigned long)*(u64 *)key_ptr);
     t.set_x(0, r.rax);
 }
 static void h_key_init_np(GuestThread &t, u32 i) {  // int pthread_key_init_np(int key, void (*dtor)(void *))

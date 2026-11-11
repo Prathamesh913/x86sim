@@ -359,7 +359,14 @@ pub fn plan(p: &Paths, cfg: &Config) -> Result<Plan> {
     } else {
         built.iter().map(|r| r.used).sum::<u64>() as f64 / built.iter().map(|r| r.blocks).sum::<u64>() as f64
     };
-    let bpb: HashMap<String, f64> = built.iter().map(|r| (r.name.clone(), r.used as f64 / r.blocks as f64)).collect();
+    // Perf 22: a truncated chunk's own bytes per block too (its blocks are as dense as the full set's): with the mean
+    // instead its estimate fit the slot it overflows, and update rebuilt it there, truncated again
+    let bpb: HashMap<String, f64> = man0
+        .chunks
+        .values()
+        .filter(|r| r.blocks >= 256 && r.used > 0 && (r.state == "built" || r.state == "truncated"))
+        .map(|r| (r.name.clone(), r.used as f64 / r.blocks as f64))
+        .collect();
     // a measurement (x86sim-aot measure: every chunk translated without a size limit) gives real sizes
     let measured: HashMap<String, (u64, u64)> = std::fs::read(p.aot.join("measure.json"))
         .ok()
@@ -830,7 +837,14 @@ fn build_once(p: &Paths, cfg: &Config, opts: &BuildOpts, on_progress: &mut dyn F
         match r {
             Some(r) if r.slot_size >= c.want && r.slot_size > 0 => false,
             Some(r) if r.slot_size > 0 && r.state != "truncated" => false,
-            Some(r) if r.slot_size > 0 && r.key == c.key && c.src.kind != Kind::App => false,
+            // Perf 22: a truncated library chunk rebuilt for feedback (.live blocks it lacks) moves to a slot its
+            // hot set fits: in its own slot the rebuild dropped them again (the slot was sized for the first build's
+            // training), so its processes translated the same blocks live on every start (Settings: 3.4K blocks a
+            // launch + first page in chunks truncated this way; 410K blocks over the image).
+            // (truncated: its slot held fewer blocks than the hot set has now, whatever the size estimate says)
+            Some(r) if r.slot_size > 0 && r.key == c.key && c.src.kind != Kind::App => {
+                (r.state == "truncated" && c.hot.len() as u64 > r.blocks) || c.est_hot + c.est_hot / 8 > r.slot_size
+            }
             // Speed 35: the same library at the same address (only the translator / code-shaping flags changed, e.g. a
             // codegen bump) is rebuilt in its own slot too: a codegen bump keeps the image's layout and coverage
             Some(r) if r.slot_size > 0 && r.ident == c.src.ident && r.addr == c.src.addr && c.src.kind != Kind::App => false,

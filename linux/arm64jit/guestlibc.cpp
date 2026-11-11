@@ -71,6 +71,16 @@ static const uint32_t kQosDecode[] = {0x52800009u, 0x5280000au, 0x52a4400eu, 0xe
 static const uint32_t kRecLock[] = {0xd53bd068u, 0xb9401909u, 0x885ffc0au, 0x3500008au, 0x880b7c09u, 0x35ffffabu, 0xd65f03c0u, 0xd5033f5fu, 0x3200014cu, 0x6b09019fu, 0x540000a1u, 0xb940040du, 0x110005adu, 0xb900040du, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
 static const uint32_t kRecUnlock[] = {0xd53bd068u, 0xb9401909u, 0xb940040du, 0x3400010du, 0xb940000au, 0x3200014cu, 0x6b09019fu, 0x54000161u, 0x510005adu, 0xb900040du, 0xd65f03c0u, 0x885f7c0au, 0x6b09015fu, 0x54000081u, 0x880bfc1fu, 0x35ffff8bu, 0xd65f03c0u, 0xd5033f5fu, 0xd4000001u, 0xd65f03c0u};
 
+// Perf 22: calls a SwiftUI navigation in Settings made natively ~10-35K times each: kdebug_trace/kdebug_is_enabled
+// (tracing is never on: 0), os_unfair_lock_assert_owner (owned: return), pthread_main_np (guest TSD slot 766 flag)
+// (sources tests/arm64/guestlibc/{kdebug_zero,assert_owner,main_np}.s)
+static const uint32_t kKdebugZero[] = {0x52800000u, 0xd65f03c0u
+};
+static const uint32_t kAssertOwner[] = {0xd53bd068u, 0xb9401909u, 0xb940000au, 0x3200014au, 0x6b09015fu, 0x54000041u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u
+};
+static const uint32_t kMainNp[] = {0xd53bd068u, 0xf94bf909u, 0xb4000089u, 0xf100053fu, 0x1a9f17e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u
+};
+
 struct GuestFn { const char *name; const uint32_t *code; size_t n; };
 static const GuestFn kFns[] = {
     {"__platform_memmove", kMemmove, sizeof kMemmove / 4}, {"__platform_memcpy", kMemmove, sizeof kMemmove / 4},
@@ -85,6 +95,10 @@ static const GuestFn kFns[] = {
     {"__pthread_qos_class_decode", kQosDecode, sizeof kQosDecode / 4},
     {"_os_unfair_recursive_lock_lock_with_options", kRecLock, sizeof kRecLock / 4},
     {"_os_unfair_recursive_lock_unlock", kRecUnlock, sizeof kRecUnlock / 4},
+    {"_kdebug_trace", kKdebugZero, sizeof kKdebugZero / 4},
+    {"_kdebug_is_enabled", kKdebugZero, sizeof kKdebugZero / 4},
+    {"_os_unfair_lock_assert_owner", kAssertOwner, sizeof kAssertOwner / 4},
+    {"_pthread_main_np", kMainNp, sizeof kMainNp / 4},
 };
 
 static const GuestFn *find(const std::string &n) {

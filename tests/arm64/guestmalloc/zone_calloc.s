@@ -1,11 +1,17 @@
-// malloc_zone_calloc(zone, n, size) / malloc_type_zone_calloc(zone, n, size, type) (Perf 17): calloc.s, default zone
+// malloc_zone_calloc(zone, n, size) / malloc_type_zone_calloc(zone, n, size, type) (Perf 17): calloc.s, our zones
 	mrs x9, tpidrro_el0
 	ldr x9, [x9, #6136]
 	cbz x9, 9f
 	ldr x10, [x9, #512]
 	ldr x10, [x10]
 	cmp x0, x10
+	b.eq 7f
+	cbz x0, 9f
+	ldr x11, [x0, #24]
+	ldr x10, [x10, #24]
+	cmp x11, x10
 	b.ne 9f
+7:
 	umulh x8, x1, x2
 	cbnz x8, 9f
 	mul x8, x1, x2

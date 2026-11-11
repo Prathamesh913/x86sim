@@ -1,11 +1,17 @@
-// malloc_zone_malloc(zone, size) / malloc_type_zone_malloc(zone, size, type) (Perf 17): malloc.s for the default zone
+// malloc_zone_malloc(zone, size) / malloc_type_zone_malloc(zone, size, type) (Perf 17): malloc.s for any of our zones (the default zone, or one whose malloc slot (+24) is the default zone's stub: every zone malloc_create_zone makes)
 	mrs x9, tpidrro_el0
 	ldr x9, [x9, #6136]
 	cbz x9, 9f
 	ldr x10, [x9, #512]
 	ldr x10, [x10]
 	cmp x0, x10
+	b.eq 7f
+	cbz x0, 9f
+	ldr x11, [x0, #24]
+	ldr x10, [x10, #24]
+	cmp x11, x10
 	b.ne 9f
+7:
 	cmp x1, #8, lsl #12
 	b.hi 9f
 	add x10, x1, #15
