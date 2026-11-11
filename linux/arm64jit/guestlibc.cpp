@@ -61,6 +61,16 @@ static const uint32_t kUnfairLock[] = {0xd53bd068u, 0xb9401909u, 0x885ffc0au, 0x
 static const uint32_t kUnfairUnlock[] = {0xd53bd068u, 0xb9401909u, 0x885f7c0au, 0x6b09015fu, 0x54000081u, 0x880bfc1fu,
                                          0x35ffff8bu, 0xd65f03c0u, 0xd5033f5fu, 0xd4000001u, 0xd65f03c0u};
 
+// Perf 18: libpthread's QoS encode/decode (SpringBoard ~280K calls), pure arithmetic as in Darling's libpthread qos.c
+// (sources tests/arm64/guestlibc/qos_{encode,decode}.s; GUESTLIB_TEST compares them with the native functions).
+static const uint32_t kQosEncode[] = {0x92681c48u, 0x528000c9u, 0x7100841fu, 0x54000220u, 0x528000a9u, 0x7100641fu, 0x540001c0u, 0x52800089u, 0x7100541fu, 0x54000160u, 0x52800069u, 0x7100441fu, 0x54000100u, 0x52800049u, 0x7100241fu, 0x540000a0u, 0x52800029u, 0x7100141fu, 0x54000040u, 0x14000008u, 0x11001d2au, 0x5280002bu, 0x1aca216bu, 0xaa0b0108u, 0x5100042cu, 0x12001d8cu, 0xaa0c0108u, 0xaa0803e0u, 0xd65f03c0u};
+static const uint32_t kQosDecode[] = {0x52800009u, 0x5280000au, 0x52a4400eu, 0xea0e001fu, 0x54000161u, 0xf2721c1fu, 0x54000121u, 0xf278141fu, 0x540000e0u, 0x5308540bu, 0x5ac0016bu, 0x5ac0116bu, 0x11000569u, 0x13001c0au, 0x1100054au, 0xb4000062u, 0x92681c0cu, 0xf900004cu, 0xb4000041u, 0xb900002au, 0x71001d3fu, 0x54000082u, 0x100000adu, 0x386969a0u, 0xd65f03c0u, 0x52800000u, 0xd65f03c0u, 0x11090500u, 0x00211915u};
+
+// Perf 18: os_unfair_recursive_lock lock/unlock (SpringBoard ~228K calls), as Darling's libplatform lock.c
+// (sources tests/arm64/guestlibc/rec_{lock,unlock}.s); X86SIM_A64_GUEST_LOCKS=0 keeps them native too.
+static const uint32_t kRecLock[] = {0xd53bd068u, 0xb9401909u, 0x885ffc0au, 0x3500008au, 0x880b7c09u, 0x35ffffabu, 0xd65f03c0u, 0xd5033f5fu, 0x3200014cu, 0x6b09019fu, 0x540000a1u, 0xb940040du, 0x110005adu, 0xb900040du, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+static const uint32_t kRecUnlock[] = {0xd53bd068u, 0xb9401909u, 0xb940040du, 0x3400010du, 0xb940000au, 0x3200014cu, 0x6b09019fu, 0x54000161u, 0x510005adu, 0xb900040du, 0xd65f03c0u, 0x885f7c0au, 0x6b09015fu, 0x54000081u, 0x880bfc1fu, 0x35ffff8bu, 0xd65f03c0u, 0xd5033f5fu, 0xd4000001u, 0xd65f03c0u};
+
 struct GuestFn { const char *name; const uint32_t *code; size_t n; };
 static const GuestFn kFns[] = {
     {"__platform_memmove", kMemmove, sizeof kMemmove / 4}, {"__platform_memcpy", kMemmove, sizeof kMemmove / 4},
@@ -71,13 +81,17 @@ static const GuestFn kFns[] = {
     {"_os_unfair_lock_lock", kUnfairLock, sizeof kUnfairLock / 4},
     {"_os_unfair_lock_lock_with_options", kUnfairLock, sizeof kUnfairLock / 4},
     {"_os_unfair_lock_unlock", kUnfairUnlock, sizeof kUnfairUnlock / 4},
+    {"__pthread_qos_class_encode", kQosEncode, sizeof kQosEncode / 4},
+    {"__pthread_qos_class_decode", kQosDecode, sizeof kQosDecode / 4},
+    {"_os_unfair_recursive_lock_lock_with_options", kRecLock, sizeof kRecLock / 4},
+    {"_os_unfair_recursive_lock_unlock", kRecUnlock, sizeof kRecUnlock / 4},
 };
 
 static const GuestFn *find(const std::string &n) {
     static const bool on = !(getenv("X86SIM_A64_GUEST_LIBC") && atoi(getenv("X86SIM_A64_GUEST_LIBC")) == 0);
     if (!on) return nullptr;
     static const bool locks = !(getenv("X86SIM_A64_GUEST_LOCKS") && atoi(getenv("X86SIM_A64_GUEST_LOCKS")) == 0);
-    if (!locks && n.rfind("_os_unfair_lock", 0) == 0) return nullptr;
+    if (!locks && n.rfind("_os_unfair_", 0) == 0) return nullptr;
     for (const auto &f : kFns) if (n == f.name) return &f;
     return nullptr;
 }
@@ -103,7 +117,7 @@ void svc_bench(GuestThread &t) {
     auto *page = (uint32_t *)mmap(nullptr, 0x10000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     memcpy(page, kLoop, sizeof kLoop);
     u64 at[16]{};
-    for (size_t k = 0; k < 10; k++) {
+    for (size_t k = 0; k < 15; k++) {
         const void *nat = dsym(kFns[k].name + 1);
         at[k] = (u64)(page + 64 * (k + 1));
         emit_guest_libc(kFns[k].name, page + 64 * (k + 1), nat ? add_thunk(kFns[k].name, h_generic, nat) : 0);
@@ -171,9 +185,29 @@ void svc_bench(GuestThread &t) {
                 u64 r4 = t.call(at[9], (u64[]){(u64)(buf + a), m}, 2).rax;
                 if (r4 != strnlen((char *)buf + a, m)) { bad++; fprintf(stderr, "strnlen mismatch %#lx %zu\n", (unsigned long)a, m); }
             }
+            {  // Perf 18: QoS encode/decode against Darling's native functions
+                static auto *nenc = (u64 (*)(u32, int, u64))dsym("_pthread_qos_class_encode");
+                static auto *ndec = (u32 (*)(u64, int *, u64 *))dsym("_pthread_qos_class_decode");
+                static const u32 qcs[] = {0, 5, 9, 0x11, 0x15, 0x19, 0x21, 7, 0x40};
+                const u32 qc = qcs[random() % 9];
+                const int rel = (int)(random() % 24) - 20;
+                const u64 fl = ((u64)random() << 32) ^ (u64)random();
+                if (nenc) {
+                    const u64 g = t.call(at[13], (u64[]){qc, (u64)(u32)rel, fl}, 3).rax, n = nenc(qc, rel, fl);
+                    if (g != n) { bad++; fprintf(stderr, "qos_encode mismatch qc %#x rel %d flags %#lx: %#lx vs %#lx\n", qc, rel, (unsigned long)fl, (unsigned long)g, (unsigned long)n); }
+                }
+                if (ndec) {
+                    u64 pp = random() % 2 ? (nenc ? nenc(qc, rel, fl) : 0) : (((u64)random() << 32) ^ (u64)random());
+                    if (random() % 2) pp &= 0xffffffffull;
+                    int gr = -99, nr = -99; u64 gf = 1, nf = 1;
+                    const u32 g = (u32)t.call(at[14], (u64[]){pp, (u64)&gr, (u64)&gf}, 3).rax, n = ndec(pp, &nr, &nf);
+                    if (g != n || gr != nr || gf != nf) { bad++; fprintf(stderr, "qos_decode mismatch pp %#lx: %#x/%d/%#lx vs %#x/%d/%#lx\n", (unsigned long)pp, g, gr, (unsigned long)gf, n, nr, (unsigned long)nf); }
+                }
+            }
             if (bad > 10) break;
         }
-        fprintf(stderr, "guestlib test: %d iterations, %d mismatches\n", runs, bad);
+        fprintf(stderr, "guestlib test: %d iterations, %d mismatches (qos natives %s)\n", runs, bad,
+                dsym("_pthread_qos_class_encode") && dsym("_pthread_qos_class_decode") ? "compared" : "NOT FOUND");
     }
     exit(0);
 }
