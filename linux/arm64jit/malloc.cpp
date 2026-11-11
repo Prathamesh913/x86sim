@@ -96,7 +96,7 @@ void h_posix_memalign(GuestThread &t, u32) {  // (void **, align, size)
     t.set_x(0, 0);
 }
 void h_size(GuestThread &t, u32) { t.set_x(0, n.size((void *)t.x(0))); }
-void h_good_size(GuestThread &t, u32) { t.set_x(0, n.good_size(t.x(0))); }
+void h_good_size(GuestThread &t, u32) { arm_fast(t); t.set_x(0, n.good_size(t.x(0))); }
 void h_claimed(GuestThread &t, u32) { t.set_x(0, n.size((void *)t.x(0)) != 0); }
 
 // ---- zone API: (zone, ...) ----
@@ -108,11 +108,11 @@ enum { Z_SIZE = 2, Z_MALLOC, Z_CALLOC, Z_VALLOC, Z_FREE, Z_REALLOC, Z_DESTROY, Z
 // A guest zone not made by us: forward to its own function pointer.
 #define FOREIGN(word, ...) \
     if (!ours(t.x(0))) { t.set_x(0, t.call(zone_fn(t.x(0), word), {__VA_ARGS__})); return; }
-void hz_malloc(GuestThread &t, u32) { FOREIGN(Z_MALLOC, t.x(0), t.x(1)); t.set_x(0, (u64)n.malloc(t.x(1))); }
-void hz_calloc(GuestThread &t, u32) { FOREIGN(Z_CALLOC, t.x(0), t.x(1), t.x(2)); t.set_x(0, (u64)n.calloc(t.x(1), t.x(2))); }
+void hz_malloc(GuestThread &t, u32) { arm_fast(t); FOREIGN(Z_MALLOC, t.x(0), t.x(1)); t.set_x(0, (u64)n.malloc(t.x(1))); }
+void hz_calloc(GuestThread &t, u32) { arm_fast(t); FOREIGN(Z_CALLOC, t.x(0), t.x(1), t.x(2)); t.set_x(0, (u64)n.calloc(t.x(1), t.x(2))); }
 void hz_valloc(GuestThread &t, u32) { FOREIGN(Z_VALLOC, t.x(0), t.x(1)); t.set_x(0, (u64)aligned(16384, t.x(1))); }
 void hz_realloc(GuestThread &t, u32) { FOREIGN(Z_REALLOC, t.x(0), t.x(1), t.x(2)); t.set_x(0, (u64)n.realloc((void *)t.x(1), t.x(2))); }
-void hz_free(GuestThread &t, u32) { FOREIGN(Z_FREE, t.x(0), t.x(1)); nfree((void *)t.x(1)); }
+void hz_free(GuestThread &t, u32) { arm_fast(t); FOREIGN(Z_FREE, t.x(0), t.x(1)); nfree((void *)t.x(1)); }
 void hz_size(GuestThread &t, u32) { FOREIGN(Z_SIZE, t.x(0), t.x(1)); t.set_x(0, n.size((void *)t.x(1))); }
 void hz_memalign(GuestThread &t, u32) { FOREIGN(Z_MEMALIGN, t.x(0), t.x(1), t.x(2)); t.set_x(0, (u64)aligned(t.x(1), t.x(2))); }
 void hz_free_def(GuestThread &t, u32) { nfree((void *)t.x(1)); }
@@ -183,7 +183,7 @@ void register_zone(u64 z) {
     if (u64 a = g_exp["_malloc_num_zones"]) *(u32 *)a = g_nzones;
 }
 
-void h_default_zone(GuestThread &t, u32) { t.set_x(0, (u64)g_default); }
+void h_default_zone(GuestThread &t, u32) { arm_fast(t); t.set_x(0, (u64)g_default); }
 void h_create_zone(GuestThread &t, u32) {  // (start_size, flags)
     GuestZone *z = make_zone("");
     register_zone((u64)z);
@@ -292,6 +292,7 @@ void native_malloc_install() {
     g_zone_array = (u64 *)n.calloc(64, 8);
     g_default = make_zone("DefaultMallocZone");
     register_zone((u64)g_default);
+    gheap_set_default_zone((u64)g_default);
     if (u64 a = g_exp["_malloc_zones"]) *(u64 **)a = g_zone_array;
     // The cache's text is mapped read+exec from the file (private): make each page writable while patching.
     int patched = 0, unknown = 0;
@@ -317,6 +318,12 @@ void native_malloc_install() {
         0x91050131u, 0xb86d7a28u, 0x6b10011fu, 0x54000202u, 0xf940f930u, 0xb86d7a10u, 0x7104021fu, 0x54000188u, 0xaa0003eeu,
         0xa8817ddfu, 0x71004210u, 0x54ffffc1u, 0xf900040fu, 0xf86d792eu, 0xf900000eu, 0xf82d7920u, 0x11000508u, 0xb82d7a28u,
         0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    // Perf 17: the zone API for the default zone, malloc_default_zone and malloc_good_size (tests/arm64/guestmalloc)
+    static const uint32_t kFastDefaultZone[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000089u, 0xf941012au, 0xf9400140u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastGoodSize[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000149u, 0xf140201fu, 0x54000108u, 0x91003c0au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0xf940f92bu, 0xb86a7960u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastZoneMalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb40002e9u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x54000261u, 0xf140203fu, 0x54000228u, 0x91003c2au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastZoneCalloc[] = {0xd53bd069u, 0xf94bfd29u, 0xb4000349u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x540002c1u, 0x9bc27c28u, 0xb5000288u, 0x9b027c28u, 0xf140211fu, 0x54000228u, 0x91003d0au, 0xd344fd4au, 0xf940f12bu, 0x386a696au, 0x8b0a0d2du, 0xf94001acu, 0xb400014cu, 0xf940018eu, 0xf90001aeu, 0x9105012fu, 0xb86a79f0u, 0x51000610u, 0xb82a79f0u, 0xa9007d9fu, 0xaa0c03e0u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
+    static const uint32_t kFastZoneFree[] = {0xd53bd069u, 0xf94bfd29u, 0xb40005a9u, 0xf941012au, 0xf940014au, 0xeb0a001fu, 0x54000521u, 0xb40004e1u, 0xd2c0006au, 0xeb0a002bu, 0x540004a3u, 0xd354fd6bu, 0xd2998010u, 0xeb10017fu, 0x54000422u, 0xf940f52cu, 0x386b698du, 0x340003cdu, 0x510005adu, 0xd289ec6fu, 0xf2a14f6fu, 0xf2d1c3afu, 0xf2ebe58fu, 0xf940042eu, 0xeb0f01dfu, 0x540002c0u, 0xf940fd30u, 0xb86d7a10u, 0x91050131u, 0xb86d7a28u, 0x6b10011fu, 0x54000202u, 0xf940f930u, 0xb86d7a10u, 0x7104021fu, 0x54000188u, 0xaa0103eeu, 0xa8817ddfu, 0x71004210u, 0x54ffffc1u, 0xf900042fu, 0xf86d792eu, 0xf900002eu, 0xf82d7921u, 0x11000508u, 0xb82d7a28u, 0xd65f03c0u, 0xd4000001u, 0xd65f03c0u};
     g_fast_malloc = gheap_zeroes() && n.malloc == gh_malloc && !(getenv("X86SIM_A64_GUEST_MALLOC") && atoi(getenv("X86SIM_A64_GUEST_MALLOC")) == 0);
     std::vector<u64> starts;  // libsystem_malloc's function starts (LC_FUNCTION_STARTS of the image in the cache)
     if (g_fast_malloc) {
@@ -370,6 +377,11 @@ void native_malloc_install() {
             if (h == h_malloc || h == ht_malloc) { fc = kFastMalloc; fn = sizeof kFastMalloc / 4; }
             else if (h == h_calloc || h == ht_calloc) { fc = kFastCalloc; fn = sizeof kFastCalloc / 4; }
             else if (h == h_free) { fc = kFastFree; fn = sizeof kFastFree / 4; }
+            else if (h == hz_free) { fc = kFastZoneFree; fn = sizeof kFastZoneFree / 4; }
+            else if (h == hz_malloc || h == hz_type_malloc) { fc = kFastZoneMalloc; fn = sizeof kFastZoneMalloc / 4; }
+            else if (h == hz_calloc || h == hz_type_calloc) { fc = kFastZoneCalloc; fn = sizeof kFastZoneCalloc / 4; }
+            else if (h == h_default_zone) { fc = kFastDefaultZone; fn = sizeof kFastDefaultZone / 4; }
+            else if (h == h_good_size) { fc = kFastGoodSize; fn = sizeof kFastGoodSize / 4; }
             if (fc && std::find(starts.begin(), starts.end(), addr) == starts.end()) fc = nullptr;
         }
         u64 at = addr;  // where the fast path goes

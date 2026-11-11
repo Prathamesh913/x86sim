@@ -233,6 +233,7 @@ u64 stub_code_hash();
 u64 stub_fixed_address(const char *install);  // 0: anywhere (X86SIM_A64_STUB_FIXED=0)
 void *gheap_thread_cache();  // Perf 16: this thread's gheap Cache (guest-code malloc fast paths)
 bool gheap_zeroes();
+void gheap_set_default_zone(u64 z);
 constexpr int kHeapTsdSlot = 767;  // guest TSD slot holding gheap_thread_cache() (set by the native malloc handlers)
 struct StubLib { std::string install_name; int fd = -1; size_t size = 0; std::string path; };
 // Builds the arm64 stub dylib for one host library (exports from the cache placeholder's export trie).

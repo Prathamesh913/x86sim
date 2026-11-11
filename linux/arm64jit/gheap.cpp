@@ -67,6 +67,7 @@ struct Native {
 } d;
 
 uint32_t g_limit[kClasses];  // limit_for(c), for the guest-code fast paths
+u64 g_default_zone;          // malloc.cpp's guest-side default zone (Perf 17: malloc_default_zone / zone fast paths)
 struct Cache {
     // Perf 16: the first fields are read and written by the guest-code malloc/calloc/free fast paths
     // (tests/arm64/guestmalloc/*.s; guest TSD slot kHeapTsdSlot points here): offsets fixed below.
@@ -76,6 +77,7 @@ struct Cache {
     const uint8_t *chunk_class = g_chunk_class;
     const uint32_t *class_size = g_class_size;
     const uint32_t *limit = g_limit;
+    const u64 *default_zone = &g_default_zone;
     uint8_t fills[kClasses] = {};  // refills so far (the batch doubles from 1 block)
     Cache *next = nullptr, **prev = nullptr;  // all thread caches (stats)
     Cache();
@@ -90,7 +92,8 @@ Cache::Cache() {
     g_caches = this;
 }
 static_assert(offsetof(Cache, count) == 320 && offsetof(Cache, class_of) == 480 && offsetof(Cache, chunk_class) == 488 &&
-              offsetof(Cache, class_size) == 496 && offsetof(Cache, limit) == 504, "guest-code malloc offsets");
+              offsetof(Cache, class_size) == 496 && offsetof(Cache, limit) == 504 && offsetof(Cache, default_zone) == 512,
+              "guest-code malloc offsets");
 thread_local Cache t_cache;
 void start_scavenger();
 
@@ -242,6 +245,7 @@ void gheap_set_native(void (*nfree)(void *), size_t (*nsize)(const void *)) { d.
 
 void *gheap_thread_cache() { return &t_cache; }
 bool gheap_zeroes() { return g_zero; }
+void gheap_set_default_zone(u64 z) { g_default_zone = z; }
 
 size_t gh_size(const void *p) {
     int c = class_of_ptr((u64)p);

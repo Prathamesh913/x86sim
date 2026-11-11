@@ -958,6 +958,8 @@ void memlog_shared_stats() {
 
 void GuestThread::CallSVC(uint32_t swi) {
     const u64 pc0 = *st.pc;  // svc+4 (Perf 1e: direct)
+    // Perf 17: every special svc is >= kMaxThunks (0xff00); a thunk call skips their ~15 compares
+    if (__builtin_expect(swi < 0xff00u, 1)) goto thunk_call;
     if (swi == kExitSvc) { *done = true; jit->HaltExecution(); return; }
     if (swi == kSwiftConfSvc) { swiftconf_step(*this); return; }
     if (swi == kSwiftConfVerifySvc) { swiftconf_verify(*this); return; }
@@ -1064,6 +1066,7 @@ void GuestThread::CallSVC(uint32_t swi) {
     if (swi == kLinuxSvc) {  // our in-simulator code's escape to a Linux syscall (x8 = x86_64 number, x0-x5 args)
         set_x(0, (u64)syscall((long)x(8), x(0), x(1), x(2), x(3), x(4), x(5)));
     } else {
+    thunk_call:
         svc_count++;
         if (g_profile && (svc_count & 1023) == 0) profile_tick();
         if (swi >= thunk_count()) die("svc #%u at %#lx: no such thunk", swi, (unsigned long)jit->GetPC() - 4);
