@@ -17,8 +17,8 @@ design, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Apple's iOS 27 simulator runtime**, not included: `runtime-fetch.py` downloads it straight from Apple's catalogue
   (no Mac, no Apple ID). It needs [`ipsw`](https://github.com/blacktop/ipsw) and 7-Zip.
 - **No Mac to run it.** The simulator-side binaries in `host/` and `tests/` are committed. Rebuilding them works on
-  Linux with Apple's SDKs copied once into `sdks/` (see *Simulator-side binaries*); only Metal shader sources still need
-  a Mac to compile.
+  Linux: `make sdks` sets up the SDKs without a Mac or an Apple ID (see *Simulator-side binaries*); only Metal shader
+  sources and the Swift parts still need Xcode's SDK.
 
 ## Layout
 
@@ -114,13 +114,28 @@ rendering), `A64_JOBS=min|slim|std|full`, `A64_DROP="label ..."`, `X86SIM_NODT=a
 The Mach-O files in `host/` and `tests/` (`simhost`, `arm64host`, `SimFramebuffer.framework`, `SimulatorHID.framework`,
 `libsimshim.dylib`, `libsimaudio.dylib`, `iosurfaced`, `metalhostd`, `fpsim2host`, `netconfig`, `openurl`, `mtlprobe`,
 `iosprobe`, the probes, diagnostic shims and sample apps) are our own code and are committed, so nothing needs building
-to run. To rebuild them on Linux, copy Apple's SDKs once into `sdks/` (gitignored, never committed:
-`iPhoneSimulator.sdk` and `MacOSX.sdk` from Xcode, plus `swift-6.4.2/` from swift.org and `swift-lib/` from Xcode's
-toolchain for the Swift parts; `cargo install apple-codesign` for signing), then run the usual scripts, e.g. `make mac`
-and `build/mac-build-arm64-shims.sh`: with `sdks/` present they build locally (`build/linux-env.sh`: clang + ld64.lld,
-`build/linux-swiftc.sh`). `X86SIM_BUILD=mac` with `X86SIM_MAC=user@mac` builds on a Mac over ssh instead. Metal shader
-sources are the exception: `build/linux-metal.sh` serves recorded Mac-built libraries (`build/metal-cache`) and a changed
-shader still needs a Mac.
+to run. To rebuild them on Linux, put the SDKs in `sdks/` (gitignored, never committed), then run the usual scripts,
+e.g. `make mac` and `build/mac-build-arm64-shims.sh`: with `sdks/` present they build locally (`build/linux-env.sh`:
+clang + ld64.lld, `build/linux-swiftc.sh`). `X86SIM_BUILD=mac` with `X86SIM_MAC=user@mac` builds on a Mac over ssh
+instead. Two ways to fill `sdks/`:
+
+- **`make sdks`: no Mac, no Xcode, no Apple ID.** `build/sdk/macos-sdk.py` downloads `MacOSX.sdk` from Apple's public
+  software-update CDN (the Command Line Tools SDK package `xcode-select --install` fetches; about 70 MB).
+  `build/sdk/sim-sdk.py` then assembles a substitute `iPhoneSimulator.sdk`: link stubs (`.tbd`) generated from the
+  `dyld_sim_shared_cache` of a runtime in `runtimes/` (which `runtime-fetch.py` downloads), plus the macOS SDK's headers,
+  which are the same for everything our C and Objective-C code includes (where iOS differs, a patched copy or a minimal
+  header of our own). Against the 27.2 runtime and macOS 27.2 SDK it rebuilds every C / Objective-C binary in `host/`
+  and `tests/` byte-identically to Xcode's SDK (apart from clang's random temp-object names). Not covered: Swift and
+  UIKit (`tests/arm64/objcswift`, `sleepprobe`, `tests/apps`), which need Xcode's own SDK. Using these files means
+  accepting Apple's SDK agreement.
+- **From Xcode:** copy `iPhoneSimulator.sdk` and `MacOSX.sdk` from Xcode, plus `swift-6.4.2/` from swift.org and
+  `swift-lib/` from Xcode's toolchain for the Swift parts.
+
+`cargo install apple-codesign` for signing either way. Metal shader sources are the exception: `build/linux-metal.sh`
+serves recorded Mac-built libraries (`build/metal-cache`) and a changed shader still needs a Mac.
+
+A committed binary can be checked against its source this way too: rebuild it and compare (the only differences
+should be the LC_UUID, the code signature and clang's temp-object names in the debug map).
 
 ## Shipped pre-translate training
 

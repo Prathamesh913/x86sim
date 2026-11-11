@@ -1,7 +1,7 @@
 # x86Sim: sourced by build/mac-env.sh when the simulator-side binaries are built on Linux (X86SIM_BUILD=linux, the
 # default when sdks/iPhoneSimulator.sdk exists). Same commands as on the Mac: mac() runs them locally with
 # build/linux-bin first in PATH, where xcrun/codesign/lipo/plutil map to Linux clang + ld64.lld and the SDKs in sdks/.
-#   SDK_IOS / SDK_MAC   the Apple SDKs (copied from Xcode, never committed)
+#   SDK_IOS / SDK_MAC   the Apple SDKs (make sdks: build/sdk/, or copied from Xcode; never committed)
 #   SIMCC / SIMCC_ARM64 arm64 iOS simulator (min 17.0); MACCC macOS x86_64 (min 10.15, simhost)
 X=${X:-$X86SIM_ROOT}
 SDK_IOS=${SDK_IOS:-$X/sdks/iPhoneSimulator.sdk}
